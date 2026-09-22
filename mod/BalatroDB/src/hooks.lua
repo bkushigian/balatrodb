@@ -117,7 +117,10 @@ end, function(args, _, pre)
         state.begin(state.run_id, state.seg)
     else
         local run_id = state.new_run_id(G.GAME and G.GAME.pseudorandom and G.GAME.pseudorandom.seed)
-        state.endless, state.won_pending = false, false
+        -- A genuinely new run starts with every latch down. This is the only
+        -- place they may be cleared: the resume path above has just restored
+        -- them from the save.
+        state.won, state.endless, state.won_pending = false, false, false
         log.open(run_id, false)
         state.begin(run_id, 0)
     end
@@ -687,12 +690,27 @@ util.hook_around(G.FUNCS, 'use_card', function(args)
         -- itself distinguishes them by area (button_callbacks.lua:2214).
         from_pack = (G.pack_cards and card.area == G.pack_cards) or nil,
         targets = util.cards(G.hand and G.hand.highlighted),
+        -- Whether the use succeeded is read from this lock; see below.
+        was_locked = G.CONTROLLER and G.CONTROLLER.locks
+            and G.CONTROLLER.locks.use or false,
     }
-end, function(_, rets, pre)
-    -- The rejection branch returns nothing, not false
-    -- (button_callbacks.lua:2187), so testing only for false logged refused
-    -- uses -- Ankh with no joker room, for instance -- as successful ones.
-    if not pre or rets[1] ~= true then return end
+end, function(_, _, pre)
+    if not pre then return end
+    -- use_card NEVER returns true. The rejection branch bare-returns
+    -- (button_callbacks.lua:2168) and the success path falls off the end at
+    -- :2316; the `return true`s in between all belong to queued Event
+    -- closures. Gating on a truthy return therefore dropped every
+    -- consumable.use, pack.open, pack.pick and voucher.redeem in 0.4.0.
+    --
+    -- G.CONTROLLER.locks.use is the discriminator: set true at :2187, which
+    -- is past the only early return, and cleared again only from inside
+    -- queued events (:2255, :2265) that cannot have run yet. It is also
+    -- agnostic to how a mod overrides Card:check_use, since any rejection
+    -- still returns before :2187. Calling check_use() here instead would
+    -- re-fire its alert_no_space side effect (card.lua:1584).
+    local locked = G.CONTROLLER and G.CONTROLLER.locks
+        and G.CONTROLLER.locks.use or false
+    if pre.was_locked or not locked then return end
     local set = pre.set
     local etype = pre.from_pack and 'pack.pick'
         or (set == 'Booster' and 'pack.open')

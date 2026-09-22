@@ -109,30 +109,55 @@ stream = [
 c = classify_money(stream)
 check("late money is not the discard's", c[(0, 105)] == ("consumable.use", None), c)
 
-# ── the win flag ─────────────────────────────────────────────────────────
-# Kept here rather than in its own file because it is the same shape of bug:
-# a game field that looks authoritative and is not.
-print("\na death on the win-ante boss is not a win")
-# Balatro sets G.GAME.won at state_events.lua:111 from "ante == win_ante and
-# the blind is a Boss", three lines BEFORE it checks game_over -- so dying to
-# the final boss sets it too. Two real runs in the corpus were marked won.
-import re                                            # noqa: E402
-ing = (pathlib.Path(__file__).resolve().parent.parent
-       / "ingest/ingest.py").read_text(encoding="utf-8")
-check("ingest takes `won` from run.win, not run.end.won",
-      re.search(r"won\s*=\s*1\s+if\s+saw_win\s+else\s+0", ing) is not None)
-check("the UPDATE writes that derived value, not end.get('won')",
-      "(won, end.get(\"result\")" in ing, "still writing end.get('won')")
+print("\nother events in the scoring frame do not steal the money")
+# Every one of these is a real joker/consumable doing something in the same
+# frame as the score. An allow-list of "events that may intervene" cannot be
+# complete, so the rule is the frame, not the event type.
+for label, filler in [
+    ("Trading Card destroys the discard", "card.remove"),
+    ("Space Joker levels the played hand", "hand.levelup"),
+    ("DNA copies the played card", "card.add"),
+    ("Sixth Sense destroys it", "card.remove"),
+    ("Burnt Joker levels on discard", "hand.levelup"),
+]:
+    stream = [
+        ev("hand.discard", 10, 59.50),
+        ev("money.change", 11, 60.00),
+        ev(filler, 12, 60.00),
+        ev("hand.play", 13, 60.00),
+    ]
+    c = classify_money(stream)
+    check(f"{label}: money goes to the play",
+          c[(0, 11)] == ("hand.play", 13), c)
 
-st = (pathlib.Path(__file__).resolve().parent.parent
-      / "mod/BalatroDB/src/state.lua").read_text(encoding="utf-8")
-hk = (pathlib.Path(__file__).resolve().parent.parent
-      / "mod/BalatroDB/src/hooks.lua").read_text(encoding="utf-8")
-check("the mod latches its own win flag in mark_won", "state.won = true" in st)
-check("run.end reports that flag, not G.GAME.won",
-      "won     = state.won," in hk and "won     = game.won" not in hk)
-check("a new run clears it",
-      "state.won, state.won_pending, state.endless = false, false, false" in st)
+print("\nand a queued discard payout is not stolen by a later frame")
+stream = [
+    ev("hand.discard", 10, 59.50),
+    ev("card.remove", 11, 59.62),     # Trading Card destroying the discard
+    ev("money.change", 12, 59.72),
+    ev("hand.play", 20, 75.00),
+]
+c = classify_money(stream)
+check("Trading Card's $ belongs to the discard",
+      c[(0, 12)] == ("hand.discard", 10), c)
+
+print("\na cause is never named without the action it points at")
+# cause='hand.play' with cause_n=None made SUM(delta) and a JOIN on cause_n
+# disagree with no way to tell which was right.
+for name, stream in [
+    ("far-away play", [ev("round.start", 1, 0.0), ev("money.change", 2, 5.0),
+                       ev("hand.play", 3, 40.0)]),
+    ("far-away discard", [ev("hand.discard", 1, 0.0), ev("consumable.use", 2, 40.0),
+                          ev("money.change", 3, 40.2)]),
+]:
+    c = classify_money(stream)
+    cause, n = list(c.values())[0]
+    check(f"{name}: no action cause without an n",
+          not (cause in ("hand.play", "hand.discard") and n is None),
+          f"{cause} / {n}")
+
+# The win-flag behaviour this file used to grep the source for now lives in
+# tests/test_state.py, which exercises it instead of matching text.
 
 print("\nFAILURES:", fails)
 sys.exit(1 if fails else 0)

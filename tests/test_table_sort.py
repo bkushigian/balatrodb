@@ -59,7 +59,10 @@ globalThis.history = { replaceState: noop };
 // Backed by a real array so array methods work, but any named field the
 // page reads off it also answers as an empty list.
 const emptyBody = new Proxy([], {
-  get: (t, k) => (k in t ? Reflect.get(t, k) : (k === "then" ? undefined : [])),
+  // `then` must be undefined so the object is not treated as a thenable, and
+  // `error` so get()'s error check does not fire (an empty array is truthy).
+  get: (t, k) => (k in t ? Reflect.get(t, k)
+                         : (k === "then" || k === "error" ? undefined : [])),
 });
 globalThis.fetch = () => Promise.resolve({ ok: true, json: () => emptyBody });
 globalThis.setInterval = noop;

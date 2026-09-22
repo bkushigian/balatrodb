@@ -246,13 +246,6 @@ tr.detail > td { padding: 0; border-top: 0; }
         <button class="seg" data-v="1" aria-pressed="true"
           title="Only what happened after continuing past the win ante">Endless</button>
       </span></span>
-    <span><label for="sort">Sort runs</label><select id="sort">
-      <option value="recent">Most recent</option>
-      <option value="score">Best hand</option>
-      <option value="ante">Furthest ante</option>
-      <option value="money">Most money</option>
-      <option value="hands">Hands played</option>
-    </select></span>
   </section>
 
   <section class="tiles" id="tiles" aria-label="Records"></section>
@@ -311,7 +304,10 @@ function syncPhase() {
 const fmt = v => {
   if (v === null || v === undefined || v === "") return "—";
   const n = Number(v);
-  if (!isFinite(n)) return String(v);
+  // Escaped: fmt is handed TEXT columns straight out of the log
+  // (score_txt, to_txt, required_txt), and a modded joker can put anything
+  // in them. Every caller interpolates the result into innerHTML.
+  if (!isFinite(n)) return esc(String(v));
   if (Math.abs(n) >= 1e12) return n.toExponential(3).replace("e+", "e");
   return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 };
@@ -321,7 +317,6 @@ const ago = ts => {
   if (s < 86400) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 };
-const shortKey = k => (k || "").replace(/^j_/, "").replace(/_/g, " ");
 
 // Atlas metadata, extracted from the game by ingest/extract_assets.py. Absent
 // if that has not been run, in which case everything falls back to text.
@@ -420,7 +415,11 @@ function drawTable(id) {
   }
 
   const body = rows.length ? rows.map(r => {
-    const click = t.onclick ? ` class="clickable" onclick="${t.onclick(r)}"` : "";
+    // The run id goes in a data attribute, not into JS source inside an
+    // onclick. esc() is HTML escaping: the parser decodes &#39; back to an
+    // apostrophe BEFORE the JS is parsed, so it never protected a string
+    // literal. A delegated listener sidesteps the whole question.
+    const click = t.onclick ? ` class="clickable" data-run="${esc(r.run_id)}"` : "";
     return `<tr${click}>` + t.cols.map(c =>
       `<td class="${[c.num ? "num" : "", c.cls || ""].filter(Boolean).join(" ")}"${
         c.style ? ` style="${c.style}"` : ""}>${c.cell(r)}</td>`).join("") + `</tr>`;
@@ -428,6 +427,14 @@ function drawTable(id) {
     : `<tr><td colspan="${t.cols.length}" class="empty">${esc(t.empty)}</td></tr>`;
 
   el.innerHTML = `<thead><tr>${head}</tr></thead><tbody>${body}</tbody>`;
+  if (t.onclick) {
+    el.querySelectorAll("tbody tr.clickable").forEach(tr => {
+      tr.onclick = () => openRun(tr.dataset.run);
+    });
+  }
+  el.querySelectorAll("button.seed").forEach(b => {
+    b.onclick = ev => { ev.stopPropagation(); copySeed(b, b.dataset.seed); };
+  });
   el.querySelectorAll("th.sortable").forEach(th => {
     th.onclick = () => {
       const i = +th.dataset.i;
@@ -464,9 +471,8 @@ function copySeed(el, seed) {
 }
 
 const seedCell = r => r.seed
-  ? `<button class="seed${r.seeded ? " seeded" : ""}"
+  ? `<button class="seed${r.seeded ? " seeded" : ""}" data-seed="${esc(r.seed)}"
        title="${r.seeded ? "Entered seed — " : ""}Click to copy"
-       onclick="event.stopPropagation();copySeed(this,'${esc(r.seed)}')"
        >${esc(r.seed)}</button>`
   : `<span class="muted">—</span>`;
 const shortRun = r => (r || "").split("-")[1] || r;
@@ -476,7 +482,15 @@ const qs = () => {
   for (const [k, v] of Object.entries(state)) if (v !== "") p.set(k, v);
   return p.toString();
 };
-const get = path => fetch(path + "?" + qs()).then(r => r.json());
+const get = path => fetch(path + "?" + qs()).then(r => {
+  if (!r.ok) throw new Error(`${path} -> ${r.status}`);
+  return r.json();
+}).then(d => {
+  // The server answers errors with a 200 and {"error": ...}; without this
+  // the object flowed on and rendered as "undefined runs".
+  if (d && d.error) throw new Error(`${path}: ${d.error}`);
+  return d;
+});
 
 function resultChip(r) {
   // No run.end yet: either still being played, or the game crashed. The log
@@ -505,7 +519,8 @@ function resultChip(r) {
 }
 
 // ── panel definitions ────────────────────────────────────────────────────
-const openRunJS = r => `openRun('${esc(r.run_id)}')`;
+// Marks a table's rows as openable; the handler is attached in drawTable.
+const openRunJS = true;
 const jokerCell = r => `<span class="namecell">${sprite(r.key, "j", 30)}
   <span>${esc(nameOf(r.key))}${r.what
     ? `<br><span class="sub2">${esc(r.what)}</span>` : ""}</span></span>`;
@@ -572,7 +587,7 @@ async function refresh() {
     `${s.runs} runs · ${s.won} won` + (s.win_pct !== null ? ` · ${s.win_pct}% win rate` : "");
 
   $("#tiles").innerHTML = [
-    ["Best hand", fmt(s.best_hand), s.best_hand_name || "", "mult"],
+    ["Best hand", fmt(s.best_hand), esc(s.best_hand_name || ""), "mult"],
     ["Most money", s.max_money !== null ? "$" + fmt(s.max_money) : "—", "peak balance", "money"],
     ["Furthest ante", fmt(s.max_ante), "", "gold"],
     ["Biggest cash-out", s.max_cashout !== null ? "$" + fmt(s.max_cashout) : "—", "one round", "money"],
@@ -605,7 +620,7 @@ async function openRun(id) {
       <td class="num muted">${x.deck_size ?? "—"}</td>
       <td>${x.endless ? '<span class="chip endless">ENDLESS</span>' : ""}</td></tr>
     <tr class="detail" data-for="${x.round_seq}" hidden><td colspan="8"></td></tr>`).join("");
-  const jok = d.jokers.map(j => `<tr><td>${shortKey(j.key)}</td><td class="muted">${esc(j.field)}</td>
+  const jok = d.jokers.map(j => `<tr><td>${esc(nameOf(j.key))}</td><td class="muted">${esc(j.field)}</td>
     <td class="num" style="color:var(--mult)">${fmt(j.peak)}</td></tr>`).join("");
   $("#dbody").innerHTML = `
     <h3>Run</h3>
@@ -644,7 +659,7 @@ function cardSprite(c) {
   if (!base && !face) {
     return `<span class="jv">${esc((c.rank || "?") + ((c.suit || "")[0] || ""))}</span>`;
   }
-  const ed = c.edition ? ` ed ed-${String(c.edition).replace(/^e_/, "")}` : "";
+  const ed = c.edition ? ` ed ed-${esc(String(c.edition).replace(/^e_/, ""))}` : "";
   const seal = c.seal
     ? `<span class="seal ${esc(String(c.seal).toLowerCase())}"></span>` : "";
   const what = [c.enhancement, c.seal && c.seal + " Seal",
@@ -721,7 +736,6 @@ fetch("/api/meta").then(r => r.json()).then(m => {
 });
 $("#deck").onchange = e => { state.deck = e.target.value; refresh(); };
 $("#stake").onchange = e => { state.stake = e.target.value; refresh(); };
-$("#sort").onchange = e => { state.sort = e.target.value; refresh(); };
 $("#phase").onclick = e => {
   const b = e.target.closest("button.seg"); if (!b) return;
   phase[b.dataset.v] = !phase[b.dataset.v];

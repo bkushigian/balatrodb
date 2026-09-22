@@ -104,10 +104,13 @@ function state.restore()
     return true
 end
 
+--- Adopt an identity. Does NOT touch won/endless: begin runs on the resume
+--- path too, where those have just been read back out of the save, and
+--- clearing them here wiped them and then persisted the blanks. Starting a
+--- fresh run clears them at its own call site.
 function state.begin(run_id, seg)
     state.run_id = run_id
     state.seg = seg or 0
-    state.won, state.won_pending, state.endless = false, false, false
     state.started_at = love.timer.getTime()
     state.active = true
     state.persist()

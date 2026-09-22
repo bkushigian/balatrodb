@@ -118,6 +118,10 @@ DEFECTS = {
     "sequence_gap":         "event sequence is not gap-free within a segment",
     "won_without_win":      "run.end.won set but no run.win event -- a death "
                             "on the win-ante boss; `won` is taken from the event",
+    "count_mismatch":       "the game's own hand/skip counters disagree with the "
+                            "events recorded; the log has duplicate or missing lines",
+    "value_beyond_double":  "at least one value does not fit a double, so its "
+                            "*_num column is NULL and SUM/AVG omit it",
 }
 
 LEGACY_RESULTS = {"quit", "loss", "win"}
@@ -150,8 +154,16 @@ def read_events(path):
         if not line:
             continue
         try:
-            out.append(json.loads(line))
+            obj = json.loads(line)
         except Exception:
+            bad += 1
+            continue
+        # Valid JSON is not necessarily an event. A bare string, list or null
+        # would sail through and then raise AttributeError on .get() deep
+        # inside derive(), taking the whole ingest down with it.
+        if isinstance(obj, dict):
+            out.append(obj)
+        else:
             bad += 1
     return out, bad
 
@@ -164,6 +176,20 @@ MONEY_SKIP = {"state.change", "snapshot", "joker.scale", "money.change",
 # do is seconds away, so a one-second window separates the two cleanly.
 MONEY_SAME_FRAME = 0.05
 MONEY_QUEUED = 1.0
+ACTION_EVENTS = ("hand.play", "hand.discard")
+# Events that own money themselves, or that mark the player having moved on.
+# Walking back from a money change stops here: anything before one of these
+# cannot be the queued consequence of a discard.
+MONEY_BOUNDARY = {"hand.play", "shop.buy", "shop.sell", "shop.reroll",
+                  "consumable.use", "voucher.redeem", "pack.open", "pack.pick",
+                  "round.start", "round.end", "blind.select", "blind.skip",
+                  "run.start", "run.resume"}
+
+
+def same_frame(ev, t):
+    """Whether `ev` belongs to the same engine frame as a money change at `t`."""
+    et = ev.get("t")
+    return t is not None and et is not None and abs(et - t) <= MONEY_SAME_FRAME
 
 
 def classify_money(events):
@@ -200,8 +226,17 @@ def classify_money(events):
             if ev.get("e") != "money.change":
                 continue
             t = ev.get("t")
+            # Scan by TIME, not by event type. An allow-list of "events that
+            # may sit between money and its cause" cannot be complete: a
+            # Trading Card discard emits card.remove, Space Joker emits
+            # hand.levelup mid-scoring, DNA emits card.add -- each of which
+            # pushed the real cause out of view and handed the money to
+            # whatever happened to be adjacent. Everything the scoring frame
+            # emits shares that frame's timestamp, so the frame is the rule.
             j = i + 1
-            while j < len(lst) and lst[j].get("e") in MONEY_SKIP:
+            while j < len(lst) and same_frame(lst[j], t):
+                if lst[j].get("e") in ACTION_EVENTS:
+                    break
                 j += 1
             k = i - 1
             while k >= 0 and lst[k].get("e") in MONEY_SKIP:
@@ -210,16 +245,49 @@ def classify_money(events):
             prv = lst[k] if k >= 0 else None
 
             cause = cause_n = None
-            if (nxt is not None and nxt.get("e") in ("hand.play", "hand.discard")
-                    and t is not None and nxt.get("t") is not None
-                    and abs(nxt["t"] - t) <= MONEY_SAME_FRAME):
+            # Same frame as the action that follows: a play emits its money
+            # from inside evaluate_play, whose after-hook emits hand.play.
+            if (nxt is not None and nxt.get("e") in ACTION_EVENTS
+                    and same_frame(nxt, t)):
                 cause, cause_n = nxt["e"], nxt.get("n")
-            elif (prv is not None and prv.get("e") == "hand.discard"
-                  and t is not None and prv.get("t") is not None
-                  and 0 <= t - prv["t"] <= MONEY_QUEUED):
-                cause, cause_n = "hand.discard", prv.get("n")
-            elif prv is not None:
-                cause = prv.get("e")
+            # Same frame as the action BEFORE it. Scoring can emit money on
+            # either side of the hand.play within one frame, and looking only
+            # forward left those rows naming a play they did not point at.
+            elif (prv is not None and prv.get("e") in ACTION_EVENTS
+                  and same_frame(prv, t)):
+                cause, cause_n = prv["e"], prv.get("n")
+            else:
+                # A discard's jokers fire from queued events, and those events
+                # can emit their own consequences first -- Trading Card
+                # destroys the discarded card, so card.remove lands between
+                # the discard and its $3. So walk back through consequences,
+                # stopping at anything that owns money itself or means the
+                # player has moved on.
+                owner = None
+                for b in range(i - 1, -1, -1):
+                    e2, t2 = lst[b].get("e"), lst[b].get("t")
+                    if e2 in MONEY_SKIP:
+                        continue
+                    if t is None or t2 is None or t - t2 > MONEY_QUEUED:
+                        break
+                    if e2 == "hand.discard":
+                        owner = lst[b]
+                        break
+                    if e2 in MONEY_BOUNDARY:
+                        break
+                if owner is not None:
+                    cause, cause_n = "hand.discard", owner.get("n")
+                elif prv is not None:
+                    cause = prv.get("e")
+                    if cause in ACTION_EVENTS:
+                        # It merely FOLLOWS a play -- an end-of-round payout,
+                        # a shop purchase after the last hand. Naming the play
+                        # without an n made SUM(delta) WHERE cause='hand.play'
+                        # disagree with a JOIN on cause_n, with nothing to say
+                        # which was right. The invariant is: an action cause
+                        # always carries the action.
+                        cause = "unattributed"
+
             out[(seg, ev.get("n"))] = (cause, cause_n)
     return out
 
@@ -327,6 +395,12 @@ class Ingester:
                     baseline_deck = len(d.get("deck_cards") or [])
                 if baseline_dollars is None:
                     baseline_dollars = as_int(d.get("dollars"))
+                # A rebaseline is ground truth read straight off G.GAME at a
+                # resume. The running balance is a sum of deltas, so anything
+                # the log missed skews it for the rest of the run -- re-anchor
+                # instead of carrying the drift forward.
+                if e == "run.rebaseline" and as_int(d.get("dollars")) is not None:
+                    balance = as_int(d.get("dollars"))
 
             elif e == "run.win":
                 saw_win = True
@@ -434,6 +508,23 @@ class Ingester:
             if baseline_deck + card_add - card_remove != as_int(end.get("deck_size")):
                 defects.add("deck_identity_fail")
 
+        # The same trick for hands and skips. run.end carries Balatro's own
+        # counters; the tables are our reconstruction. They should agree, and
+        # when they do not the log has duplicate or missing lines -- which is
+        # the one shape `sequence_gap` cannot see, because re-emitted events
+        # carry fresh, gap-free `n`s.
+        if end:
+            for field, table in (("hands_played", "hands"),
+                                 ("skips", "blind_skips")):
+                theirs = as_int(end.get(field))
+                if theirs is None:
+                    continue
+                ours = self.db.execute(
+                    "SELECT COUNT(*) FROM " + table + " WHERE run_id=?",
+                    (run_id,)).fetchone()[0]
+                if theirs != ours:
+                    defects.add("count_mismatch")
+
         for seg, mx in seg_max_n.items():
             if seg_lines.get(seg) != mx + 1:
                 defects.add("sequence_gap")
@@ -446,14 +537,20 @@ class Ingester:
         rs = rs or {}
         self.db.execute(
             "INSERT OR REPLACE INTO runs (run_id,log_file,log_bytes,started_ts,seed,seeded,"
-            "challenge,deck_key,deck_name,stake,stake_key,win_ante,profile,starting_deck_size)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "challenge,deck_key,deck_name,stake,stake_key,win_ante,profile,"
+            "starting_deck_size,won)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (run_id, log_file, log_bytes, as_int(rs.get("ts")) or 0, rs.get("seed"),
              1 if rs.get("seeded") else 0,
              json.dumps(rs["challenge"]) if rs.get("challenge") else None,
              rs.get("deck_key"), rs.get("deck"), as_int(rs.get("stake")), rs.get("stake_key"),
              as_int(rs.get("win_ante")), as_int(rs.get("profile")),
-             as_int(rs.get("starting_deck_size"))))
+             as_int(rs.get("starting_deck_size")),
+             # Here, not only in the UPDATE below: a run that is still being
+             # played has no run.end, and the dashboard ingests while you
+             # play. A won run continuing into endless would otherwise read
+             # won IS NULL for as long as the session lasted.
+             1 if saw_win else 0))
 
         if end is None:
             defects.add("no_run_end")
@@ -599,8 +696,11 @@ class Ingester:
         # Stone Joker: stone cards in the deck, from the per-round scalar.
         self.db.execute("""
             INSERT INTO joker_derived (run_id, seg, n, endless, metric, subject, value)
-            SELECT run_id, seg, round_seq, endless, 'stone_cards', NULL, deck_stone
-              FROM rounds WHERE deck_stone IS NOT NULL
+            -- start_n, not round_seq: this column is joker_derived.n, an
+            -- event sequence. round_seq happens to be a valid n for some
+            -- other event in the run, so the error is invisible at rest.
+            SELECT run_id, seg, start_n, endless, 'stone_cards', NULL, deck_stone
+              FROM rounds WHERE deck_stone IS NOT NULL AND start_n IS NOT NULL
         """)
         # Fortune Teller: tarots used so far.
         self.db.execute("""
@@ -686,14 +786,25 @@ def main():
     total = changed = 0
     files = sorted(glob.glob(os.path.join(a.logs, "*.jsonl")) +
                    glob.glob(os.path.join(a.logs, "*.jsonl.gz")))
+    failed = []
     for p in files:
-        n, did = ing.ingest_file(p)
+        # One unreadable log must not take the others with it. dashboard.py
+        # already guards each file this way; the CLI did not, so a truncated
+        # .gz aborted the run and skipped every log after it alphabetically.
+        try:
+            n, did = ing.ingest_file(p)
+        except Exception as exc:
+            failed.append((os.path.basename(p), exc))
+            db.rollback()
+            continue
         total += n
         changed += 1 if did else 0
     ing.derive_counters()
     db.commit()
 
     print(f"{len(files)} logs, {changed} re-derived, {total} events -> {a.db}")
+    for name, exc in failed:
+        print(f"  FAILED {name}: {type(exc).__name__}: {exc}")
     if a.report:
         report(db)
 

@@ -19,6 +19,7 @@ import glob
 import json
 import math
 import os
+import zlib
 import sqlite3
 import threading
 import time
@@ -34,8 +35,30 @@ WEB = os.path.join(HERE, "web")
 
 
 def connect():
+    """Open the database, rebuilding it first if schema.sql has moved on.
+
+    This is the path players actually use -- the button inside Balatro starts
+    this server, not ingest.py -- so the drift guard has to live here too.
+    Without it, editing schema.sql surfaced as a per-panel {"error": "no such
+    column"} string, which says nothing about the cause.
+    """
+    ddl = open(os.path.join(HERE, "schema.sql"), encoding="utf-8").read()
+    want = zlib.crc32(ddl.encode("utf-8")) & 0x7FFFFFFF
+    if os.path.exists(DB):
+        probe = sqlite3.connect(DB)
+        stale = probe.execute("PRAGMA user_version").fetchone()[0] != want
+        probe.close()
+        if stale:
+            print("schema changed since this database was built; rebuilding")
+            for suffix in ("", "-wal", "-shm"):
+                if os.path.exists(DB + suffix):
+                    os.remove(DB + suffix)
     db = sqlite3.connect(DB, check_same_thread=False)
     db.row_factory = sqlite3.Row
+    # Creates the tables on a first run, and is a no-op otherwise.
+    db.executescript(ddl)
+    db.execute(f"PRAGMA user_version = {want}")
+    db.commit()
     return db
 
 
@@ -139,15 +162,24 @@ def api_meta(db, q):
 
 
 def api_summary(db, q):
+    # The run counts are run-level facts, so the phase toggle applies to them
+    # the same way it does in api_runs: whether the run went endless at all.
+    # Without this the header claimed "15 runs" over a slice holding one.
     w, p = where(q)
+    if q.get("endless") in ("0", "1"):
+        w += " AND r.went_endless = ?"
+        p = p + [int(q["endless"])]
+
     total = db.execute(f"SELECT COUNT(*) FROM runs r WHERE 1=1{w}", p).fetchone()[0]
-    # Both sides must agree on the population. Counting wins over ALL runs
-    # while dividing by terminal runs inflated the rate: two corpus runs are
-    # won but suspended, which made 3/10 read as 50%.
+    # Numerator and denominator must be the same population, and it must be
+    # the one the adjacent "N won" label counts. A run is DECIDED once it has
+    # either won or ended; a run that won and was then suspended is decided
+    # and won, so counting it in one and not the other produced "4 won" beside
+    # an 18% rate that was really 2/11.
     won = db.execute(
-        f"SELECT COUNT(*) FROM runs r WHERE r.won=1 AND r.terminal=1{w}", p).fetchone()[0]
-    term = db.execute(f"SELECT COUNT(*) FROM runs r WHERE r.terminal=1{w}", p).fetchone()[0]
-    won_any = db.execute(f"SELECT COUNT(*) FROM runs r WHERE r.won=1{w}", p).fetchone()[0]
+        f"SELECT COUNT(*) FROM runs r WHERE r.won=1{w}", p).fetchone()[0]
+    decided = db.execute(
+        f"SELECT COUNT(*) FROM runs r WHERE (r.terminal=1 OR r.won=1){w}", p).fetchone()[0]
 
     ew, ep = where(q, endless_col="h.endless")
     best = db.execute(
@@ -173,9 +205,9 @@ def api_summary(db, q):
 
     return {
         "runs": total,
-        "won": won_any,
-        "terminal": term,
-        "win_pct": round(100.0 * won / term, 1) if term else None,
+        "won": won,
+        "decided": decided,
+        "win_pct": round(100.0 * won / decided, 1) if decided else None,
         "best_hand": best["v"] if best else None,
         "best_hand_name": best["hand"] if best else None,
         "best_hand_deck": best["deck_name"] if best else None,
@@ -198,20 +230,40 @@ def api_runs(db, q):
         "money": "r.final_dollars DESC",
         "hands": "r.hands_played DESC",
     }.get(q.get("sort"), "r.started_ts DESC")
+    # The phase filter applies twice, differently: to which runs are listed
+    # (a run-level flag) and to the per-run figures derived from events. The
+    # subquery params bind BEFORE the outer ones, since they appear first.
+    hw = mw = ""
+    sub, tail = [], []
     if q.get("endless") in ("0", "1"):
+        el = int(q["endless"])
         w += " AND r.went_endless = ?"
-        p = p + [int(q["endless"])]
+        p = p + [el]
+        hw, mw = " AND h.endless = ?", " AND m.endless = ?"
+        sub = [el, el, el]           # bh_ord, best_hand, peak_money
+        # Sorting by score has to see the same slice as the column it sorts.
+        # Its placeholder is in the ORDER BY, so it binds last of all.
+        if q.get("sort") == "score":
+            sort = ("(SELECT MAX(score_ord) FROM hands h "
+                    f"WHERE h.run_id = r.run_id{hw}) DESC")
+            tail = [el]
     return rows(db, f"""
         SELECT r.run_id, r.log_file, r.started_ts, r.deck_name, r.deck_key,
                r.stake_key, r.seed, r.seeded, r.won, r.result, r.terminal,
                r.went_endless, r.hands_played, r.final_dollars, r.deck_size,
                COALESCE(r.furthest_ante, r.ended_ante) ante,
-               (SELECT MAX(score_ord) FROM hands h WHERE h.run_id = r.run_id) bh_ord,
-               (SELECT score_txt FROM hands h WHERE h.run_id = r.run_id
+               -- Sliced by the phase filter like every other derived figure.
+               -- Left unsliced, a row showed a 221,539 best hand next to a
+               -- "Best hand" panel reporting 13,104 for the same selection.
+               (SELECT MAX(score_ord) FROM hands h
+                 WHERE h.run_id = r.run_id{hw}) bh_ord,
+               (SELECT score_txt FROM hands h
+                 WHERE h.run_id = r.run_id{hw}
                  ORDER BY score_ord DESC LIMIT 1) best_hand,
-               (SELECT MAX(balance) FROM money m WHERE m.run_id = r.run_id) peak_money,
+               (SELECT MAX(balance) FROM money m
+                 WHERE m.run_id = r.run_id{mw}) peak_money,
                (SELECT COUNT(*) FROM run_defects d WHERE d.run_id = r.run_id) defects
-          FROM runs r WHERE 1=1{w} ORDER BY {sort} LIMIT 300""", p)
+          FROM runs r WHERE 1=1{w} ORDER BY {sort} LIMIT 300""", sub + p + tail)
 
 
 def api_all_jokers(db, q):
@@ -451,7 +503,10 @@ def api_round(db, q):
             base = st["chips_before_num"]
             if base is None:
                 base = running or 0
-            running = base + int(st["score_num"] or 0)
+            # NOT int(): score_num is a REAL and a hand can score .5, so
+            # truncating made the first play of a round show a total smaller
+            # than the hand above it (20,987.5 scored -> "20,987 total").
+            running = base + (st["score_num"] or 0)
             st["total_after"] = running
 
     # The board is the earliest sample in the round. Jokers are only sampled
