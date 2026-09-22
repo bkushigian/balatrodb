@@ -52,11 +52,7 @@ body {
 h1, h2, h3 { margin: 0; font-weight: 700; letter-spacing: .02em; }
 /* Panel titles wear the game's outlined lettering. */
 h2 { --stroke: #1b2325; color: #fff;
-     text-shadow:
-       -1px 0 var(--stroke), 1px 0 var(--stroke),
-       0 -1px var(--stroke), 0 1px var(--stroke),
-       -1px -1px var(--stroke), 1px -1px var(--stroke),
-       -1px 1px var(--stroke), 1px 1px var(--stroke); }
+     text-shadow: var(--sh-x, 2px) var(--sh-y, 2px) 0 var(--stroke); }
 a { color: var(--chips); }
 
 /* Balatro's chunky embossed panel: a lip of darker colour under each block */
@@ -88,6 +84,11 @@ main > *, .cols > * { min-width: 0; }
 /* ── filters: one row above everything, per the interaction spec ───────── */
 .filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .filters label { color: var(--ink-dim); font-size: 15px; margin-right: 4px; }
+/* The lettering carries a hard offset shadow rather than an outline all
+   the way round -- measured off balatrowiki.org, where every brown pixel is
+   the white glyph shifted +3,+4 and nothing sits above or to the left. At
+   our smaller type that scales to 2px; the chips use 1px. */
+
 /* ── Balatro's button ──────────────────────────────────────────────────
    Taken off balatrowiki.org, whose buttons are a solid pill with a 1px
    lighter band at the top, a ~4px darker lip at the bottom, and white text
@@ -95,15 +96,6 @@ main > *, .cols > * { min-width: 0; }
    of theirs: #fcac3d highlight, #ff9500 fill, #ad7442 lip, #784600 text
    outline. Rebuilt here in the game's dark palette rather than the wiki's
    light one, so it still reads as the same family. */
-.outlined {
-  color: #fff;
-  text-shadow:
-    -1px 0 var(--stroke), 1px 0 var(--stroke),
-    0 -1px var(--stroke), 0 1px var(--stroke),
-    -1px -1px var(--stroke), 1px -1px var(--stroke),
-    -1px 1px var(--stroke), 1px 1px var(--stroke);
-}
-
 /* The stair-stepped silhouette, traced off a balatrowiki.org button: the
    fill is inset 12px, 6px then 3px over the first 12px of height, mirrored
    on all four corners. clip-path would cut off a box-shadow, so the
@@ -183,11 +175,7 @@ button.seg, .pick > button {
   padding: 13px 20px; font: inherit; font-size: 17px;
   font-weight: 700; letter-spacing: .02em;
   color: #fff;
-  text-shadow:
-    -1px 0 var(--stroke), 1px 0 var(--stroke),
-    0 -1px var(--stroke), 0 1px var(--stroke),
-    -1px -1px var(--stroke), 1px -1px var(--stroke),
-    -1px 1px var(--stroke), 1px 1px var(--stroke);
+  text-shadow: var(--sh-x, 2px) var(--sh-y, 2px) 0 var(--stroke);
   transition: transform .06s;
 }
 /* Pressing pushes the button down onto its own lip, which all but vanishes. */
@@ -220,13 +208,9 @@ button:focus-visible { outline: 2px solid var(--filter); outline-offset: 2px; }
 }
 .pick .menu button:hover, .pick .menu button:focus-visible { background: var(--sunken); }
 .pick .menu button[aria-selected="true"] {
-  --stroke: #7a241e;
+  --stroke: #7a241e; --sh-x: 1px; --sh-y: 1px;
   background: var(--mult); color: #fff; font-weight: 700;
-  text-shadow:
-    -1px 0 var(--stroke), 1px 0 var(--stroke),
-    0 -1px var(--stroke), 0 1px var(--stroke),
-    -1px -1px var(--stroke), 1px -1px var(--stroke),
-    -1px 1px var(--stroke), 1px 1px var(--stroke);
+  text-shadow: var(--sh-x, 2px) var(--sh-y, 2px) 0 var(--stroke);
 }
 button.seg[aria-pressed="true"] {
   --stroke: #7a241e;
@@ -345,11 +329,7 @@ button.x { --stroke: #10171a; --fill: var(--sunken);
            color: #fff; border: 0; font: inherit;
            padding: 13px 20px; cursor: pointer;
            font-weight: 700;
-           text-shadow:
-             -1px 0 var(--stroke), 1px 0 var(--stroke),
-             0 -1px var(--stroke), 0 1px var(--stroke),
-             -1px -1px var(--stroke), 1px -1px var(--stroke),
-             -1px 1px var(--stroke), 1px 1px var(--stroke);
+           text-shadow: var(--sh-x, 2px) var(--sh-y, 2px) 0 var(--stroke);
            transition: transform .06s; }
 button.x:active { transform: translateY(3px); --lip-h: 1px; }
 .empty { color: var(--ink-mute); padding: 14px 4px; }
