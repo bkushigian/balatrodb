@@ -33,6 +33,8 @@ local function setup()
     BalatroDB.env   = module('src/env.lua')
     BalatroDB.state = module('src/state.lua')
     BalatroDB.hooks = module('src/hooks.lua')
+    BalatroDB.menu  = module('src/menu.lua')
+    BalatroDB.menu.install()
 end
 
 local ok, err = pcall(setup)

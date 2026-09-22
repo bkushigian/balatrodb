@@ -459,6 +459,20 @@ def main():
     if not os.path.exists(DB):
         raise SystemExit(f"no database at {DB}\nrun: python ingest/ingest.py --rebuild")
 
+    # Launching twice -- from the in-game button, say, while one is already
+    # running -- should open the dashboard, not crash on the bound port.
+    import socket
+    probe = socket.socket()
+    probe.settimeout(0.4)
+    already = probe.connect_ex(("127.0.0.1", a.port)) == 0
+    probe.close()
+    if already:
+        url = f"http://localhost:{a.port}"
+        print(f"already running at {url}")
+        if not a.no_open:
+            webbrowser.open(url)
+        return 0
+
     Handler.db = connect()
     Handler.logs = a.logs
     sync(Handler.db, a.logs)
