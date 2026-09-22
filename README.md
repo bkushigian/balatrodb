@@ -19,18 +19,18 @@ See [`docs/event-schema.md`](docs/event-schema.md) for the wire format.
 
 ```
 mod/BalatroDB/      the Steamodded mod (Lua)
-ingest/             SQLite schema, ingester and web dashboard
+  main.lua            loads modules in dependency order, inside a pcall
+  src/util.lua        serialization, number coercion, hook helpers
+  src/log.lua         buffered JSONL writer
+  src/env.lua         active-mod and version capture
+  src/state.lua       run identity, endless latch, envelope context
+  src/hooks.lua       every observation point
+ingest/             the database and dashboard (Python, stdlib only)
   schema.sql          authoritative DDL; sync_schema.py copies it into the docs
-  ingest.py           folds logs into the database
-  dashboard.py        local web dashboard server
-  web/index.html      the dashboard itself
-  main.lua          loads modules in dependency order, inside a pcall
-  src/util.lua      serialization, number coercion, hook helpers
-  src/log.lua       buffered JSONL writer
-  src/env.lua       active-mod and version capture
-  src/state.lua     run identity, endless latch, envelope context
-  src/hooks.lua     every observation point
-docs/               schema and design notes
+  ingest.py           folds logs into SQLite, one run re-derived at a time
+  dashboard.py        local web server + read-only JSON API
+  web/index.html      the dashboard
+docs/               schema, designs and API references
 tests/              runs the pure Lua logic under a host interpreter
 ```
 
@@ -73,7 +73,7 @@ pip install lupa
 python tests/test_util.py
 ```
 
-52 checks over the parts that are pure logic and easy to get subtly wrong:
+56 checks over the parts that are pure logic and easy to get subtly wrong:
 number coercion at the 1e14 / inf / nan / Talisman boundaries, card
 serialization, and the hook wrapper's contract — return values and arity
 preserved, `false` returns reaching the caller intact, observer errors
