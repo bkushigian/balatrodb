@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>BalatroDB</title>
 <style>
+/* Balatro's own typeface, lifted out of the game archive by
+   ingest/extract_assets.py. The stylesheet had always asked for "m6x11"
+   first and nothing ever served it, so every page fell back to Courier. */
+@font-face {
+  font-family: "m6x11";
+  src: url("assets/m6x11plus.ttf") format("truetype");
+  font-display: swap;
+}
 /* Balatro's own palette, lifted from G.C in globals.lua:
    MULT/RED FE5F55 · MONEY f3b958 · GOLD eac058 · FILTER ff9a00
    PURPLE 8867a5 · JOKER_GREY bfc7d5 · MAIN/DARK 374244 · BLIND_SIZE ad5353 */
@@ -30,8 +38,16 @@
 body {
   margin: 0; padding: 0 16px 64px;
   background: var(--bg); color: var(--ink);
-  font: 18px/1.5 "m6x11", "Courier New", ui-monospace, monospace;
-  -webkit-font-smoothing: antialiased;
+  font: 20px/1.5 "m6x11", "Courier New", ui-monospace, monospace;
+  /* A pixel font wants no antialiasing -- smoothing rounds the corners off
+     every glyph and the whole page reads soft. */
+  -webkit-font-smoothing: none;
+  font-smooth: never;
+  /* m6x11 ships one weight. Without this the browser fakes bold by smearing
+     each glyph sideways, which at 14px welded the letters of "DIED" into a
+     solid block. Every font-weight:700 below now just draws the real face. */
+  font-synthesis: none;
+  font-synthesis-weight: none;
 }
 h1, h2, h3 { margin: 0; font-weight: 700; letter-spacing: .02em; }
 /* Panel titles wear the game's outlined lettering. */
@@ -53,7 +69,7 @@ header {
   max-width: 1560px; margin: 0 auto; padding: 22px 0 14px;
   display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
 }
-header h1 { font-size: 34px; }
+header h1 { font-size: 38px; }
 header h1 span { color: var(--mult); }
 header .sub { color: var(--ink-mute); font-size: 15px; }
 /* brief pulse when new runs arrive, so an update is noticed without a banner
@@ -88,11 +104,51 @@ main > *, .cols > * { min-width: 0; }
     -1px 1px var(--stroke), 1px 1px var(--stroke);
 }
 
+/* The stair-stepped silhouette, traced off a balatrowiki.org button: the
+   fill is inset 12px, 6px then 3px over the first 12px of height, mirrored
+   on all four corners. clip-path would cut off a box-shadow, so the
+   highlight and the lip are bands in a background gradient and the drop
+   shadow is a filter, which follows the clipped outline instead of the box. */
+.pixel-pill {
+  clip-path: polygon(
+    12px 0, calc(100% - 12px) 0,
+    calc(100% - 12px) 3px, calc(100% - 6px) 3px,
+    calc(100% - 6px) 6px, calc(100% - 3px) 6px,
+    calc(100% - 3px) 12px, 100% 12px,
+    100% calc(100% - 12px), calc(100% - 3px) calc(100% - 12px),
+    calc(100% - 3px) calc(100% - 6px), calc(100% - 6px) calc(100% - 6px),
+    calc(100% - 6px) calc(100% - 3px), calc(100% - 12px) calc(100% - 3px),
+    calc(100% - 12px) 100%, 12px 100%,
+    12px calc(100% - 3px), 6px calc(100% - 3px),
+    6px calc(100% - 6px), 3px calc(100% - 6px),
+    3px calc(100% - 12px), 0 calc(100% - 12px),
+    0 12px, 3px 12px, 3px 6px, 6px 6px, 6px 3px, 12px 3px);
+}
+/* Three steps instead of four, for the chips and seeds -- the full corner
+   is taller than they are. */
+.pixel-pill.sm {
+  clip-path: polygon(
+    6px 0, calc(100% - 6px) 0,
+    calc(100% - 6px) 2px, calc(100% - 3px) 2px,
+    calc(100% - 3px) 4px, 100% 4px,
+    100% calc(100% - 4px), calc(100% - 3px) calc(100% - 4px),
+    calc(100% - 3px) calc(100% - 2px), calc(100% - 6px) calc(100% - 2px),
+    calc(100% - 6px) 100%, 6px 100%,
+    6px calc(100% - 2px), 3px calc(100% - 2px),
+    3px calc(100% - 4px), 0 calc(100% - 4px),
+    0 4px, 3px 4px, 3px 2px, 6px 2px);
+}
+
 button.seg, .pick > button {
   --stroke: #10171a;
   --lip: #10171a;
-  background: var(--sunken); border: 0; cursor: pointer;
-  border-radius: 999px; padding: 9px 16px; font: inherit; font-size: 17px;
+  --fill: var(--sunken);
+  --hi: rgba(255, 255, 255, .12);
+  background: linear-gradient(to bottom,
+    var(--hi) 0 2px, var(--fill) 2px calc(100% - 5px),
+    var(--lip) calc(100% - 5px) 100%);
+  border: 0; cursor: pointer;
+  border-radius: 0; padding: 11px 20px 15px; font: inherit; font-size: 17px;
   font-weight: 700; letter-spacing: .02em;
   color: #fff;
   text-shadow:
@@ -100,15 +156,13 @@ button.seg, .pick > button {
     0 -1px var(--stroke), 0 1px var(--stroke),
     -1px -1px var(--stroke), 1px -1px var(--stroke),
     -1px 1px var(--stroke), 1px 1px var(--stroke);
-  box-shadow: inset 0 2px 0 rgba(255, 255, 255, .10),
-              0 4px 0 var(--lip), 0 6px 9px rgba(0, 0, 0, .42);
-  transition: transform .06s, box-shadow .06s;
+  filter: drop-shadow(0 3px 0 rgba(0, 0, 0, .45));
+  transition: transform .06s, filter .06s;
 }
 /* Pressing pushes the button down onto its own lip. */
 button.seg:active, .pick > button:active {
   transform: translateY(3px);
-  box-shadow: inset 0 2px 0 rgba(255, 255, 255, .10),
-              0 1px 0 var(--lip), 0 2px 4px rgba(0, 0, 0, .42);
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, .45));
 }
 button:focus-visible { outline: 2px solid var(--filter); outline-offset: 2px; }
 .seggroup { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
@@ -146,15 +200,16 @@ button:focus-visible { outline: 2px solid var(--filter); outline-offset: 2px; }
 button.seg[aria-pressed="true"] {
   --stroke: #7a241e;
   --lip: #a8392f;
-  background: var(--mult);
+  --fill: var(--mult);
+  --hi: rgba(255, 255, 255, .26);
 }
 
 /* ── stat tiles: hero numbers, no chart ───────────────────────────────── */
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
 .tile { background: var(--surface); border-radius: var(--r); padding: 12px 14px;
         box-shadow: 0 4px 0 #222b2c; }
-.tile .k { color: var(--ink-mute); font-size: 14px; text-transform: uppercase; letter-spacing: .08em; }
-.tile .v { font-size: 35px; font-weight: 700; line-height: 1.15; margin-top: 4px;
+.tile .k { color: var(--ink-mute); font-size: 15px; text-transform: uppercase; letter-spacing: .08em; }
+.tile .v { font-size: 38px; font-weight: 700; line-height: 1.15; margin-top: 4px;
            overflow-wrap: anywhere; }
 .tile .n { color: var(--ink-dim); font-size: 14px; margin-top: 2px; }
 .v.mult { color: var(--mult); } .v.money { color: var(--money); }
@@ -176,9 +231,9 @@ button.seg[aria-pressed="true"] {
    heights. */
 tbody td { height: 82px; }
 .scroll { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; font-size: 17px; }
+table { width: 100%; border-collapse: collapse; font-size: 19px; }
 th {
-  text-align: left; color: var(--ink-mute); font-size: 14px; font-weight: 700;
+  text-align: left; color: var(--ink-mute); font-size: 15px; font-weight: 700;
   text-transform: uppercase; letter-spacing: .06em; padding: 4px 8px 8px;
   white-space: nowrap; position: sticky; top: 0; background: var(--surface);
 }
@@ -191,25 +246,26 @@ th.sortable .ind { display: inline-block; width: .8em; color: var(--gold); }
 
 /* The seed, as something you press. It is the one cell people want to take
    somewhere else, so it copies on click rather than needing a careful drag. */
-.seed { font: inherit; font-size: 14px; letter-spacing: .06em; cursor: pointer;
-        background: var(--sunken); color: var(--ink-dim);
-        border: 0; border-radius: 999px; font-weight: 700;
-        padding: 5px 12px;
-        box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 3px 0 #10171a;
-        transition: background .12s, color .12s, transform .06s, box-shadow .06s; }
-.seed:active { transform: translateY(2px);
-               box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 1px 0 #10171a; }
+.seed { font: inherit; font-size: 15px; letter-spacing: .06em; cursor: pointer;
+        color: var(--ink-dim); border: 0; border-radius: 0; font-weight: 700;
+        padding: 6px 13px 9px;
+        background: linear-gradient(to bottom,
+          rgba(255,255,255,.08) 0 1px, var(--sunken) 1px calc(100% - 3px),
+          #10171a calc(100% - 3px) 100%);
+        transition: color .12s, transform .06s; }
+.seed:active { transform: translateY(2px); }
 .seed:hover { background: #40525a; color: var(--ink); }
 .seed.seeded { border-color: var(--gold); color: var(--gold); }
 .seed.copied { background: var(--green); border-color: var(--green); color: #14211f; }
 td.num { font-variant-numeric: tabular-nums; }
 .chip {
-  display: inline-block; padding: 2px 9px; border-radius: 99px;
-  font-size: 13px; font-weight: 700; color: #1b2223;
+  display: inline-block; padding: 3px 10px; border-radius: 99px;
+  font-size: 14px; font-weight: 700; letter-spacing: .06em; color: #1b2223;
   /* text-shadow inherits, and the run dialog's chips sit inside its <h2>,
      which carries the outlined lettering. A dark outline around dark text
      on a gold chip filled the letters in solid. */
   text-shadow: none;
+  border-radius: 0;
 }
 .chip.win { background: var(--gold); }
 .chip.died { background: var(--blind); color: #fff; }
@@ -256,20 +312,21 @@ dialog h3 { font-size: 16px; color: var(--ink-mute); text-transform: uppercase;
 dialog h3:first-child { margin-top: 0; }
 /* Same pill as the filter buttons, so the dialog matches the page. */
 button.x { --stroke: #10171a; --lip: #10171a;
-           background: var(--sunken); color: #fff; border: 0; font: inherit;
-           border-radius: 999px; padding: 8px 16px; cursor: pointer;
+           color: #fff; border: 0; font: inherit; border-radius: 0;
+           background: linear-gradient(to bottom,
+             rgba(255,255,255,.12) 0 2px, var(--sunken) 2px calc(100% - 5px),
+             var(--lip) calc(100% - 5px) 100%);
+           padding: 11px 20px 15px; cursor: pointer;
            font-weight: 700;
            text-shadow:
              -1px 0 var(--stroke), 1px 0 var(--stroke),
              0 -1px var(--stroke), 0 1px var(--stroke),
              -1px -1px var(--stroke), 1px -1px var(--stroke),
              -1px 1px var(--stroke), 1px 1px var(--stroke);
-           box-shadow: inset 0 2px 0 rgba(255,255,255,.10),
-                       0 4px 0 var(--lip), 0 6px 9px rgba(0,0,0,.42);
-           transition: transform .06s, box-shadow .06s; }
+           filter: drop-shadow(0 3px 0 rgba(0,0,0,.45));
+           transition: transform .06s, filter .06s; }
 button.x:active { transform: translateY(3px);
-                  box-shadow: inset 0 2px 0 rgba(255,255,255,.10),
-                              0 1px 0 var(--lip), 0 2px 4px rgba(0,0,0,.42); }
+                  filter: drop-shadow(0 1px 0 rgba(0,0,0,.45)); }
 .empty { color: var(--ink-mute); padding: 14px 4px; }
 
 /* expandable round timeline */
@@ -288,7 +345,7 @@ tr.detail > td { padding: 0; border-top: 0; }
 .step { display: grid; grid-template-columns: 104px 1fr auto; gap: 10px;
         align-items: center; padding: 5px 6px; border-radius: .25rem; }
 .step.play { background: #2c393b; }
-.step .what { font-size: 16px; font-weight: 700; line-height: 1.25;
+.step .what { font-size: 18px; font-weight: 700; line-height: 1.25;
               overflow-wrap: anywhere; }
 .step .what .jv { display: block; font-weight: 400; }
 .step.play .what { color: var(--chips); }
@@ -321,7 +378,7 @@ tr.detail > td { padding: 0; border-top: 0; }
 .seal.blue { background: #009dff; } .seal.purple { background: #8867a6; }
 .step .score { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .step .score b { color: var(--mult); }
-.step .score span { color: var(--ink-mute); font-size: 15px; }
+.step .score span { color: var(--ink-mute); font-size: 16px; }
 /* The board: state going into the round, not an action. Jokers are only
    sampled when a hand is played, so the values shown are those after the
    round's first scored hand -- the lineup is the point. */
@@ -335,7 +392,7 @@ tr.detail > td { padding: 0; border-top: 0; }
          width: 100%; margin-top: 2px; opacity: .85; }
 .moved .bj { flex-direction: row; gap: 2px; }
 .cash { display: block; color: var(--money); font-size: 15px; font-weight: 700; }
-.jv { color: var(--ink-dim); font-size: 14px; }
+.jv { color: var(--ink-dim); font-size: 15px; }
 .warn { color: var(--filter); font-size: 15px; }
 @media (max-width: 560px) { header h1 { font-size: 24px; } .tile .v { font-size: 25px; } }
 </style>
@@ -349,14 +406,14 @@ tr.detail > td { padding: 0; border-top: 0; }
 <main>
   <section class="panel filters" aria-label="Filters">
     <span><label>Deck</label><span class="pick" id="deck"></span>
-      <button class="seg" id="noplasma" aria-pressed="false"
+      <button class="seg pixel-pill" id="noplasma" aria-pressed="false"
         title="Plasma balances chips and mult before scoring, so its numbers are not comparable with other decks">No Plasma</button></span>
     <span><label>Stake</label><span class="pick" id="stake"></span></span>
     <span><label>Include</label>
       <span class="seggroup" id="phase" role="group" aria-label="Which phases to include">
-        <button class="seg" data-v="0" aria-pressed="true"
+        <button class="seg pixel-pill" data-v="0" aria-pressed="true"
           title="Everything up to the point a run continued past the win ante">Non-endless</button>
-        <button class="seg" data-v="1" aria-pressed="true"
+        <button class="seg pixel-pill" data-v="1" aria-pressed="true"
           title="Only what happened after continuing past the win ante">Endless</button>
       </span></span>
   </section>
@@ -396,7 +453,7 @@ tr.detail > td { padding: 0; border-top: 0; }
 </main>
 
 <dialog id="detail"><div class="head"><h2 id="dtitle">Run</h2>
-  <button class="x" onclick="detail.close()">Close</button></div>
+  <button class="x pixel-pill" onclick="detail.close()">Close</button></div>
   <div class="body" id="dbody"></div></dialog>
 
 <script>
@@ -602,7 +659,7 @@ function copySeed(el, seed) {
 }
 
 const seedCell = r => r.seed
-  ? `<button class="seed${r.seeded ? " seeded" : ""}" data-seed="${esc(r.seed)}"
+  ? `<button class="seed pixel-pill sm${r.seeded ? " seeded" : ""}" data-seed="${esc(r.seed)}"
        title="${r.seeded ? "Entered seed — " : ""}Click to copy"
        >${esc(r.seed)}</button>`
   : `<span class="muted">—</span>`;
@@ -626,7 +683,7 @@ const get = path => fetch(path + "?" + qs()).then(r => {
 function resultChip(r) {
   // No run.end yet: either still being played, or the game crashed. The log
   // grows as you play, so this row updates live.
-  if (!r.result) return `<span class="chip live">IN PROGRESS</span>`;
+  if (!r.result) return `<span class="chip pixel-pill sm live">IN PROGRESS</span>`;
 
   // Winning and ending are different facts. Beating the win ante is a win
   // even if the run later died in endless, so both are shown rather than the
@@ -643,8 +700,8 @@ function resultChip(r) {
   }[r.result];
 
   const out = [];
-  if (r.won) out.push(`<span class="chip win">WON</span>`);
-  if (CHIP) out.push(`<span class="chip ${CHIP[0]}">${CHIP[1]}</span>`);
+  if (r.won) out.push(`<span class="chip pixel-pill sm win">WON</span>`);
+  if (CHIP) out.push(`<span class="chip pixel-pill sm ${CHIP[0]}">${CHIP[1]}</span>`);
   else if (!r.won) out.push(`<span class="muted">${esc(r.result)}</span>`);
   return out.join(" ");
 }
@@ -703,7 +760,7 @@ defineTable("runs", [
   { label: "Stake", cell: stakeCell, sort: r => r.stake_key },
   { label: "Result",
     cell: r => resultChip(r) + (r.went_endless
-      ? ' <span class="chip endless">ENDLESS</span>' : ""),
+      ? ' <span class="chip pixel-pill sm endless">ENDLESS</span>' : ""),
     sort: r => r.result || "" },
   { label: "Ante", num: true, cell: r => r.ante ?? "—", sort: r => r.ante },
   { label: "Rounds won", num: true, cls: "muted",
@@ -755,7 +812,7 @@ async function openRun(id) {
   if (!d.run) return;
   const r = d.run;
   $("#dtitle").innerHTML = `${esc(r.deck_name) || "?"} · ${esc((r.stake_key || "").replace("stake_", ""))}
-    ${resultChip(r)} ${r.went_endless ? '<span class="chip endless">ENDLESS</span>' : ""}`;
+    ${resultChip(r)} ${r.went_endless ? '<span class="chip pixel-pill sm endless">ENDLESS</span>' : ""}`;
   const rounds = d.rounds.map(x => `
     <tr class="roundrow clickable" data-round="${x.round_seq}">
       <td class="num">${x.round_seq}</td>
@@ -763,7 +820,7 @@ async function openRun(id) {
       <td class="num">${fmt(x.required_txt)}</td><td class="num">${fmt(x.score_txt)}</td>
       <td class="num">${x.cashout_total !== null ? "$" + x.cashout_total : "—"}</td>
       <td class="num muted">${x.deck_size ?? "—"}</td>
-      <td>${x.endless ? '<span class="chip endless">ENDLESS</span>' : ""}</td></tr>
+      <td>${x.endless ? '<span class="chip pixel-pill sm endless">ENDLESS</span>' : ""}</td></tr>
     <tr class="detail" data-for="${x.round_seq}" hidden><td colspan="8"></td></tr>`).join("");
   const jok = d.jokers.map(j => `<tr><td>${esc(nameOf(j.key))}</td><td class="muted">${esc(j.field)}</td>
     <td class="num" style="color:var(--mult)">${fmt(j.peak)}</td></tr>`).join("");
@@ -885,7 +942,7 @@ function buildPicker(id, key, items, kind, px, allLabel) {
   function render() {
     const cur = opts.find(o => o.k === state[key]) || opts[0];
     root.innerHTML =
-      `<button class="seg" aria-haspopup="listbox" aria-expanded="false"
+      `<button class="seg pixel-pill" aria-haspopup="listbox" aria-expanded="false"
         >${face(cur)}<span class="caret">▾</span></button>` +
       `<div class="menu" role="listbox">` +
       opts.map((o, i) => `<button role="option" data-i="${i}"

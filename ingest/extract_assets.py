@@ -159,6 +159,18 @@ def main() -> int:
         sizes[name] = png_size(data)
         print(f"  {name:16s} {sizes[name][0]}x{sizes[name][1]}")
 
+    # The game's own typeface. The stylesheet already asked for "m6x11" but
+    # nothing ever served it, so every page had been falling back to Courier.
+    for font in ("m6x11plus.ttf",):
+        try:
+            data = z.read("resources/fonts/" + font)
+        except KeyError:
+            print(f"  {font:16s} not in this build")
+            continue
+        with open(os.path.join(OUT, font), "wb") as fh:
+            fh.write(data)
+        print(f"  {font:16s} {len(data) // 1024} KB")
+
     src = z.read("game.lua").decode("utf-8", "replace")
     centers = parse_centers(src)
     names = parse_names(z)
