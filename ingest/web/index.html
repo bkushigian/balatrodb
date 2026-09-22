@@ -109,8 +109,20 @@ main > *, .cols > * { min-width: 0; }
    on all four corners. clip-path would cut off a box-shadow, so the
    highlight and the lip are bands in a background gradient and the drop
    shadow is a filter, which follows the clipped outline instead of the box. */
+/* ── the pixel pill ───────────────────────────────────────────────────
+   The lip is a SECOND COPY of the silhouette sitting behind and a few
+   pixels lower, the way the game draws it -- not a dark band inside the
+   shape. As a band it cut the fill off with a flat horizontal line and
+   then painted the bottom curve in the lip colour, which is backwards:
+   the fill should keep its stepped curve, and the lip should peek out
+   below it. Two pseudo-elements, because clip-path on the element itself
+   would clip them both to the body's outline. */
 .pixel-pill {
-  clip-path: polygon(
+  --lip-h: 4px;
+  --hi: rgba(255, 255, 255, .14);
+  --lip: rgba(0, 0, 0, .45);                          /* fallback */
+  --lip: color-mix(in srgb, var(--fill) 58%, #000);   /* a darker own colour */
+  --shape: polygon(
     12px 0, calc(100% - 12px) 0,
     calc(100% - 12px) 3px, calc(100% - 6px) 3px,
     calc(100% - 6px) 6px, calc(100% - 3px) 6px,
@@ -123,6 +135,23 @@ main > *, .cols > * { min-width: 0; }
     6px calc(100% - 6px), 3px calc(100% - 6px),
     3px calc(100% - 12px), 0 calc(100% - 12px),
     0 12px, 3px 12px, 3px 6px, 6px 6px, 6px 3px, 12px 3px);
+  position: relative;
+  isolation: isolate;
+  background: none;
+  border-radius: 0;
+}
+.pixel-pill::before, .pixel-pill::after {
+  content: ""; position: absolute; inset: 0;
+  clip-path: var(--shape);
+}
+.pixel-pill::before {          /* the lip, the same shape sitting lower */
+  background: var(--lip);
+  transform: translateY(var(--lip-h));
+  z-index: -2;
+}
+.pixel-pill::after {           /* the body */
+  background: linear-gradient(to bottom, var(--hi) 0 2px, var(--fill) 2px 100%);
+  z-index: -1;
 }
 /* Chips and seeds round all the way to a pill instead of stopping a few
    pixels in. The steps approximate a quarter circle of radius = half the
@@ -131,8 +160,7 @@ main > *, .cols > * { min-width: 0; }
        y   0%  11%  22%  39%  50%
      inset 12   5    2    1    0  (px)
    which is the staircase a pixel artist would draw for that curve. */
-.pixel-pill.sm {
-  clip-path: polygon(
+.pixel-pill.sm { --lip-h: 3px; --shape: polygon(
     12px 0, calc(100% - 12px) 0,
     calc(100% - 12px) 11%, calc(100% - 5px) 11%,
     calc(100% - 5px) 22%, calc(100% - 2px) 22%,
@@ -146,19 +174,13 @@ main > *, .cols > * { min-width: 0; }
     2px 61%, 0 61%,
     0 39%, 2px 39%,
     2px 22%, 5px 22%,
-    5px 11%, 12px 11%);
-}
+    5px 11%, 12px 11%); }
 
 button.seg, .pick > button {
   --stroke: #10171a;
-  --lip: #10171a;
   --fill: var(--sunken);
-  --hi: rgba(255, 255, 255, .12);
-  background: linear-gradient(to bottom,
-    var(--hi) 0 2px, var(--fill) 2px calc(100% - 5px),
-    var(--lip) calc(100% - 5px) 100%);
   border: 0; cursor: pointer;
-  border-radius: 0; padding: 11px 20px 15px; font: inherit; font-size: 17px;
+  padding: 13px 20px; font: inherit; font-size: 17px;
   font-weight: 700; letter-spacing: .02em;
   color: #fff;
   text-shadow:
@@ -166,13 +188,12 @@ button.seg, .pick > button {
     0 -1px var(--stroke), 0 1px var(--stroke),
     -1px -1px var(--stroke), 1px -1px var(--stroke),
     -1px 1px var(--stroke), 1px 1px var(--stroke);
-  filter: drop-shadow(0 3px 0 rgba(0, 0, 0, .45));
-  transition: transform .06s, filter .06s;
+  transition: transform .06s;
 }
-/* Pressing pushes the button down onto its own lip. */
+/* Pressing pushes the button down onto its own lip, which all but vanishes. */
 button.seg:active, .pick > button:active {
   transform: translateY(3px);
-  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, .45));
+  --lip-h: 1px;
 }
 button:focus-visible { outline: 2px solid var(--filter); outline-offset: 2px; }
 .seggroup { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
@@ -209,7 +230,6 @@ button:focus-visible { outline: 2px solid var(--filter); outline-offset: 2px; }
 }
 button.seg[aria-pressed="true"] {
   --stroke: #7a241e;
-  --lip: #a8392f;
   --fill: var(--mult);
   --hi: rgba(255, 255, 255, .26);
 }
@@ -257,41 +277,32 @@ th.sortable .ind { display: inline-block; width: .8em; color: var(--gold); }
 /* The seed, as something you press. It is the one cell people want to take
    somewhere else, so it copies on click rather than needing a careful drag. */
 .seed { font: inherit; font-size: 15px; letter-spacing: .06em; cursor: pointer;
-        color: var(--ink-dim); border: 0; border-radius: 0; font-weight: 700;
-        padding: 6px 16px 9px;
-        background: linear-gradient(to bottom,
-          rgba(255,255,255,.08) 0 1px, var(--sunken) 1px calc(100% - 3px),
-          #10171a calc(100% - 3px) 100%);
+        color: var(--ink-dim); border: 0; font-weight: 700;
+        padding: 7px 16px; --fill: var(--sunken);
         transition: color .12s, transform .06s; }
-.seed:active { transform: translateY(2px); }
-.seed:hover { background: #40525a; color: var(--ink); }
-.seed.seeded { border-color: var(--gold); color: var(--gold); }
-.seed.copied { background: var(--green); border-color: var(--green); color: #14211f; }
+.seed:active { transform: translateY(2px); --lip-h: 1px; }
+.seed:hover { --fill: #40525a; color: var(--ink); }
+.seed.seeded { color: var(--gold); }
+.seed.copied { --fill: var(--green); color: #14211f; }
 td.num { font-variant-numeric: tabular-nums; }
 .chip {
-  display: inline-block; padding: 3px 13px 6px; border-radius: 99px;
+  display: inline-block; padding: 4px 13px;
   font-size: 14px; font-weight: 700; letter-spacing: .06em; color: #1b2223;
-  /* Same highlight-and-lip as the buttons, but as translucent bands over
-     whatever colour the variant sets -- so one rule serves all six without
-     a hand-picked darker shade for each. The drop shadow is a filter so it
-     follows the stepped silhouette rather than the box. */
-  background-image: linear-gradient(to bottom,
-    rgba(255, 255, 255, .18) 0 1px,
-    transparent 1px calc(100% - 3px),
-    rgba(0, 0, 0, .34) calc(100% - 3px) 100%);
-  filter: drop-shadow(0 2px 0 rgba(0, 0, 0, .45));
   /* text-shadow inherits, and the run dialog's chips sit inside its <h2>,
      which carries the outlined lettering. A dark outline around dark text
      on a gold chip filled the letters in solid. */
   text-shadow: none;
-  border-radius: 0;
+  /* Fill only; .pixel-pill darkens it for the lip, so a new chip colour
+     needs nothing but its own --fill. */
+  --fill: #4a585c;
+  --hi: rgba(255, 255, 255, .20);
 }
-.chip.win { background-color: var(--gold); }
-.chip.died { background-color: var(--blind); color: #fff; }
-.chip.endless { background-color: var(--purple); color: #fff; }
-.chip.susp { background-color: #566264; color: var(--ink-dim); }
-.chip.live { background-color: var(--green); }
-.chip.other { background-color: #4a585c; color: var(--ink-dim); }
+.chip.win { --fill: var(--gold); }
+.chip.died { --fill: var(--blind); color: #fff; }
+.chip.endless { --fill: var(--purple); color: #fff; }
+.chip.susp { --fill: #566264; color: var(--ink-dim); }
+.chip.live { --fill: var(--green); }
+.chip.other { --fill: #4a585c; color: var(--ink-dim); }
 .muted { color: var(--ink-mute); }
 /* Sprites are cells of the game's own atlases, positioned with
    background-position. Scaled by background-size so one rule covers any
@@ -330,22 +341,17 @@ dialog h3 { font-size: 16px; color: var(--ink-mute); text-transform: uppercase;
             letter-spacing: .07em; margin: 16px 0 6px; }
 dialog h3:first-child { margin-top: 0; }
 /* Same pill as the filter buttons, so the dialog matches the page. */
-button.x { --stroke: #10171a; --lip: #10171a;
-           color: #fff; border: 0; font: inherit; border-radius: 0;
-           background: linear-gradient(to bottom,
-             rgba(255,255,255,.12) 0 2px, var(--sunken) 2px calc(100% - 5px),
-             var(--lip) calc(100% - 5px) 100%);
-           padding: 11px 20px 15px; cursor: pointer;
+button.x { --stroke: #10171a; --fill: var(--sunken);
+           color: #fff; border: 0; font: inherit;
+           padding: 13px 20px; cursor: pointer;
            font-weight: 700;
            text-shadow:
              -1px 0 var(--stroke), 1px 0 var(--stroke),
              0 -1px var(--stroke), 0 1px var(--stroke),
              -1px -1px var(--stroke), 1px -1px var(--stroke),
              -1px 1px var(--stroke), 1px 1px var(--stroke);
-           filter: drop-shadow(0 3px 0 rgba(0,0,0,.45));
-           transition: transform .06s, filter .06s; }
-button.x:active { transform: translateY(3px);
-                  filter: drop-shadow(0 1px 0 rgba(0,0,0,.45)); }
+           transition: transform .06s; }
+button.x:active { transform: translateY(3px); --lip-h: 1px; }
 .empty { color: var(--ink-mute); padding: 14px 4px; }
 
 /* expandable round timeline */
