@@ -1,12 +1,29 @@
 """Fold BalatroDB JSONL run logs into SQLite.
 
-The gzipped logs are the system of record; this database is a derived index
-and `--rebuild` regenerates it. See docs/db-schema.md for the design.
+The gzipped logs are the system of record; this database is a derived index and
+`--rebuild` regenerates it from them. See docs/db-schema.md.
 
     python ingest/ingest.py [--db PATH] [--logs DIR] [--rebuild] [--report]
+
+Design note -- why there is no partial-tail resume
+--------------------------------------------------
+An earlier version tracked a byte offset per file and ingested only the tail,
+accumulating per-run state (round numbering, validation counters) in memory.
+Three independent reviews reproduced the same corruption: a second process
+starts with a fresh accumulator, so `round_seq` restarts at 1 and overwrites
+earlier rounds, and hands attach to the wrong round.
+
+This version re-derives a whole run whenever its log changes. A run is ~300 KB,
+re-deriving one takes milliseconds, and it removes the entire class of bug:
+there is no cross-process state to persist, and a full rebuild and an
+incremental update really are the same code path.
 """
+from __future__ import annotations
+
 import argparse
 import glob
+import gzip
+import hashlib
 import json
 import math
 import os
@@ -15,26 +32,28 @@ import sys
 import time
 
 DEFAULT_LOGS = os.path.expandvars(r"%APPDATA%\Balatro\BalatroDB\runs")
-DEFAULT_DB = os.path.join(os.path.dirname(__file__), "balatro.db")
+HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_DB = os.path.join(HERE, "balatro.db")
 
-SCHEMA = open(os.path.join(os.path.dirname(__file__), "schema.sql"), encoding="utf-8").read()
 
+# ─── numbers ──────────────────────────────────────────────────────────────
+# The wire delivers a number plainly, or as {"s": exact, "l": signed log10}
+# when it cannot round-trip through the encoder's %.14g.
 
 def ord_num(v):
-    """(ord, num, txt) for a wire value: a plain number, or {"s","l"}, or None.
+    """(ord, num, txt). `ord` is sign(x)*log10(1+|x|).
 
-    ord is sign(x)*log10(1+|x|) -- monotonic across the whole real line, so it
-    orders plain numbers and out-of-range ones against each other correctly.
-    MAX() over the exact text would be lexicographic and silently wrong.
+    ORDERING ACCELERATOR, NOT AN EXACT KEY. Distinct values collide: plain
+    99999999999999 and a wrapped 1e14 both yield 14.0. Any query needing the
+    true maximum must break ties on `txt` numerically.
     """
     if v is None:
         return None, None, None
     if isinstance(v, dict):
-        s = v.get("s")
-        l = v.get("l")
-        if l is None:                       # nan, or an unparseable big number
-            return None, None, str(s)
-        return float(l), None, str(s)
+        s, l = v.get("s"), v.get("l")
+        if l is None:
+            return None, None, None if s is None else str(s)
+        return float(l), as_num(v), str(s)
     if isinstance(v, bool):
         return None, None, str(v)
     if isinstance(v, (int, float)):
@@ -44,305 +63,481 @@ def ord_num(v):
     return None, None, str(v)
 
 
-def triple(prefix, v):
-    o, n, t = ord_num(v)
-    return {prefix + "_ord": o, prefix + "_num": n, prefix + "_txt": t}
+def triple(v):
+    return ord_num(v)
 
 
-def as_int(v):
-    """Bounded game quantities: dollars, ante, deck size. None if out of range."""
-    if isinstance(v, bool) or v is None:
+def as_num(v):
+    """A float for arithmetic, accepting the wrapped form.
+
+    Crossing the encoder's 14-significant-digit limit does not imply the value
+    overflows a double, so a wrapped value usually still yields a usable float.
+    Only a genuinely unrepresentable value gives None -- an earlier version
+    returned None for everything wrapped, which made SUM() silently drop the
+    largest hands in a round.
+    """
+    if v is None or isinstance(v, bool):
         return None
     if isinstance(v, (int, float)):
-        return int(v)
+        return float(v)
+    if isinstance(v, dict):
+        try:
+            f = float(v.get("s"))
+            return f if not (math.isinf(f) or math.isnan(f)) else None
+        except (TypeError, ValueError):
+            l = v.get("l")
+            if isinstance(l, (int, float)) and abs(l) < 308:
+                return math.copysign(10.0 ** abs(l), l)
+            return None
     return None
 
 
-def card_row(run, seg, n, role, pos, c, ante, el, event):
-    if not isinstance(c, dict):
-        return None
-    return (
-        run, seg, n, role, pos, ante, el, event,
-        as_int(c.get("id")), c.get("key"), c.get("name"), c.get("set"),
-        c.get("rank"), c.get("suit"), c.get("enhancement"), c.get("edition"),
-        c.get("seal"),
-        json.dumps(c["stickers"]) if c.get("stickers") else None,
-        as_int(c.get("sell_cost")),
-        json.dumps(c["state"]) if c.get("state") else None,
-    )
+def as_int(v):
+    n = as_num(v)
+    return None if n is None or math.isinf(n) or math.isnan(n) else int(n)
 
 
-# Payload keys that hold cards, singly or as arrays. Covers all 26 nesting
-# shapes seen in the corpus; unknown keys are simply not projected.
-CARD_KEYS = ("card", "from", "to", "cards", "jokers", "deck", "deck_cards",
-             "consumables", "targets", "items")
+# ─── known capture defects, sniffed from the data ─────────────────────────
+# The mod never bumped its version string while the layout changed, so the
+# format is detected from which events and fields are present, not from `v`
+# or `env.balatrodb`.
+
+DEFECTS = {
+    "legacy_no_baseline":   "arrays inside run.start/run.end; no run.baseline event",
+    "legacy_result_vocab":  "result vocabulary predates died/completed",
+    "legacy_run_end_score": "run.end.score rather than final_round_score",
+    "no_terminal_flag":     "run.end carries no `terminal`",
+    "no_best_hand":         "no round_scores block; best_hand unavailable",
+    "no_endless_flag":      "run.end carries no `endless`",
+    "consumables_as_cards": "consumables logged as card.add; deck counts inflated",
+    "no_card_modify":       "enhancements logged as card.add, not card.modify",
+    "encode_error":         "at least one payload failed to encode",
+    "no_run_end":           "file ends with no run.end (crash, or still live)",
+    "deck_identity_fail":   "baseline + adds - removes != final deck size",
+    "sequence_gap":         "event sequence is not gap-free within a segment",
+    "won_without_win":      "run.end.won set but no run.win event",
+}
+
+LEGACY_RESULTS = {"quit", "loss", "win"}
+
+# Payload keys holding cards, and which hold arrays. `items` is deliberately
+# absent: round.end.items[] are cash-out rows, not cards, and a generic
+# dictionary sweep put 347 junk rows in `cards`.
+CARD_SINGLE = ("card", "from", "to")
+CARD_ARRAYS = ("cards", "jokers", "deck", "deck_cards", "consumables", "targets")
+
+
+def open_log(path):
+    if path.endswith(".gz"):
+        return gzip.open(path, "rt", encoding="utf-8", errors="replace")
+    return open(path, "r", encoding="utf-8", errors="replace")
+
+
+def read_events(path):
+    """Every complete line of a log. A live run's last line may be partial."""
+    with open_log(path) as fh:
+        data = fh.read()
+    cut = data.rfind("\n")
+    if cut < 0:
+        return [], 0
+    out, bad = [], 0
+    # split("\n"), not splitlines(): the latter also breaks on U+2028, U+0085
+    # and friends, which the Lua encoder does not escape.
+    for line in data[:cut].split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except Exception:
+            bad += 1
+    return out, bad
 
 
 class Ingester:
     def __init__(self, db):
         self.db = db
-        self.state = {}       # run_id -> per-run accumulators
 
-    # -- per-run accumulator -------------------------------------------------
-    def st(self, run):
-        return self.state.setdefault(run, {
-            "round_seq": 0, "open_round": None, "went_endless": 0,
-            "max_n": {}, "lines": {}, "card_add": 0, "card_remove": 0,
-            "baseline_deck": None, "encode_errors": 0,
-            "saw_win": False, "saw_end": False, "end_deck_size": None,
-            "ver": None})
-
+    # -- file level ---------------------------------------------------------
     def ingest_file(self, path):
-        size = os.path.getsize(path)
-        mtime = os.path.getmtime(path)
-        row = self.db.execute(
-            "SELECT bytes_read, mtime FROM files WHERE path=?", (path,)).fetchone()
-        start = 0
-        if row:
-            if row[0] == size and abs(row[1] - mtime) < 1e-6:
-                return 0                      # unchanged
-            start = row[0]
+        st = os.stat(path)
+        sig = hashlib.sha1(f"{st.st_size}:{st.st_mtime_ns}".encode()).hexdigest()
+        row = self.db.execute("SELECT sig FROM files WHERE path=?", (path,)).fetchone()
+        if row and row[0] == sig:
+            return 0, False
 
-        with open(path, "rb") as fh:
-            fh.seek(start)
-            blob = fh.read()
-        # Never consume a partial trailing line: a live run's file is mid-flush.
-        cut = blob.rfind(b"\n")
-        if cut < 0:
-            return 0
-        consumed = start + cut + 1
-        lines = blob[:cut].decode("utf-8", "replace").splitlines()
+        events, bad = read_events(path)
+        if not events:
+            return 0, False
+        run_id = events[0].get("run") or os.path.basename(path)
 
-        n_ok = 0
-        run_id = None
-        for raw in lines:
-            raw = raw.strip()
-            if not raw:
-                continue
-            try:
-                ev = json.loads(raw)
-            except Exception:
-                continue
-            run_id = ev.get("run") or run_id
-            self.apply(ev, os.path.basename(path), size)
-            n_ok += 1
+        self.purge(run_id)
+        self.derive(run_id, os.path.basename(path), st.st_size, events, bad)
+        self.db.execute("INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?)",
+                        (path, run_id, st.st_size, st.st_mtime, sig, time.time()))
+        return len(events), True
+
+    def purge(self, run_id):
+        """Everything derived from one run, so re-derivation cannot duplicate."""
+        for t in ("cards", "joker_scale", "joker_state", "joker_derived", "hands",
+                  "hand_levels", "money", "cashout_items", "rounds", "segments",
+                  "blind_skips", "consumable_uses", "run_defects", "runs"):
+            self.db.execute(f"DELETE FROM {t} WHERE run_id=?", (run_id,))
+
+    # -- run level ----------------------------------------------------------
+    def derive(self, run_id, log_file, log_bytes, events, bad_lines):
+        kinds = {e.get("e") for e in events}
+        defects = set()
+        if bad_lines or "encode.error" in kinds:
+            defects.add("encode_error")
+
+        # Format sniffing. `v` stayed at 1 across every layout change, so the
+        # only reliable signal is which events and fields are present.
+        legacy = not (kinds & {"run.baseline", "run.rebaseline"})
+        if legacy:
+            defects.add("legacy_no_baseline")
+            defects.add("consumables_as_cards")
+        if "card.modify" not in kinds:
+            defects.add("no_card_modify")
+
+        seg_lines, seg_max_n = {}, {}
+        round_seq, open_round = 0, None
+        baseline_deck = baseline_dollars = None
+        card_add = card_remove = 0
+        saw_win = False
+        run_row = end = None
+        balance = None
+
+        for ev in events:
+            e, d = ev.get("e"), ev.get("d") or {}
+            seg, n = ev.get("seg", 0), ev.get("n")
+            el = 1 if ev.get("el") else 0
+            ante = as_int(ev.get("a"))
+
+            seg_lines[seg] = seg_lines.get(seg, 0) + 1
+            if isinstance(n, int):
+                seg_max_n[seg] = max(seg_max_n.get(seg, -1), n)
+
+            self.project_cards(run_id, seg, n, ante, el, e, d)
+
+            if e in ("run.start", "run.resume"):
+                env = d.get("env") or {}
+                if e == "run.start":
+                    run_row = d
+                self.db.execute("INSERT OR REPLACE INTO segments VALUES (?,?,?,?,?,?,?,?,?,?)",
+                                (run_id, seg, as_int(d.get("ts")), 1 if e == "run.resume" else 0,
+                                 as_int(ev.get("v")), env.get("balatrodb"), env.get("game"),
+                                 env.get("lovely"), env.get("smods"),
+                                 json.dumps(env.get("mods") or [])))
+                if legacy and baseline_deck is None:
+                    baseline_deck = len(d.get("deck_cards") or []) or None
+                    baseline_dollars = as_int(d.get("dollars"))
+
+            elif e in ("run.baseline", "run.rebaseline"):
+                if baseline_deck is None:
+                    baseline_deck = len(d.get("deck_cards") or [])
+                if baseline_dollars is None:
+                    baseline_dollars = as_int(d.get("dollars"))
+
+            elif e == "run.win":
+                saw_win = True
+
+            elif e == "round.start":
+                round_seq += 1
+                open_round = round_seq
+                o, nu, t = triple(d.get("chips"))
+                self.db.execute(
+                    "INSERT OR REPLACE INTO rounds (run_id,round_seq,seg,ante,blind_key,"
+                    "blind_name,is_boss,reward,endless,required_ord,required_num,required_txt)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (run_id, round_seq, seg, as_int(d.get("ante")) or ante, d.get("blind_key"),
+                     d.get("name"), 1 if d.get("boss") else 0, as_int(d.get("reward")), el,
+                     o, nu, t))
+
+            elif e == "round.end":
+                rs = open_round or round_seq
+                if rs:
+                    o, nu, t = triple(d.get("score"))
+                    self.db.execute(
+                        "UPDATE rounds SET score_ord=?,score_num=?,score_txt=?,cashout_total=?,"
+                        "dollars_before=?,deck_size=? WHERE run_id=? AND round_seq=?",
+                        (o, nu, t, as_int(d.get("total")), as_int(d.get("dollars_before")),
+                         as_int(d.get("deck_size")), run_id, rs))
+                    self.db.executemany(
+                        "INSERT OR REPLACE INTO cashout_items VALUES (?,?,?,?,?,?,?)",
+                        [(run_id, rs, i, it.get("name"), as_int(it.get("dollars")),
+                          as_int(it.get("disp")), it.get("key"))
+                         for i, it in enumerate(d.get("items") or []) if isinstance(it, dict)])
+                    self.sample_jokers(run_id, seg, n, rs, ante, el, d.get("jokers"))
+                    self.sample_deck(run_id, rs, d.get("deck"))
+                open_round = None
+
+            elif e == "hand.play":
+                so, sn, stx = triple(d.get("score"))
+                co, cn, ctx = triple(d.get("chips_before"))
+                self.db.execute(
+                    "INSERT OR REPLACE INTO hands VALUES (" + ",".join("?" * 17) + ")",
+                    (run_id, seg, n, open_round or round_seq, ante, el, d.get("hand"),
+                     as_int(d.get("level")), 1 if d.get("oneshot") else 0,
+                     so, sn, stx, co, cn, ctx,
+                     as_int(d.get("hands_left_before")), as_int(d.get("discards_left_before"))))
+                self.sample_jokers(run_id, seg, n, open_round or round_seq, ante, el,
+                                   d.get("jokers"))
+
+            elif e == "hand.levelup":
+                self.db.execute("INSERT OR REPLACE INTO hand_levels VALUES (?,?,?,?,?,?,?,?)",
+                                (run_id, seg, n, el, d.get("hand"), as_int(d.get("from")),
+                                 as_int(d.get("to")), as_int(d.get("amount"))))
+
+            elif e in ("joker.scale", "joker.reset"):
+                fo, fn, ft = triple(d.get("from"))
+                to, tn, tt = triple(d.get("to"))
+                self.db.execute(
+                    "INSERT OR REPLACE INTO joker_scale VALUES (" + ",".join("?" * 15) + ")",
+                    (run_id, seg, n, as_int(d.get("id")), d.get("key"), d.get("field"), ante, el,
+                     1 if e == "joker.reset" else 0, fo, fn, ft, to, tn, tt))
+
+            elif e == "money.change":
+                delta = as_int(d.get("delta")) or 0
+                # `before` is unreliable: consecutive queued ease_dollars calls
+                # all report the same pre-value, so before+delta invents peaks
+                # that never happened. The balance is a running sum instead.
+                if balance is None:
+                    balance = baseline_dollars if baseline_dollars is not None \
+                        else (as_int(d.get("before")) or 0)
+                balance += delta
+                self.db.execute("INSERT OR REPLACE INTO money VALUES (?,?,?,?,?,?,?,?)",
+                                (run_id, seg, n, ante, el, delta,
+                                 as_int(d.get("before")), balance))
+
+            elif e == "blind.skip":
+                # Throwback's value is the running skip count, so the skips
+                # need their own timeline, not just the run total.
+                self.db.execute("INSERT OR REPLACE INTO blind_skips VALUES (?,?,?,?,?,?)",
+                                (run_id, seg, n, ante, el, d.get("tag")))
+
+            elif e in ("consumable.use", "pack.open", "voucher.redeem"):
+                c = d.get("card") or {}
+                self.db.execute(
+                    "INSERT OR REPLACE INTO consumable_uses VALUES (?,?,?,?,?,?,?)",
+                    (run_id, seg, n, ante, el, c.get("key"), c.get("set")))
+
+            elif e == "card.add":
+                card_add += 1
+            elif e == "card.remove":
+                card_remove += 1
+            elif e == "run.end":
+                end = d
+
+        self.write_run(run_id, log_file, log_bytes, run_row, end, events, saw_win, defects)
+
+        if baseline_deck is not None and end and end.get("deck_size") is not None \
+                and "consumables_as_cards" not in defects:
+            if baseline_deck + card_add - card_remove != as_int(end.get("deck_size")):
+                defects.add("deck_identity_fail")
+
+        for seg, mx in seg_max_n.items():
+            if seg_lines.get(seg) != mx + 1:
+                defects.add("sequence_gap")
+
+        for name in sorted(defects):
+            self.db.execute("INSERT OR REPLACE INTO run_defects VALUES (?,?,?)",
+                            (run_id, name, DEFECTS.get(name, "")))
+
+    def write_run(self, run_id, log_file, log_bytes, rs, end, events, saw_win, defects):
+        rs = rs or {}
+        self.db.execute(
+            "INSERT OR REPLACE INTO runs (run_id,log_file,log_bytes,started_ts,seed,seeded,"
+            "challenge,deck_key,deck_name,stake,stake_key,win_ante,profile,starting_deck_size)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (run_id, log_file, log_bytes, as_int(rs.get("ts")) or 0, rs.get("seed"),
+             1 if rs.get("seeded") else 0,
+             json.dumps(rs["challenge"]) if rs.get("challenge") else None,
+             rs.get("deck_key"), rs.get("deck"), as_int(rs.get("stake")), rs.get("stake_key"),
+             as_int(rs.get("win_ante")), as_int(rs.get("profile")),
+             as_int(rs.get("starting_deck_size"))))
+
+        if end is None:
+            defects.add("no_run_end")
+            return
+
+        if end.get("result") in LEGACY_RESULTS:
+            defects.add("legacy_result_vocab")
+        if "terminal" not in end:
+            defects.add("no_terminal_flag")
+        if "score" in end and "final_round_score" not in end:
+            defects.add("legacy_run_end_score")
+        if end.get("best_hand") is None:
+            defects.add("no_best_hand")
+        if "endless" not in end:
+            defects.add("no_endless_flag")
+        if end.get("won") and not saw_win:
+            defects.add("won_without_win")
+
+        terminal = end.get("terminal")
+        if terminal is None:                       # legacy logs: infer it
+            terminal = 0 if end.get("result") == "suspended" else 1
+        bo, bn, bt = triple(end.get("best_hand"))
+        fo, fn, ft = triple(end.get("final_round_score", end.get("score")))
+        went_endless = 1 if (end.get("endless") or any(e.get("el") for e in events)) else 0
 
         self.db.execute(
-            "INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?)",
-            (path, run_id or os.path.basename(path), consumed, mtime, n_ok, time.time()))
-        return n_ok
+            "UPDATE runs SET won=?,result=?,terminal=?,ended_ante=?,ended_round=?,"
+            "hands_played=?,skips=?,final_dollars=?,deck_size=?,went_endless=?,"
+            "best_hand_ord=?,best_hand_num=?,best_hand_txt=?,furthest_ante=?,"
+            "furthest_round=?,final_round_score_ord=?,final_round_score_num=?,"
+            "final_round_score_txt=? WHERE run_id=?",
+            (1 if end.get("won") else 0, end.get("result"), 1 if terminal else 0,
+             as_int(end.get("ante")), as_int(end.get("round")),
+             as_int(end.get("hands_played")), as_int(end.get("skips")),
+             as_int(end.get("dollars")), as_int(end.get("deck_size")), went_endless,
+             bo, bn, bt, as_int(end.get("furthest_ante")),
+             as_int(end.get("furthest_round")), fo, fn, ft, run_id))
 
-    # -- one event -----------------------------------------------------------
-    def apply(self, ev, log_file=None, log_bytes=None):
-        self.cur_log, self.cur_bytes, self.cur_v = log_file, log_bytes, ev.get("v")
-        run, seg, n = ev.get("run"), ev.get("seg", 0), ev.get("n")
-        e, d = ev.get("e"), ev.get("d") or {}
-        el = 1 if ev.get("el") else 0
-        ante, rnd = as_int(ev.get("a")), as_int(ev.get("r"))
-        st = self.st(run)
-        st["max_n"][seg] = max(st["max_n"].get(seg, -1), n if n is not None else -1)
-        st["lines"][seg] = st["lines"].get(seg, 0) + 1
-        if e == "card.add":
-            st["card_add"] += 1
-        elif e == "card.remove":
-            st["card_remove"] += 1
-        elif e == "encode.error":
-            st["encode_errors"] += 1
-        elif e == "run.win":
-            st["saw_win"] = True
-
-        # cards, wherever they are nested
+    # -- projections --------------------------------------------------------
+    def project_cards(self, run_id, seg, n, ante, el, event, d):
         rows = []
-        for key in CARD_KEYS:
+        for key in CARD_SINGLE:
             v = d.get(key)
-            if isinstance(v, dict):
-                r = card_row(run, seg, n, key, 0, v, ante, el, e)
-                if r:
-                    rows.append(r)
-            elif isinstance(v, list):
+            if isinstance(v, dict) and ("id" in v or "key" in v or "rank" in v):
+                rows.append(self.card_row(run_id, seg, n, key, 0, v, ante, el, event))
+        for key in CARD_ARRAYS:
+            v = d.get(key)
+            if isinstance(v, list):
                 for i, c in enumerate(v):
-                    r = card_row(run, seg, n, key, i, c, ante, el, e)
-                    if r:
-                        rows.append(r)
+                    if isinstance(c, dict):
+                        rows.append(self.card_row(run_id, seg, n, key, i, c, ante, el, event))
         if rows:
             self.db.executemany(
-                "INSERT OR REPLACE INTO cards VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+                "INSERT OR REPLACE INTO cards VALUES (" + ",".join("?" * 20) + ")", rows)
 
-        getattr(self, "on_" + e.replace(".", "_"), lambda *_: None)(run, seg, n, ante, el, d, st)
+    def card_row(self, run_id, seg, n, role, pos, c, ante, el, event):
+        st = c.get("state") if isinstance(c.get("state"), dict) else None
+        return (run_id, seg, n, role, pos, ante, el, event,
+                as_int(c.get("id")), c.get("key"), c.get("name"), c.get("set"),
+                c.get("rank"), c.get("suit"), c.get("enhancement"), c.get("edition"),
+                c.get("seal"),
+                json.dumps(c["stickers"]) if c.get("stickers") else None,
+                as_int(c.get("sell_cost")),
+                json.dumps(st) if st else None)
 
-    # -- handlers ------------------------------------------------------------
-    def on_run_start(self, run, seg, n, ante, el, d, st, resumed=False):
-        env = d.get("env") or {}
-        if not resumed:
-            self.db.execute(
-                """INSERT OR REPLACE INTO runs
-                   (run_id, log_file, log_bytes, started_ts, seed, seeded, challenge,
-                    deck_key, deck_name, stake, stake_key, win_ante, profile,
-                    starting_deck_size)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (run, self.cur_log, self.cur_bytes, as_int(d.get("ts")) or 0,
-                 d.get("seed"), 1 if d.get("seeded") else 0,
-                 json.dumps(d["challenge"]) if d.get("challenge") else None,
-                 d.get("deck_key"), d.get("deck"), as_int(d.get("stake")),
-                 d.get("stake_key"), as_int(d.get("win_ante")),
-                 as_int(d.get("profile")), as_int(d.get("starting_deck_size"))))
-        # Environment per SEGMENT: a run can span a mod update, so seg 0 and
-        # seg 1 of one file may have been written by different builds with
-        # different capture behaviour.
-        self.db.execute(
-            "INSERT OR REPLACE INTO segments VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (run, seg, as_int(d.get("ts")), 1 if resumed else 0,
-             as_int(self.cur_v), env.get("balatrodb"), env.get("game"),
-             env.get("lovely"), env.get("smods"),
-             json.dumps(env.get("mods") or [])))
-
-    def on_run_resume(self, run, seg, n, ante, el, d, st):
-        self.on_run_start(run, seg, n, ante, el, d, st, resumed=True)
-
-    def on_run_baseline(self, run, seg, n, ante, el, d, st):
-        if st["baseline_deck"] is None:
-            st["baseline_deck"] = len(d.get("deck_cards") or [])
-
-    def on_run_win(self, run, seg, n, ante, el, d, st):
-        self.db.execute("UPDATE runs SET won=1 WHERE run_id=?", (run,))
-
-    def on_blind_select(self, run, seg, n, ante, el, d, st):
-        if d.get("entered_endless"):
-            st["went_endless"] = 1
-            self.db.execute("UPDATE runs SET went_endless=1 WHERE run_id=?", (run,))
-
-    def on_round_start(self, run, seg, n, ante, el, d, st):
-        st["round_seq"] += 1
-        st["open_round"] = st["round_seq"]
-        cols = {}
-        cols.update(triple("required", d.get("chips")))
-        self.db.execute(
-            """INSERT OR REPLACE INTO rounds
-               (run_id, round_seq, seg, ante, blind_key, blind_name, is_boss, reward,
-                endless, required_ord, required_num, required_txt)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (run, st["round_seq"], seg, as_int(d.get("ante")) or ante,
-             d.get("blind_key"), d.get("name"), 1 if d.get("boss") else 0,
-             as_int(d.get("reward")), el,
-             cols["required_ord"], cols["required_num"], cols["required_txt"]))
-
-    def on_round_end(self, run, seg, n, ante, el, d, st):
-        rs = st["open_round"] or st["round_seq"]
-        if rs == 0:
+    def sample_jokers(self, run_id, seg, n, round_seq, ante, el, jokers):
+        """One row per joker per observation, with its numeric state hoisted
+        into columns so queries need no json_extract."""
+        if not isinstance(jokers, list):
             return
-        sc = triple("score", d.get("score"))
+        rows = []
+        for j in jokers:
+            if not isinstance(j, dict):
+                continue
+            st = j.get("state") if isinstance(j.get("state"), dict) else {}
+            rows.append((run_id, seg, n, round_seq, ante, el,
+                         as_int(j.get("id")), j.get("key"),
+                         as_num(st.get("mult")), as_num(st.get("x_mult")),
+                         as_num(st.get("chips")), as_num(st.get("extra")),
+                         as_num(st.get("stone_tally")), as_num(st.get("perma_bonus")),
+                         json.dumps(st) if st else None))
+        if rows:
+            self.db.executemany(
+                "INSERT OR REPLACE INTO joker_state VALUES (" + ",".join("?" * 15) + ")", rows)
+
+    def sample_deck(self, run_id, round_seq, deck):
+        """Per-round scalars from a deck sample, rather than 40-50 card rows.
+
+        The deck sample is the single largest contributor to database size, and
+        every statistic wanted from it -- deck size, stone count for Stone
+        Joker, Hiker's accumulated bonus -- is a per-round scalar.
+        """
+        if not isinstance(deck, list):
+            return
+        stone = best = total = 0
+        for c in deck:
+            if not isinstance(c, dict):
+                continue
+            if c.get("enhancement") == "Stone":
+                stone += 1
+            stt = c.get("state")
+            if isinstance(stt, dict):
+                b = as_num(stt.get("perma_bonus")) or 0.0
+                best = max(best, b)
+                total += b
         self.db.execute(
-            """UPDATE rounds SET score_ord=?, score_num=?, score_txt=?,
-                   cashout_total=?, dollars_before=?, deck_size=?
-                 WHERE run_id=? AND round_seq=?""",
-            (sc["score_ord"], sc["score_num"], sc["score_txt"],
-             as_int(d.get("total")), as_int(d.get("dollars_before")),
-             as_int(d.get("deck_size")), run, rs))
-        items = d.get("items") or []
-        self.db.executemany(
-            "INSERT OR REPLACE INTO cashout_items VALUES (?,?,?,?,?,?,?)",
-            [(run, rs, i, it.get("name"), as_int(it.get("dollars")),
-              as_int(it.get("disp")), it.get("key"))
-             for i, it in enumerate(items) if isinstance(it, dict)])
-        st["open_round"] = None
+            "UPDATE rounds SET deck_stone=?, deck_perma_max=?, deck_perma_total=?"
+            " WHERE run_id=? AND round_seq=?", (stone, best, total, run_id, round_seq))
 
-    def on_hand_play(self, run, seg, n, ante, el, d, st):
-        sc = triple("score", d.get("score"))
-        cb = triple("chips_before", d.get("chips_before"))
-        self.db.execute(
-            """INSERT OR REPLACE INTO hands VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (run, seg, n, st["open_round"] or st["round_seq"], ante, el,
-             d.get("hand"), as_int(d.get("level")),
-             1 if d.get("oneshot") else 0,
-             sc["score_ord"], sc["score_num"], sc["score_txt"],
-             cb["chips_before_ord"], cb["chips_before_num"], cb["chips_before_txt"],
-             as_int(d.get("hands_left_before")), as_int(d.get("discards_left_before"))))
-
-    def on_hand_levelup(self, run, seg, n, ante, el, d, st):
-        self.db.execute("INSERT OR REPLACE INTO hand_levels VALUES (?,?,?,?,?,?,?,?)",
-                        (run, seg, n, el, d.get("hand"), as_int(d.get("from")),
-                         as_int(d.get("to")), as_int(d.get("amount"))))
-
-    def _scale(self, run, seg, n, ante, el, d, is_reset):
-        f, t = triple("from", d.get("from")), triple("to", d.get("to"))
-        self.db.execute(
-            "INSERT OR REPLACE INTO joker_scale VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (run, seg, n, as_int(d.get("id")), d.get("key"), d.get("field"), ante, el,
-             1 if is_reset else 0,
-             f["from_ord"], f["from_num"], f["from_txt"],
-             t["to_ord"], t["to_num"], t["to_txt"]))
-
-    def on_joker_scale(self, run, seg, n, ante, el, d, st):
-        self._scale(run, seg, n, ante, el, d, False)
-
-    def on_joker_reset(self, run, seg, n, ante, el, d, st):
-        self._scale(run, seg, n, ante, el, d, True)
-
-    def on_money_change(self, run, seg, n, ante, el, d, st):
-        self.db.execute("INSERT OR REPLACE INTO money VALUES (?,?,?,?,?,?,?)",
-                        (run, seg, n, ante, el, as_int(d.get("delta")),
-                         as_int(d.get("before"))))
-
-    def on_run_end(self, run, seg, n, ante, el, d, st):
-        st["saw_end"] = True
-        st["end_deck_size"] = as_int(d.get("deck_size"))
-        bh = triple("best_hand", d.get("best_hand"))
-        fs = triple("final_round_score", d.get("final_round_score") or d.get("score"))
-        self.db.execute(
-            """UPDATE runs SET won=?, result=?, terminal=?, ended_ante=?, ended_round=?,
-                   hands_played=?, skips=?, final_dollars=?, deck_size=?, went_endless=?,
-                   best_hand_ord=?, best_hand_num=?, best_hand_txt=?,
-                   furthest_ante=?, furthest_round=?,
-                   final_round_score_ord=?, final_round_score_num=?, final_round_score_txt=?
-                 WHERE run_id=?""",
-            (1 if d.get("won") else 0, d.get("result"),
-             1 if d.get("terminal", True) else 0,
-             as_int(d.get("ante")), as_int(d.get("round")),
-             as_int(d.get("hands_played")), as_int(d.get("skips")),
-             as_int(d.get("dollars")), as_int(d.get("deck_size")),
-             1 if (d.get("endless") or st["went_endless"]) else 0,
-             bh["best_hand_ord"], bh["best_hand_num"], bh["best_hand_txt"],
-             as_int(d.get("furthest_ante")), as_int(d.get("furthest_round")),
-             fs["final_round_score_ord"], fs["final_round_score_num"],
-             fs["final_round_score_txt"], run))
+    # -- counters the derived jokers actually read --------------------------
+    def derive_counters(self):
+        """Supernova, Throwback and Fortune Teller read GAME counters, not
+        their own ability fields, so their value cannot come from a joker
+        sample. Reconstruct the counters from the projections instead.
+        """
+        self.db.execute("DELETE FROM joker_derived")
+        # Supernova: times the played hand type has been played, so far.
+        self.db.execute("""
+            INSERT INTO joker_derived (run_id, seg, n, endless, metric, subject, value)
+            SELECT run_id, seg, n, endless, 'hand_plays', hand,
+                   COUNT(*) OVER (PARTITION BY run_id, hand ORDER BY seg, n)
+              FROM hands WHERE hand IS NOT NULL
+        """)
+        # Throwback: blinds skipped so far.
+        self.db.execute("""
+            INSERT INTO joker_derived (run_id, seg, n, endless, metric, subject, value)
+            SELECT run_id, seg, n, endless, 'skips', NULL,
+                   ROW_NUMBER() OVER (PARTITION BY run_id ORDER BY seg, n)
+              FROM blind_skips
+        """)
+        # Stone Joker: stone cards in the deck, from the per-round scalar.
+        self.db.execute("""
+            INSERT INTO joker_derived (run_id, seg, n, endless, metric, subject, value)
+            SELECT run_id, seg, round_seq, endless, 'stone_cards', NULL, deck_stone
+              FROM rounds WHERE deck_stone IS NOT NULL
+        """)
+        # Fortune Teller: tarots used so far.
+        self.db.execute("""
+            INSERT INTO joker_derived (run_id, seg, n, endless, metric, subject, value)
+            SELECT run_id, seg, n, endless, 'tarots', NULL,
+                   ROW_NUMBER() OVER (PARTITION BY run_id ORDER BY seg, n)
+              FROM consumable_uses WHERE set_ = 'Tarot'
+        """)
 
 
-def _validate_impl(self):
-    """Checks run over the stream, not over SQL -- there is no events table to
-    query, and ingest already walks every line anyway."""
-    for run, st in self.state.items():
-        issues = []
-        for seg, mx in st["max_n"].items():
-            if st["lines"][seg] != mx + 1:
-                issues.append(("sequence_gap",
-                               f"seg {seg}: {st['lines'][seg]} lines, max n={mx}"))
-        if st["encode_errors"]:
-            issues.append(("encode_error", f"{st['encode_errors']} events failed to encode"))
-        if not st["saw_end"]:
-            issues.append(("unterminated", "no run.end -- crash, or still in progress"))
-        # A run can be won without run.win: G.GAME.won is set inside end_round
-        # while win_game() only runs from a later queued event.
-        won = self.db.execute("SELECT won FROM runs WHERE run_id=?", (run,)).fetchone()
-        if won and won[0] and not st["saw_win"]:
-            issues.append(("won_without_win", "run.end.won set but no run.win event"))
-        # Deck identity, only for builds that routed consumables and
-        # enhancements correctly -- older ones inflate card.add.
-        ver = self.db.execute(
-            "SELECT ver_balatrodb FROM segments WHERE run_id=? ORDER BY seg LIMIT 1",
-            (run,)).fetchone()
-        if st["baseline_deck"] is not None and st["end_deck_size"] is not None:
-            pred = st["baseline_deck"] + st["card_add"] - st["card_remove"]
-            if pred != st["end_deck_size"]:
-                issues.append(("deck_identity",
-                               f"{st['baseline_deck']}+{st['card_add']}-{st['card_remove']}"
-                               f"={pred}, run.end says {st['end_deck_size']}"
-                               f" (build {ver[0] if ver else '?'})"))
-        for check, detail in issues:
-            self.db.execute("INSERT OR REPLACE INTO ingest_issues VALUES (?,?,?)",
-                            (run, check, detail))
+# ─── reporting ────────────────────────────────────────────────────────────
+def report(db):
+    q = lambda s, *p: db.execute(s, p).fetchall()
+    print("\n-- runs --")
+    for r in q("""SELECT substr(run_id,1,24), deck_name, stake_key, won, result,
+                         went_endless, deck_size FROM runs ORDER BY started_ts"""):
+        print("   %-26s %-16s %-12s won=%s %-11s el=%s deck=%s" % r)
 
+    print("\n-- per-joker maxima, non-endless (one consistently filtered relation) --")
+    for r in q("""
+        WITH ranked AS (
+          SELECT js.key, js.field, js.to_txt, js.to_ord, js.run_id,
+                 ROW_NUMBER() OVER (PARTITION BY js.key, js.field
+                                    ORDER BY js.to_ord DESC, CAST(js.to_txt AS REAL) DESC) rn
+            FROM joker_scale js JOIN runs r USING (run_id)
+           WHERE js.endless = 0 AND js.is_reset = 0)
+        SELECT key, field, to_txt, substr(run_id,1,20) FROM ranked
+         WHERE rn = 1 ORDER BY to_ord DESC LIMIT 8"""):
+        print("   %-20s %-13s %-10s %s" % r)
 
-Ingester.validate = _validate_impl
+    print("\n-- max money (running sum, not before+delta) --")
+    for r in q("""SELECT substr(run_id,1,24), MAX(balance) FROM money
+                  GROUP BY run_id ORDER BY 2 DESC LIMIT 4"""):
+        print("   %-26s $%s" % r)
+
+    print("\n-- biggest cash-outs, with attribution --")
+    for r in q("""SELECT ro.cashout_total, ro.ante, r.deck_name,
+                    (SELECT group_concat(name||'='||dollars,' ') FROM cashout_items ci
+                      WHERE ci.run_id=ro.run_id AND ci.round_seq=ro.round_seq)
+                  FROM rounds ro JOIN runs r USING(run_id)
+                  WHERE ro.cashout_total IS NOT NULL
+                  ORDER BY ro.cashout_total DESC LIMIT 4"""):
+        print("   $%-3s ante %-2s %-16s %s" % r)
+
+    print("\n-- capture defects across the corpus --")
+    for r in q("SELECT defect, COUNT(*) FROM run_defects GROUP BY defect ORDER BY 2 DESC"):
+        print("   %-24s %d run(s)" % r)
 
 
 def main():
@@ -353,64 +548,37 @@ def main():
     ap.add_argument("--report", action="store_true")
     a = ap.parse_args()
 
-    if a.rebuild and os.path.exists(a.db):
-        os.remove(a.db)
+    if a.rebuild:
+        for suffix in ("", "-wal", "-shm"):
+            p = a.db + suffix
+            if os.path.exists(p):
+                os.remove(p)
+
     db = sqlite3.connect(a.db)
-    db.executescript(SCHEMA)
+    db.executescript(open(os.path.join(HERE, "schema.sql"), encoding="utf-8").read())
 
     ing = Ingester(db)
-    total = 0
-    files = sorted(glob.glob(os.path.join(a.logs, "*.jsonl")))
+    total = changed = 0
+    files = sorted(glob.glob(os.path.join(a.logs, "*.jsonl")) +
+                   glob.glob(os.path.join(a.logs, "*.jsonl.gz")))
     for p in files:
-        total += ing.ingest_file(p)
-    ing.validate()
+        n, did = ing.ingest_file(p)
+        total += n
+        changed += 1 if did else 0
+    ing.derive_counters()
     db.commit()
-    print(f"ingested {total} events from {len(files)} files -> {a.db}")
 
+    stats = os.path.join(HERE, "stats.sql")
+    if os.path.exists(stats):
+        try:
+            db.executescript(open(stats, encoding="utf-8").read())
+            db.commit()
+        except sqlite3.Error as ex:
+            print(f"warning: stats.sql not installed: {ex}")
+
+    print(f"{len(files)} logs, {changed} re-derived, {total} events -> {a.db}")
     if a.report:
         report(db)
-
-
-def report(db):
-    q = lambda s, *p: db.execute(s, p).fetchall()
-    print("\n-- runs --")
-    for r in q("""SELECT deck_name, stake_key, won, result, furthest_ante,
-                         best_hand_txt, deck_size FROM runs ORDER BY started_ts"""):
-        print("  ", r)
-
-    print("\n-- per-joker maxima (non-endless) --")
-    for r in q("""SELECT key, field, to_txt, run_id FROM joker_scale js
-                   WHERE endless=0 AND is_reset=0
-                     AND to_ord = (SELECT MAX(to_ord) FROM joker_scale x
-                                    WHERE x.key=js.key AND x.field=js.field AND x.endless=0)
-                   GROUP BY key, field ORDER BY to_ord DESC"""):
-        print("  ", r)
-
-    print("\n-- best hand levels --")
-    for r in q("SELECT hand, MAX(lvl_to) FROM hand_levels GROUP BY hand ORDER BY 2 DESC LIMIT 6"):
-        print("  ", r)
-
-    print("\n-- biggest cash-outs, with attribution --")
-    for r in q("""SELECT ro.cashout_total, ro.ante, r.deck_name,
-                    (SELECT group_concat(name||'='||dollars, ' ') FROM cashout_items ci
-                      WHERE ci.run_id=ro.run_id AND ci.round_seq=ro.round_seq)
-                  FROM rounds ro JOIN runs r USING(run_id)
-                  WHERE ro.cashout_total IS NOT NULL
-                  ORDER BY ro.cashout_total DESC LIMIT 5"""):
-        print("  ", r)
-
-    print("\n-- max round score (summed from hands) --")
-    for r in q("""SELECT run_id, round_seq, SUM(score_num) s FROM hands
-                  GROUP BY run_id, round_seq ORDER BY s DESC LIMIT 5"""):
-        print("  ", r)
-
-    print("\n-- sanity: gap-free sequences --")
-    bad = q("""SELECT run_id, seg, COUNT(*), MAX(n)+1 FROM events
-               GROUP BY run_id, seg HAVING COUNT(*) <> MAX(n)+1""")
-    print("  ", "OK" if not bad else bad)
-
-    print("\n-- sanity: encode errors --")
-    print("  ", q("SELECT COUNT(*) FROM events WHERE e='encode.error'")[0][0])
 
 
 if __name__ == "__main__":

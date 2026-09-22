@@ -1,16 +1,36 @@
-"""Regenerate ingest/schema.sql from the DDL block in docs/db-schema.md.
+"""Copy ingest/schema.sql into the DDL block of docs/db-schema.md.
 
-The doc is authoritative; this keeps the executable copy from drifting.
+schema.sql is authoritative -- it is what actually runs. This keeps the
+document from drifting away from it. Run after changing the schema.
 """
-import pathlib, re
+import pathlib
+import re
+
 root = pathlib.Path(__file__).resolve().parent.parent
-doc = (root / 'docs/db-schema.md').read_text(encoding='utf-8')
-m = re.search(r'## DDL\s*\n\n```sql\n(.*?)\n```', doc, re.S)
-if not m:
+ddl = (root / "ingest/schema.sql").read_text(encoding="utf-8")
+
+# Drop the file's own header comment; the document supplies its own prose.
+ddl = re.sub(r"\A(--[^\n]*\n)+\n", "", ddl).strip()
+
+doc_path = root / "docs/db-schema.md"
+doc = doc_path.read_text(encoding="utf-8")
+new, count = re.subn(
+    r"(## DDL\s*\n\nGenerated from[^\n]*\n\n```sql\n).*?(\n```)",
+    lambda m: m.group(1) + ddl + m.group(2),
+    doc,
+    flags=re.S,
+)
+if not count:
+    new, count = re.subn(
+        r"(## DDL\s*\n\n)(?:Generated from[^\n]*\n\n)?```sql\n.*?\n```",
+        lambda m: m.group(1)
+        + "Generated from `ingest/schema.sql`, which is authoritative.\n\n"
+        + "```sql\n" + ddl + "\n```",
+        doc,
+        flags=re.S,
+    )
+if not count:
     raise SystemExit("DDL block not found in docs/db-schema.md")
-ddl = (m.group(1).replace('CREATE TABLE ', 'CREATE TABLE IF NOT EXISTS ')
-                 .replace('CREATE INDEX ', 'CREATE INDEX IF NOT EXISTS '))
-(root / 'ingest/schema.sql').write_text(
-    "-- Generated from docs/db-schema.md (the DDL block there is authoritative).\n"
-    "-- Regenerate: python ingest/sync_schema.py\n\n" + ddl + "\n", encoding='utf-8')
-print("ingest/schema.sql regenerated")
+
+doc_path.write_text(new, encoding="utf-8")
+print(f"docs/db-schema.md DDL block synced from schema.sql ({len(ddl.splitlines())} lines)")
