@@ -269,20 +269,29 @@ th.sortable .ind { display: inline-block; width: .8em; color: var(--gold); }
 .seed.copied { background: var(--green); border-color: var(--green); color: #14211f; }
 td.num { font-variant-numeric: tabular-nums; }
 .chip {
-  display: inline-block; padding: 3px 13px; border-radius: 99px;
+  display: inline-block; padding: 3px 13px 6px; border-radius: 99px;
   font-size: 14px; font-weight: 700; letter-spacing: .06em; color: #1b2223;
+  /* Same highlight-and-lip as the buttons, but as translucent bands over
+     whatever colour the variant sets -- so one rule serves all six without
+     a hand-picked darker shade for each. The drop shadow is a filter so it
+     follows the stepped silhouette rather than the box. */
+  background-image: linear-gradient(to bottom,
+    rgba(255, 255, 255, .18) 0 1px,
+    transparent 1px calc(100% - 3px),
+    rgba(0, 0, 0, .34) calc(100% - 3px) 100%);
+  filter: drop-shadow(0 2px 0 rgba(0, 0, 0, .45));
   /* text-shadow inherits, and the run dialog's chips sit inside its <h2>,
      which carries the outlined lettering. A dark outline around dark text
      on a gold chip filled the letters in solid. */
   text-shadow: none;
   border-radius: 0;
 }
-.chip.win { background: var(--gold); }
-.chip.died { background: var(--blind); color: #fff; }
-.chip.endless { background: var(--purple); color: #fff; }
-.chip.susp { background: #566264; color: var(--ink-dim); }
-.chip.live { background: var(--green); }
-.chip.other { background: #4a585c; color: var(--ink-dim); }
+.chip.win { background-color: var(--gold); }
+.chip.died { background-color: var(--blind); color: #fff; }
+.chip.endless { background-color: var(--purple); color: #fff; }
+.chip.susp { background-color: #566264; color: var(--ink-dim); }
+.chip.live { background-color: var(--green); }
+.chip.other { background-color: #4a585c; color: var(--ink-dim); }
 .muted { color: var(--ink-mute); }
 /* Sprites are cells of the game's own atlases, positioned with
    background-position. Scaled by background-size so one rule covers any
