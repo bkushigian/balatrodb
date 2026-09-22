@@ -88,10 +88,12 @@ plain text if it is absent.
 
 ```
 pip install lupa
-python tests/test_util.py
+python tests/test_util.py    # serialization, numbers, hook wrapper
+python tests/test_log.py     # what reaches disk, and what is deliberately dropped
+python tests/test_web.py     # the dashboard's inline JS parses (needs node)
 ```
 
-65 checks over the parts that are pure logic and easy to get subtly wrong:
+Checks over the parts that are pure logic and easy to get subtly wrong:
 number coercion at the 1e14 / inf / nan / Talisman boundaries, card
 serialization, and the hook wrapper's contract — return values and arity
 preserved, `false` returns reaching the caller intact, observer errors

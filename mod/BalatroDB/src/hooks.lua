@@ -158,6 +158,14 @@ local NON_TERMINAL = { suspended = true }
 
 end_run = function(result)
     if not state.active then pending_reason = nil; return end
+    if not log.committed() then
+        -- Abandoned before the first blind: a reroll, or backing out of the
+        -- deck select. Nothing was written and nothing should be.
+        state.finish()
+        pending_reason = nil
+        log.discard()
+        return
+    end
     local game = G.GAME or {}
     local scores = game.round_scores or {}
 
@@ -578,6 +586,9 @@ end)
 -- button_callbacks.lua:2563. Kept as the record of the player's DECISION
 -- (round.start is the consequence), and as the point the endless latch flips.
 util.hook(G.FUNCS, 'select_blind', function(args)
+    -- Choosing a blind is the point a run becomes a run. Until now nothing has
+    -- touched the disk, so a seed-search reroll leaves no file behind.
+    log.commit()
     local proto = args[1] and args[1].config and args[1].config.ref_table
     local flipped = state.note_blind_selected()
     emit('blind.select', {

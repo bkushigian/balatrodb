@@ -201,16 +201,14 @@ tr.detail > td { padding: 0; border-top: 0; }
 
   <section class="cols">
     <div class="panel">
-      <h2>Scaling jokers</h2>
-      <p class="muted" style="font-size:12px;margin:4px 0 10px">Highest value ever reached, from <code>joker.scale</code>.</p>
+      <h2 title="Highest value ever reached, from joker.scale events.">Scaling jokers</h2>
       <div class="scroll"><table id="jokers"><thead><tr>
         <th>Joker</th><th>Field</th><th class="num">Peak</th><th>Deck</th><th>Stake</th>
       </tr></thead><tbody></tbody></table></div>
     </div>
 
     <div class="panel">
-      <h2>Counter jokers</h2>
-      <p class="muted" style="font-size:12px;margin:4px 0 10px">These read game counters, not their own ability — reconstructed from run history.</p>
+      <h2 title="These jokers read game counters rather than their own ability, so their value is reconstructed from run history.">Counter jokers</h2>
       <div class="scroll"><table id="derived"><thead><tr>
         <th>Joker</th><th class="num">Peak</th><th>Deck</th><th>Stake</th>
       </tr></thead><tbody></tbody></table></div>
@@ -226,8 +224,7 @@ tr.detail > td { padding: 0; border-top: 0; }
     </div>
 
     <div class="panel">
-      <h2>How far runs get</h2>
-      <p class="muted" style="font-size:12px;margin:4px 0 10px">Runs by furthest ante reached.</p>
+      <h2 title="Runs by furthest ante reached.">How far runs get</h2>
       <div class="bars" id="antes"></div>
     </div>
   </section>
@@ -345,7 +342,7 @@ async function refresh() {
      <div class="n">${n}</div></div>`).join("");
 
   $("#jokers tbody").innerHTML = jok.length ? jok.map(j => `
-    <tr class="clickable" onclick="openRun('${esc(j.run_id}')">
+    <tr class="clickable" onclick="openRun('${esc(j.run_id)}')">
       <td><span class="namecell">${sprite(j.key, "j", 30)}
           <span>${esc(shortKey(j.key))}</span></span></td>
       <td class="muted">${esc(j.field)}</td>
@@ -354,7 +351,7 @@ async function refresh() {
     : `<tr><td colspan="5" class="empty">No scaling jokers recorded yet.</td></tr>`;
 
   $("#derived tbody").innerHTML = der.length ? der.map(d => `
-    <tr class="clickable" onclick="openRun('${esc(d.run_id}')">
+    <tr class="clickable" onclick="openRun('${esc(d.run_id)}')">
       <td><span class="namecell">${sprite(d.joker_key, "j", 30)}
           <span>${esc(d.joker)}<br><span class="sub2">${esc(d.what)}</span></span></span></td>
       <td class="num" style="color:var(--green);font-weight:700">${fmt(d.value)}</td>
@@ -363,7 +360,7 @@ async function refresh() {
 
   const lvl = Object.fromEntries(hands.levels.map(l => [l.hand, l.level]));
   $("#hands tbody").innerHTML = hands.best.length ? hands.best.map(h => `
-    <tr class="clickable" onclick="openRun('${esc(h.run_id}')">
+    <tr class="clickable" onclick="openRun('${esc(h.run_id)}')">
       <td>${esc(h.hand)}</td>
       <td class="num" style="color:var(--chips);font-weight:700">${fmt(h.value)}</td>
       <td class="num muted">${h.level ?? "—"}</td>
@@ -379,7 +376,7 @@ async function refresh() {
     : `<div class="empty">No completed runs yet.</div>`;
 
   $("#runs tbody").innerHTML = runs.length ? runs.map(r => `
-    <tr class="clickable" onclick="openRun('${esc(r.run_id}')">
+    <tr class="clickable" onclick="openRun('${esc(r.run_id)}')">
       <td class="muted">${ago(r.started_ts)}</td>
       <td>${deckCell(r)}</td>
       <td>${stakeCell(r)}</td>
