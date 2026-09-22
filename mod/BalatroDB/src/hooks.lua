@@ -208,7 +208,12 @@ end_run = function(result)
         -- beating the win ante; a run that then continued into endless and
         -- died is still a won run. Win rate is COUNT(won) over terminal runs,
         -- never a test against `result`.
-        won     = game.won and true or false,
+        --
+        -- state.won, NOT G.GAME.won: the game sets its flag from "ante ==
+        -- win_ante and the blind is a Boss" before it checks whether you
+        -- survived (state_events.lua:111), so dying to the final boss sets it
+        -- too. See state.mark_won.
+        won     = state.won,
     })
     state.finish()
     pending_reason = nil

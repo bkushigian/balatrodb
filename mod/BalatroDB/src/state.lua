@@ -14,6 +14,7 @@ local state = {
     started_at = nil,   -- love.timer clock at segment start, for relative t
     active = false,
     endless = false,
+    won = false,          -- win_game() actually ran; see mark_won
     won_pending = false,
 }
 
@@ -37,7 +38,18 @@ end
 --------------------------------------------------------------------------
 
 --- Called when win_game fires. Arms the latch without flipping it.
+---
+--- This is also the ONLY trustworthy record that the run was won.
+--- G.GAME.won cannot be used: state_events.lua:111 sets it from
+---
+---     ante == win_ante and blind:get_type() == 'Boss'
+---
+--- which is evaluated BEFORE the game_over branch three lines below, so it
+--- is equally true when the win-ante boss kills you. win_game() itself only
+--- runs from ROUND_EVAL (state_events.lua:163), which a death never reaches,
+--- so reaching here means the run really was won.
 function state.mark_won()
+    state.won = true
     state.won_pending = true
     state.persist()
 end
@@ -67,6 +79,7 @@ function state.persist()
     G.GAME.bdb_run_id = state.run_id
     G.GAME.bdb_seg = state.seg
     G.GAME.bdb_endless = state.endless
+    G.GAME.bdb_won = state.won
     G.GAME.bdb_won_pending = state.won_pending
 end
 
@@ -83,6 +96,10 @@ function state.restore()
     -- if the clock steps back.
     state.seg = math.max((tonumber(game.bdb_seg) or 0) + 1, os.time())
     state.endless = game.bdb_endless and true or false
+    -- A run won in an earlier session is still won. Falling back to
+    -- bdb_endless covers a save written before bdb_won existed: the latch
+    -- only flips after a win, so endless implies one.
+    state.won = (game.bdb_won or game.bdb_endless) and true or false
     state.won_pending = game.bdb_won_pending and true or false
     return true
 end
@@ -90,6 +107,7 @@ end
 function state.begin(run_id, seg)
     state.run_id = run_id
     state.seg = seg or 0
+    state.won, state.won_pending, state.endless = false, false, false
     state.started_at = love.timer.getTime()
     state.active = true
     state.persist()

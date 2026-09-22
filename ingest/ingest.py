@@ -116,7 +116,8 @@ DEFECTS = {
     "no_run_end":           "file ends with no run.end (crash, or still live)",
     "deck_identity_fail":   "baseline + adds - removes != final deck size",
     "sequence_gap":         "event sequence is not gap-free within a segment",
-    "won_without_win":      "run.end.won set but no run.win event",
+    "won_without_win":      "run.end.won set but no run.win event -- a death "
+                            "on the win-ante boss; `won` is taken from the event",
 }
 
 LEGACY_RESULTS = {"quit", "loss", "win"}
@@ -468,6 +469,13 @@ class Ingester:
             defects.add("no_best_hand")
         if "endless" not in end:
             defects.add("no_endless_flag")
+        # run.end carried G.GAME.won in builds up to 0.4.0, which the game
+        # sets from "ante == win_ante and the blind is a Boss" BEFORE it
+        # checks whether you survived (state_events.lua:111). Dying to the
+        # final boss therefore reported a win. A run.win event means
+        # win_game() actually ran, which only happens from ROUND_EVAL, so
+        # that -- not the flag -- decides.
+        won = 1 if saw_win else 0
         if end.get("won") and not saw_win:
             defects.add("won_without_win")
 
@@ -484,7 +492,7 @@ class Ingester:
             "best_hand_ord=?,best_hand_num=?,best_hand_txt=?,furthest_ante=?,"
             "furthest_round=?,final_round_score_ord=?,final_round_score_num=?,"
             "final_round_score_txt=? WHERE run_id=?",
-            (1 if end.get("won") else 0, end.get("result"), 1 if terminal else 0,
+            (won, end.get("result"), 1 if terminal else 0,
              as_int(end.get("ante")), as_int(end.get("round")),
              as_int(end.get("hands_played")), as_int(end.get("skips")),
              as_int(end.get("dollars")), as_int(end.get("deck_size")), went_endless,

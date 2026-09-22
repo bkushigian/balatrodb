@@ -84,6 +84,30 @@ def parse_names(z: zipfile.ZipFile) -> dict[str, str]:
     return out
 
 
+def parse_hand_order(z: zipfile.ZipFile) -> list:
+    """Poker hands, strongest first.
+
+    evaluate_poker_hand (functions/misc_functions.lua) opens with a results
+    table listing every hand in descending strength, which is the game's own
+    ranking -- better than hardcoding an order here and letting it drift from
+    Balatro's, which has Five of a Kind and the flush hands above a Straight
+    Flush.
+    """
+    try:
+        src = z.read("functions/misc_functions.lua").decode("utf-8", "replace")
+    except KeyError:
+        return []
+    i = src.find("function evaluate_poker_hand")
+    if i < 0:
+        return []
+    block = src[i:i + 2000]
+    j = block.find("local results")
+    if j < 0:
+        return []
+    block = block[j:block.find("}", block.find("High Card")) + 1]
+    return re.findall(r'\[\"([^\"]+)\"\]\s*=\s*\{', block.replace("'", '"'))
+
+
 def atlas_for(key: str) -> tuple[str, int, int] | None:
     if key in ATLAS_OVERRIDES:
         return ATLAS_OVERRIDES[key]
@@ -116,6 +140,7 @@ def main() -> int:
     src = z.read("game.lua").decode("utf-8", "replace")
     centers = parse_centers(src)
     names = parse_names(z)
+    hand_order = parse_hand_order(z)
     sprites = {}
 
     # Playing cards are keyed by suit and rank rather than a centre key, so the
@@ -137,6 +162,8 @@ def main() -> int:
 
     doc = {
         "names": names,
+        # Strongest first, so a rank is len - index.
+        "hand_order": hand_order,
         "atlases": {n: {"w": w, "h": h,
                         "cw": next(c for a, c, _ in ATLASES.values() if a == n),
                         "ch": next(h2 for a, _, h2 in ATLASES.values() if a == n)}

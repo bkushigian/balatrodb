@@ -109,5 +109,30 @@ stream = [
 c = classify_money(stream)
 check("late money is not the discard's", c[(0, 105)] == ("consumable.use", None), c)
 
+# ── the win flag ─────────────────────────────────────────────────────────
+# Kept here rather than in its own file because it is the same shape of bug:
+# a game field that looks authoritative and is not.
+print("\na death on the win-ante boss is not a win")
+# Balatro sets G.GAME.won at state_events.lua:111 from "ante == win_ante and
+# the blind is a Boss", three lines BEFORE it checks game_over -- so dying to
+# the final boss sets it too. Two real runs in the corpus were marked won.
+import re                                            # noqa: E402
+ing = (pathlib.Path(__file__).resolve().parent.parent
+       / "ingest/ingest.py").read_text(encoding="utf-8")
+check("ingest takes `won` from run.win, not run.end.won",
+      re.search(r"won\s*=\s*1\s+if\s+saw_win\s+else\s+0", ing) is not None)
+check("the UPDATE writes that derived value, not end.get('won')",
+      "(won, end.get(\"result\")" in ing, "still writing end.get('won')")
+
+st = (pathlib.Path(__file__).resolve().parent.parent
+      / "mod/BalatroDB/src/state.lua").read_text(encoding="utf-8")
+hk = (pathlib.Path(__file__).resolve().parent.parent
+      / "mod/BalatroDB/src/hooks.lua").read_text(encoding="utf-8")
+check("the mod latches its own win flag in mark_won", "state.won = true" in st)
+check("run.end reports that flag, not G.GAME.won",
+      "won     = state.won," in hk and "won     = game.won" not in hk)
+check("a new run clears it",
+      "state.won, state.won_pending, state.endless = false, false, false" in st)
+
 print("\nFAILURES:", fails)
 sys.exit(1 if fails else 0)

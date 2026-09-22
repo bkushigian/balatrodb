@@ -92,7 +92,26 @@ function order(id, i, dir) {
   }).map(r => r.key);
 }
 
+// Hand strength must not be alphabetical. Feed the real ranking in, since
+// the stubbed fetch leaves SPR null.
+SPR = { names: {}, hand_order: ["Flush Five", "Flush House", "Five of a Kind",
+  "Straight Flush", "Four of a Kind", "Full House", "Flush", "Straight",
+  "Three of a Kind", "Two Pair", "Pair", "High Card"] };
+const HANDS = [
+  { hand: "High Card" }, { hand: "Flush Five" }, { hand: "Pair" },
+  { hand: "Straight Flush" }, { hand: "Mystery Hand" },
+];
+const handCol = TBL.hands.cols[0];
+const handsSorted = HANDS.slice().sort((a, b) => {
+  const x = handCol.sort(a), y = handCol.sort(b);
+  if (x === null && y === null) return 0;
+  if (x === null) return 1;
+  if (y === null) return -1;
+  return (y - x);
+}).map(r => r.hand);
+
 console.log(JSON.stringify({
+  handsSorted,
   panels:    Object.keys(TBL),
   peak_desc: order("jokers", 1, -1),
   peak_asc:  order("jokers", 1,  1),
@@ -154,6 +173,13 @@ check("jokers has no Field column", res["jokerCols"] == ["Joker", "Peak", "Deck"
 check("best-hand has no Max column",
       res["handCols"] == ["Hand", "Score", "Lvl", "Deck", "Stake"], res["handCols"])
 check("runs ends with Seed", res["runCols"][-1] == "Seed", res["runCols"])
+
+print("\nhands sort by strength, not alphabetically")
+check("strongest first",
+      res["handsSorted"][:4] == ["Flush Five", "Straight Flush", "Pair", "High Card"],
+      res["handsSorted"])
+check("an unknown hand sorts last", res["handsSorted"][-1] == "Mystery Hand",
+      res["handsSorted"])
 
 print("\nevery panel opens on a sensible column")
 check("all panels have a default sort",

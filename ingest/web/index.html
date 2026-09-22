@@ -83,6 +83,9 @@ button.seg[aria-pressed="true"] { background: var(--mult); color: #2a1210; font-
 /* ── tables ───────────────────────────────────────────────────────────── */
 .cols { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
          align-items: start; }
+/* A column of panels inside one `cols` cell, so the tall Jokers board can
+   sit beside two shorter tables rather than leaving a gap under a short one. */
+.stack { display: grid; gap: 16px; align-content: start; }
 .scroll { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th {
@@ -260,21 +263,16 @@ tr.detail > td { padding: 0; border-top: 0; }
       <div class="scroll"><table id="jokers"></table></div>
     </div>
 
-    <div class="panel">
-      <h2 title="Runs by furthest ante reached.">How far runs get</h2>
-      <div class="bars" id="antes"></div>
-    </div>
-  </section>
+    <div class="stack">
+      <div class="panel">
+        <h2>Best hand by type</h2>
+        <div class="scroll"><table id="hands"></table></div>
+      </div>
 
-  <section class="cols">
-    <div class="panel">
-      <h2>Best hand by type</h2>
-      <div class="scroll"><table id="hands"></table></div>
-    </div>
-
-    <div class="panel">
-      <h2>Highest hand levels</h2>
-      <div class="scroll"><table id="handlevels"></table></div>
+      <div class="panel">
+        <h2>Highest hand levels</h2>
+        <div class="scroll"><table id="handlevels"></table></div>
+      </div>
     </div>
   </section>
 
@@ -348,6 +346,15 @@ function sprite(key, kind, px) {
 // The game's own display names, from localization/en-us.lua. Without them a
 // key has to be un-snake-cased, which gives "ride the bus" and "mail in
 // rebate" -- and mixed casing against the panels that do have real names.
+// Poker hands sort by strength, not alphabetically -- "Flush Five" belongs
+// above "High Card", not next to it. The ranking is the game's own, from
+// evaluate_poker_hand; anything unrecognised sorts last.
+const handRank = hand => {
+  const o = (SPR && SPR.hand_order) || [];
+  const i = o.indexOf(hand);
+  return i < 0 ? null : o.length - i;
+};
+
 const nameOf = (key, fallback) =>
   (SPR && SPR.names && SPR.names[key]) || fallback ||
   (key || "").replace(/^(j|b|m|c)_/, "").replace(/_/g, " ");
@@ -475,21 +482,26 @@ function resultChip(r) {
   // No run.end yet: either still being played, or the game crashed. The log
   // grows as you play, so this row updates live.
   if (!r.result) return `<span class="chip live">IN PROGRESS</span>`;
-  if (r.won) return `<span class="chip win">WON</span>`;
-  // "loss" is the older spelling of "died"; both appear in the corpus. The
-  // rest are ways a run stopped without being finished, and each gets a chip
-  // rather than leaking the raw field into the table.
+
+  // Winning and ending are different facts. Beating the win ante is a win
+  // even if the run later died in endless, so both are shown rather than the
+  // win hiding the ending -- which read as "you won" on a run that lost.
+  // "loss" is the older spelling of "died"; both appear in the corpus.
   const CHIP = {
     died:      ["died", "DIED"],
     loss:      ["died", "DIED"],
     suspended: ["susp", "PAUSED"],
     quit:      ["susp", "QUIT"],
     new_run:   ["other", "RESTARTED"],
-    completed: ["other", "ENDED"],
+    completed: null,                 // finished after winning: the WON says it
     unknown:   ["other", "UNKNOWN"],
   }[r.result];
-  return CHIP ? `<span class="chip ${CHIP[0]}">${CHIP[1]}</span>`
-              : `<span class="muted">${esc(r.result)}</span>`;
+
+  const out = [];
+  if (r.won) out.push(`<span class="chip win">WON</span>`);
+  if (CHIP) out.push(`<span class="chip ${CHIP[0]}">${CHIP[1]}</span>`);
+  else if (!r.won) out.push(`<span class="muted">${esc(r.result)}</span>`);
+  return out.join(" ");
 }
 
 // ── panel definitions ────────────────────────────────────────────────────
@@ -507,7 +519,8 @@ defineTable("jokers", [
 ], { empty: "No jokers recorded yet.", onclick: openRunJS, sort: 1 });
 
 defineTable("hands", [
-  { label: "Hand", cell: r => esc(r.hand), sort: r => r.hand },
+  { label: "Hand", title: "Sorts by poker-hand strength.",
+    cell: r => esc(r.hand), sort: r => handRank(r.hand) },
   { label: "Score", num: true, style: "color:var(--chips);font-weight:700",
     cell: r => fmt(r.value), sort: r => r.ord },
   { label: "Lvl", num: true, cls: "muted",
@@ -518,7 +531,8 @@ defineTable("hands", [
 ], { empty: "No hands recorded yet.", onclick: openRunJS, sort: 1 });
 
 defineTable("handlevels", [
-  { label: "Hand", cell: r => esc(r.hand), sort: r => r.hand },
+  { label: "Hand", title: "Sorts by poker-hand strength.",
+    cell: r => esc(r.hand), sort: r => handRank(r.hand) },
   { label: "Level", num: true, style: "color:var(--green);font-weight:700",
     title: "The highest that hand has ever been levelled, and the run that did it.",
     cell: r => fmt(r.level), sort: r => r.level },
@@ -549,9 +563,9 @@ defineTable("runs", [
 ], { empty: "No runs match these filters.", onclick: openRunJS, sort: 0 });
 
 async function refresh() {
-  const [s, jok, hands, levels, antes, runs] = await Promise.all([
+  const [s, jok, hands, levels, runs] = await Promise.all([
     get("/api/summary"), get("/api/jokers"), get("/api/hands"),
-    get("/api/hand_levels"), get("/api/antes"), get("/api/runs"),
+    get("/api/hand_levels"), get("/api/runs"),
   ]);
 
   $("#sub").textContent =
@@ -573,12 +587,6 @@ async function refresh() {
   setRows("handlevels", levels);
   setRows("runs", runs);
 
-  const max = Math.max(1, ...antes.map(a => a.n));
-  $("#antes").innerHTML = antes.length ? antes.map(a => `
-    <div class="bar"><span class="lab">Ante ${a.ante}</span>
-      <span class="track"><span class="fill" style="width:${(a.n / max * 100).toFixed(1)}%"></span></span>
-      <span class="cnt">${a.n}</span></div>`).join("")
-    : `<div class="empty">No completed runs yet.</div>`;
 }
 
 async function openRun(id) {
