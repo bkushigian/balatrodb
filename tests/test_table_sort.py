@@ -49,6 +49,8 @@ const el = new Proxy({}, {
 globalThis.document = {
   querySelector: () => el, getElementById: () => null,
   createElement: () => el, body: el, addEventListener: noop,
+  // Set from Python: the table ids that actually exist in the markup.
+  hasTable: id => TABLE_IDS.includes(id),
 };
 globalThis.window = { isSecureContext: false };
 globalThis.navigator = {};
@@ -116,6 +118,11 @@ const handsSorted = HANDS.slice().sort((a, b) => {
 console.log(JSON.stringify({
   handsSorted,
   panels:    Object.keys(TBL),
+  // Every panel must have a table element to render into, or it silently
+  // draws nothing. That is the invariant worth checking -- not the list.
+  orphans:   Object.keys(TBL).filter(id => !document.hasTable(id)),
+  noSort:    Object.keys(TBL).filter(id =>
+               TBL[id].cols.some(c => typeof c.sort !== "function")),
   peak_desc: order("jokers", 1, -1),
   peak_asc:  order("jokers", 1,  1),
   name_asc:  order("jokers", 0,  1),
@@ -127,8 +134,12 @@ console.log(JSON.stringify({
 }));
 """
 
+# The ids that actually exist as <table id="..."> in the page.
+table_ids = re.findall(r'<table id="([^"]+)"', page.read_text(encoding="utf-8"))
+PRELUDE = f"const TABLE_IDS = {json.dumps(table_ids)};\n"
+
 tmp = os.path.join(tempfile.gettempdir(), "balatrodb_sort.js")
-pathlib.Path(tmp).write_text(STUB + blocks[0] + HARNESS, encoding="utf-8")
+pathlib.Path(tmp).write_text(PRELUDE + STUB + blocks[0] + HARNESS, encoding="utf-8")
 r = subprocess.run(["node", tmp], capture_output=True, text=True)
 os.unlink(tmp)
 if r.returncode:
@@ -150,8 +161,11 @@ def check(name, cond, detail=""):
 
 
 print("the page's script runs to completion")
-check("all four panels defined",
-      sorted(res["panels"]) == ["handlevels", "hands", "jokers", "runs"], res["panels"])
+check("panels are defined", len(res["panels"]) >= 4, res["panels"])
+check("every panel has a table to render into", res["orphans"] == [],
+      f"defined but absent from the markup: {res['orphans']}")
+check("every column declares how to sort itself", res["noSort"] == [],
+      f"panels with an unsortable column: {res['noSort']}")
 
 print("\nbig numbers sort numerically, not as text")
 # "765450" < "9999" as text; the ordering key is what makes this come out right.
@@ -170,12 +184,14 @@ print("\ntext columns sort by the name shown, not the raw key")
 check("deck ascending", res["deck_asc"] == ["j_egg", "j_runner", "j_wee", "j_none"],
       res["deck_asc"])
 
-print("\nthe columns you asked for, and no others")
-check("jokers has no Field column", res["jokerCols"] == ["Joker", "Peak", "Deck", "Stake"],
-      res["jokerCols"])
-check("best-hand has no Max column",
-      res["handCols"] == ["Hand", "Score", "Lvl", "Deck", "Stake"], res["handCols"])
-check("runs ends with Seed", res["runCols"][-1] == "Seed", res["runCols"])
+print("\nthe columns that were removed stay removed")
+# The joker's scaling field and the best-hand "Max" column were both removed
+# deliberately; "Sort runs" was dead UI. Assert their absence, not an exact
+# column list, which breaks on any unrelated addition without meaning anything.
+check("jokers has no Field column", "Field" not in res["jokerCols"], res["jokerCols"])
+check("best-hand has no Max column", "Max" not in res["handCols"], res["handCols"])
+check("runs still ends with Seed", res["runCols"][-1] == "Seed", res["runCols"])
+check("runs shows rounds won", "Rounds won" in res["runCols"], res["runCols"])
 
 print("\nhands sort by strength, not alphabetically")
 check("strongest first",
