@@ -61,7 +61,6 @@ select, button.seg {
 }
 select:focus-visible, button:focus-visible { outline: 2px solid var(--filter); outline-offset: 2px; }
 .seggroup { display: inline-flex; gap: 4px; }
-.hint { color: var(--ink-mute); font-size: 11px; margin-right: 10px; min-width: 96px; }
 button.seg[aria-pressed="true"] { background: var(--mult); color: #2a1210; font-weight: 700; }
 
 /* ── stat tiles: hero numbers, no chart ───────────────────────────────── */
@@ -158,7 +157,6 @@ button.x { background: var(--sunken); color: var(--ink-dim); border: 0;
         <button class="seg" data-v="1" aria-pressed="true"
           title="Only what happened after continuing past the win ante">Endless</button>
       </span></span>
-    <span class="hint" id="phasehint"></span>
     <span><label for="sort">Sort runs</label><select id="sort">
       <option value="recent">Most recent</option>
       <option value="score">Best hand</option>
@@ -229,10 +227,6 @@ function syncPhase() {
   const on = Object.keys(phase).filter(k => phase[k]);
   // exactly one selected -> filter to it; otherwise include everything
   state.endless = on.length === 1 ? on[0] : "";
-  $("#phasehint").textContent =
-    on.length === 1
-      ? (on[0] === "0" ? "excluding endless play" : "endless play only")
-      : "all play";
 }
 
 // Big numbers arrive as exact decimal text and can exceed Number range, so
