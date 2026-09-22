@@ -61,6 +61,7 @@ select, button.seg {
 }
 select:focus-visible, button:focus-visible { outline: 2px solid var(--filter); outline-offset: 2px; }
 .seggroup { display: inline-flex; gap: 4px; }
+.hint { color: var(--ink-mute); font-size: 11px; margin-right: 10px; min-width: 96px; }
 button.seg[aria-pressed="true"] { background: var(--mult); color: #2a1210; font-weight: 700; }
 
 /* ── stat tiles: hero numbers, no chart ───────────────────────────────── */
@@ -150,12 +151,14 @@ button.x { background: var(--sunken); color: var(--ink-dim); border: 0;
   <section class="panel filters" aria-label="Filters">
     <span><label for="deck">Deck</label><select id="deck"><option value="">All</option></select></span>
     <span><label for="stake">Stake</label><select id="stake"><option value="">All</option></select></span>
-    <span><label>Phase</label>
-      <span class="seggroup" id="phase" role="group" aria-label="Endless phase">
-        <button class="seg" data-v="" aria-pressed="true">All</button>
-        <button class="seg" data-v="0" aria-pressed="false">Normal</button>
-        <button class="seg" data-v="1" aria-pressed="false">Endless</button>
+    <span><label>Include</label>
+      <span class="seggroup" id="phase" role="group" aria-label="Which phases to include">
+        <button class="seg" data-v="0" aria-pressed="true"
+          title="Everything up to the point a run continued past the win ante">Non-endless</button>
+        <button class="seg" data-v="1" aria-pressed="true"
+          title="Only what happened after continuing past the win ante">Endless</button>
       </span></span>
+    <span class="hint" id="phasehint"></span>
     <span><label for="sort">Sort runs</label><select id="sort">
       <option value="recent">Most recent</option>
       <option value="score">Best hand</option>
@@ -216,7 +219,21 @@ button.x { background: var(--sunken); color: var(--ink-dim); border: 0;
 
 <script>
 const $ = s => document.querySelector(s);
+// Two independent toggles rather than three exclusive options. Both on (or
+// both off) means no phase filter at all -- which is what "all runs" should
+// mean, and is not expressible with mutually exclusive buttons.
+const phase = { "0": true, "1": true };
 const state = { deck: "", stake: "", endless: "", sort: "recent" };
+
+function syncPhase() {
+  const on = Object.keys(phase).filter(k => phase[k]);
+  // exactly one selected -> filter to it; otherwise include everything
+  state.endless = on.length === 1 ? on[0] : "";
+  $("#phasehint").textContent =
+    on.length === 1
+      ? (on[0] === "0" ? "excluding endless play" : "endless play only")
+      : "all play";
+}
 
 // Big numbers arrive as exact decimal text and can exceed Number range, so
 // format from the string rather than parseFloat where possible.
@@ -389,9 +406,11 @@ $("#stake").onchange = e => { state.stake = e.target.value; refresh(); };
 $("#sort").onchange = e => { state.sort = e.target.value; refresh(); };
 $("#phase").onclick = e => {
   const b = e.target.closest("button.seg"); if (!b) return;
-  [...$("#phase").children].forEach(x => x.setAttribute("aria-pressed", x === b));
-  state.endless = b.dataset.v; refresh();
+  phase[b.dataset.v] = !phase[b.dataset.v];
+  b.setAttribute("aria-pressed", phase[b.dataset.v]);
+  syncPhase(); refresh();
 };
+syncPhase();
 refresh();
 </script>
 </body>

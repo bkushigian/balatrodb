@@ -39,9 +39,14 @@ def rows(db, sql, params=()):
 
 
 # ─── filters ──────────────────────────────────────────────────────────────
-# Every query slices the same way: deck, stake, and endless phase. `endless`
-# is per-event rather than per-run, because a run that continues past the win
-# ante legitimately contributes to both leaderboards.
+# Every query slices the same way: deck, stake, and endless phase.
+#
+# `endless` is absent when both phases are wanted -- the page sends it only
+# when exactly one toggle is on. For leaderboards the flag is per EVENT, so
+# "non-endless" still includes the pre-win portion of a run that later went
+# endless, which is the whole reason the flag is stamped per event. For the run
+# LIST it is necessarily per run (did this run ever go endless), which is a
+# different question with the same name.
 
 def where(q, prefix="r.", endless_col=None):
     clauses, params = [], []
