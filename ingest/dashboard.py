@@ -137,6 +137,12 @@ def where(q, prefix="r.", endless_col=None):
         params.append(int(q["endless"]))
     if q.get("seeded") == "0":
         clauses.append(f"{prefix}seeded = 0")
+    # Plasma balances chips and mult before scoring, so its numbers are not
+    # comparable with any other deck's -- one Plasma run owns most of the
+    # score records. Excluding it is a different question from picking a
+    # deck, so it is its own filter.
+    if q.get("noplasma") == "1":
+        clauses.append(f"{prefix}deck_key IS NOT 'b_plasma'")
     return (" AND " + " AND ".join(clauses) if clauses else ""), params
 
 
@@ -233,14 +239,15 @@ def api_runs(db, q):
     # The phase filter applies twice, differently: to which runs are listed
     # (a run-level flag) and to the per-run figures derived from events. The
     # subquery params bind BEFORE the outer ones, since they appear first.
-    hw = mw = ""
+    hw = mw = rw = ""
     sub, tail = [], []
     if q.get("endless") in ("0", "1"):
         el = int(q["endless"])
         w += " AND r.went_endless = ?"
         p = p + [el]
         hw, mw = " AND h.endless = ?", " AND m.endless = ?"
-        sub = [el, el, el]           # bh_ord, best_hand, peak_money
+        rw = " AND ro.endless = ?"
+        sub = [el, el, el, el]       # bh_ord, best_hand, peak_money, rounds_won
         # Sorting by score has to see the same slice as the column it sorts.
         # Its placeholder is in the ORDER BY, so it binds last of all.
         if q.get("sort") == "score":
@@ -262,6 +269,11 @@ def api_runs(db, q):
                  ORDER BY score_ord DESC LIMIT 1) best_hand,
                (SELECT MAX(balance) FROM money m
                  WHERE m.run_id = r.run_id{mw}) peak_money,
+               -- A round only gets a cash-out when its blind was beaten, so
+               -- this counts blinds cleared rather than blinds faced.
+               (SELECT COUNT(*) FROM rounds ro
+                 WHERE ro.run_id = r.run_id AND ro.cashout_total IS NOT NULL{rw})
+                 rounds_won,
                (SELECT COUNT(*) FROM run_defects d WHERE d.run_id = r.run_id) defects
           FROM runs r WHERE 1=1{w} ORDER BY {sort} LIMIT 300""", sub + p + tail)
 
@@ -284,7 +296,7 @@ def api_all_jokers(db, q):
                     "stake_key": j["stake_key"]})
     for d in api_derived(db, q):
         out.append({"key": d["joker_key"], "value": d["value"],
-                    "ord": ord_of(d["value"]), "what": d["what"],
+                    "ord": ord_of(d["value"]), "what": None,
                     "run_id": d["run_id"], "deck_name": d["deck_name"],
                     "deck_key": d["deck_key"], "stake_key": d["stake_key"]})
     out.sort(key=lambda r: -(r["ord"] or 0))
@@ -315,7 +327,12 @@ def api_jokers(db, q):
                  r.run_id, r.deck_name, r.deck_key, r.stake_key
             FROM joker_scale js JOIN runs r USING (run_id)
            WHERE js.is_reset = 0 AND js.to_ord IS NOT NULL
-             AND js.key NOT IN ('j_turtle_bean'){w}),
+             -- Decaying jokers scale DOWNWARD, so MAX() over their
+             -- observations is the highest value seen after decay began, not
+             -- a peak. Ranking them beside Wee Joker's earned 2,080 is
+             -- meaningless, so they are left off the board entirely.
+             AND js.key NOT IN ('j_turtle_bean', 'j_popcorn',
+                                'j_ice_cream', 'j_ramen'){w}),
         ranked AS (
           SELECT *, ROW_NUMBER() OVER (
                       PARTITION BY key, field
@@ -401,6 +418,28 @@ def api_hand_levels(db, q):
            WHERE hl.hand IS NOT NULL AND hl.lvl_to IS NOT NULL{w})
         SELECT hand, level, run_id, deck_name, deck_key, stake_key
           FROM ranked WHERE rn = 1 ORDER BY level DESC""", p)
+
+
+def api_hand_counts(db, q):
+    """The most times each hand has been played within a single run.
+
+    A companion to best-score and highest-level: the hand you lean on is not
+    always the one that scores biggest or the one you levelled.
+    """
+    w, p = where(q, endless_col="h.endless")
+    return rows(db, f"""
+        WITH per_run AS (
+          SELECT h.hand, r.run_id, r.deck_name, r.deck_key, r.stake_key,
+                 COUNT(*) played
+            FROM hands h JOIN runs r USING (run_id)
+           WHERE h.hand IS NOT NULL{w}
+           GROUP BY h.hand, r.run_id),
+        ranked AS (
+          SELECT *, ROW_NUMBER() OVER (PARTITION BY hand
+                                       ORDER BY played DESC) rn
+            FROM per_run)
+        SELECT hand, played, run_id, deck_name, deck_key, stake_key
+          FROM ranked WHERE rn = 1 ORDER BY played DESC""", p)
 
 
 def api_antes(db, q):
@@ -574,6 +613,7 @@ ROUTES = {
     "/api/jokers": api_all_jokers,
     "/api/hands": api_hands,
     "/api/hand_levels": api_hand_levels,
+    "/api/hand_counts": api_hand_counts,
     "/api/antes": api_antes,
     "/api/run": api_run,
 }

@@ -65,7 +65,15 @@ select, button.seg {
   box-shadow: 0 2px 0 #171d1e; cursor: pointer;
 }
 select:focus-visible, button:focus-visible { outline: 2px solid var(--filter); outline-offset: 2px; }
-.seggroup { display: inline-flex; gap: 4px; }
+.seggroup { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+/* Deck and stake are picked by their own art rather than by name -- the
+   sprite is what you recognise, and five decks of buttons take less room
+   than a dropdown you have to open to read. */
+.seg.icon { padding: 3px 5px; line-height: 0; background: var(--sunken); }
+/* Selection is the button's own highlight, not a dimming of the others: a
+   stake IS its colour, so desaturating the unpicked ones removed the only
+   thing that tells them apart. */
+.seg.icon:hover { background: #40525a; }
 button.seg[aria-pressed="true"] { background: var(--mult); color: #2a1210; font-weight: 700; }
 
 /* ── stat tiles: hero numbers, no chart ───────────────────────────────── */
@@ -237,8 +245,12 @@ tr.detail > td { padding: 0; border-top: 0; }
 
 <main>
   <section class="panel filters" aria-label="Filters">
-    <span><label for="deck">Deck</label><select id="deck"><option value="">All</option></select></span>
-    <span><label for="stake">Stake</label><select id="stake"><option value="">All</option></select></span>
+    <span><label>Deck</label>
+      <span class="seggroup pick" id="deck" role="group" aria-label="Deck"></span>
+      <button class="seg" id="noplasma" aria-pressed="false"
+        title="Plasma balances chips and mult before scoring, so its numbers are not comparable with other decks">No Plasma</button></span>
+    <span><label>Stake</label>
+      <span class="seggroup pick" id="stake" role="group" aria-label="Stake"></span></span>
     <span><label>Include</label>
       <span class="seggroup" id="phase" role="group" aria-label="Which phases to include">
         <button class="seg" data-v="0" aria-pressed="true"
@@ -266,6 +278,11 @@ tr.detail > td { padding: 0; border-top: 0; }
         <h2>Highest hand levels</h2>
         <div class="scroll"><table id="handlevels"></table></div>
       </div>
+
+      <div class="panel">
+        <h2>Most played hands</h2>
+        <div class="scroll"><table id="handcounts"></table></div>
+      </div>
     </div>
   </section>
 
@@ -291,7 +308,7 @@ const esc = v => String(v ?? "").replace(/[&<>"']/g,
 // both off) means no phase filter at all -- which is what "all runs" should
 // mean, and is not expressible with mutually exclusive buttons.
 const phase = { "0": true, "1": true };
-const state = { deck: "", stake: "", endless: "", sort: "recent" };
+const state = { deck: "", stake: "", endless: "", noplasma: "" };
 
 function syncPhase() {
   const on = Object.keys(phase).filter(k => phase[k]);
@@ -321,8 +338,12 @@ const ago = ts => {
 // Atlas metadata, extracted from the game by ingest/extract_assets.py. Absent
 // if that has not been run, in which case everything falls back to text.
 let SPR = null;
-fetch("assets/sprites.json").then(r => r.ok ? r.json() : null)
-  .then(d => { SPR = d; }).catch(() => {});
+// Awaited rather than raced: the pickers, the joker names and the hand
+// strength sort all read it, and losing the race left them silently inert.
+const SPR_READY = fetch("assets/sprites.json")
+  .then(r => (r.ok ? r.json() : null))
+  .then(d => { SPR = d; })
+  .catch(() => {});
 
 function sprite(key, kind, px) {
   if (!SPR || !key || !SPR.sprites[key]) return "";
@@ -555,6 +576,16 @@ defineTable("handlevels", [
   { label: "Stake", cell: stakeCell, sort: r => r.stake_key },
 ], { empty: "No hand levels recorded yet.", onclick: openRunJS, sort: 1 });
 
+defineTable("handcounts", [
+  { label: "Hand", title: "Sorts by poker-hand strength.",
+    cell: r => esc(r.hand), sort: r => handRank(r.hand) },
+  { label: "Played", num: true, style: "color:var(--gold);font-weight:700",
+    title: "The most times this hand was played within a single run.",
+    cell: r => fmt(r.played), sort: r => r.played },
+  { label: "Deck", cell: deckCell, sort: r => r.deck_name },
+  { label: "Stake", cell: stakeCell, sort: r => r.stake_key },
+], { empty: "No hands recorded yet.", onclick: openRunJS, sort: 1 });
+
 defineTable("runs", [
   { label: "When", cls: "muted", cell: r => ago(r.started_ts),
     sort: r => r.started_ts },
@@ -565,6 +596,9 @@ defineTable("runs", [
       ? ' <span class="chip endless">ENDLESS</span>' : ""),
     sort: r => r.result || "" },
   { label: "Ante", num: true, cell: r => r.ante ?? "—", sort: r => r.ante },
+  { label: "Rounds won", num: true, cls: "muted",
+    title: "Blinds cleared. A round is only cashed out when its blind was beaten.",
+    cell: r => r.rounds_won ?? "—", sort: r => r.rounds_won },
   { label: "Best hand", num: true, cell: r => fmt(r.best_hand),
     sort: r => r.bh_ord },
   { label: "Peak $", num: true,
@@ -578,9 +612,9 @@ defineTable("runs", [
 ], { empty: "No runs match these filters.", onclick: openRunJS, sort: 0 });
 
 async function refresh() {
-  const [s, jok, hands, levels, runs] = await Promise.all([
+  const [s, jok, hands, levels, counts, runs] = await Promise.all([
     get("/api/summary"), get("/api/jokers"), get("/api/hands"),
-    get("/api/hand_levels"), get("/api/runs"),
+    get("/api/hand_levels"), get("/api/hand_counts"), get("/api/runs"),
   ]);
 
   $("#sub").textContent =
@@ -600,6 +634,7 @@ async function refresh() {
   setRows("jokers", jok);
   setRows("hands", hands.best);
   setRows("handlevels", levels);
+  setRows("handcounts", counts);
   setRows("runs", runs);
 
 }
@@ -728,14 +763,42 @@ async function toggleRound(runId, tr) {
 }
 
 // ── wiring ───────────────────────────────────────────────────────────────
-fetch("/api/meta").then(r => r.json()).then(m => {
-  $("#deck").innerHTML = '<option value="">All decks</option>' +
-    m.decks.map(d => `<option value="${esc(d.k)}">${esc(d.n)}</option>`).join("");
-  $("#stake").innerHTML = '<option value="">All stakes</option>' +
-    m.stakes.map(s => `<option value="${esc(s.k)}">${esc(s.k.replace("stake_", ""))}</option>`).join("");
+// A single-select row of sprites. Clicking the active one clears back to
+// "All", so there is no separate reset.
+function buildPicker(id, key, items, kind, px) {
+  const el = $("#" + id);
+  el.innerHTML = `<button class="seg" data-v="" aria-pressed="true">All</button>` +
+    items.map(it => {
+      const art = sprite(it.k, kind, px);
+      return `<button class="seg${art ? " icon" : ""}" data-v="${esc(it.k)}"
+        aria-pressed="false" title="${esc(it.n)}">${art || esc(it.n)}</button>`;
+    }).join("");
+  el.onclick = ev => {
+    const b = ev.target.closest("button.seg");
+    if (!b) return;
+    state[key] = state[key] === b.dataset.v ? "" : b.dataset.v;
+    el.querySelectorAll("button.seg").forEach(x =>
+      x.setAttribute("aria-pressed", x.dataset.v === state[key]));
+    refresh();
+  };
+}
+
+// Sprites must be loaded first or every button falls back to text.
+Promise.all([
+  fetch("/api/meta").then(r => r.json()),
+  SPR_READY,
+]).then(([m]) => {
+  buildPicker("deck", "deck", m.decks, "b", 26);
+  buildPicker("stake", "stake",
+    m.stakes.map(s => ({ k: s.k, n: nameOf(s.k) })), "s", 24);
 });
-$("#deck").onchange = e => { state.deck = e.target.value; refresh(); };
-$("#stake").onchange = e => { state.stake = e.target.value; refresh(); };
+
+$("#noplasma").onclick = e => {
+  const on = e.currentTarget.getAttribute("aria-pressed") !== "true";
+  e.currentTarget.setAttribute("aria-pressed", on);
+  state.noplasma = on ? "1" : "";
+  refresh();
+};
 $("#phase").onclick = e => {
   const b = e.target.closest("button.seg"); if (!b) return;
   phase[b.dataset.v] = !phase[b.dataset.v];
@@ -761,7 +824,7 @@ $("#detail").addEventListener("close", () => {
   if (location.hash) history.replaceState(null, "", location.pathname);
 });
 
-refresh().then(openFromHash);
+SPR_READY.then(refresh).then(openFromHash);
 
 // The server watches the log directory and folds in whatever changes, so a run
 // finished in Balatro shows up here on its own. Poll a counter rather than the
