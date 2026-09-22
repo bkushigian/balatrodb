@@ -34,6 +34,13 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 h1, h2, h3 { margin: 0; font-weight: 700; letter-spacing: .02em; }
+/* Panel titles wear the game's outlined lettering. */
+h2 { --stroke: #1b2325; color: #fff;
+     text-shadow:
+       -1px 0 var(--stroke), 1px 0 var(--stroke),
+       0 -1px var(--stroke), 0 1px var(--stroke),
+       -1px -1px var(--stroke), 1px -1px var(--stroke),
+       -1px 1px var(--stroke), 1px 1px var(--stroke); }
 a { color: var(--chips); }
 
 /* Balatro's chunky embossed panel: a lip of darker colour under each block */
@@ -65,12 +72,45 @@ main > *, .cols > * { min-width: 0; }
 /* ── filters: one row above everything, per the interaction spec ───────── */
 .filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .filters label { color: var(--ink-dim); font-size: 15px; margin-right: 4px; }
-select, button.seg {
-  background: var(--sunken); color: var(--ink); border: 0;
-  border-radius: .35rem; padding: 9px 13px; font: inherit; font-size: 17px;
-  box-shadow: 0 2px 0 #171d1e; cursor: pointer;
+/* ── Balatro's button ──────────────────────────────────────────────────
+   Taken off balatrowiki.org, whose buttons are a solid pill with a 1px
+   lighter band at the top, a ~4px darker lip at the bottom, and white text
+   carrying a heavy dark outline. Measured from a vertical slice through one
+   of theirs: #fcac3d highlight, #ff9500 fill, #ad7442 lip, #784600 text
+   outline. Rebuilt here in the game's dark palette rather than the wiki's
+   light one, so it still reads as the same family. */
+.outlined {
+  color: #fff;
+  text-shadow:
+    -1px 0 var(--stroke), 1px 0 var(--stroke),
+    0 -1px var(--stroke), 0 1px var(--stroke),
+    -1px -1px var(--stroke), 1px -1px var(--stroke),
+    -1px 1px var(--stroke), 1px 1px var(--stroke);
 }
-select:focus-visible, button:focus-visible { outline: 2px solid var(--filter); outline-offset: 2px; }
+
+button.seg, .pick > button {
+  --stroke: #10171a;
+  --lip: #10171a;
+  background: var(--sunken); border: 0; cursor: pointer;
+  border-radius: 999px; padding: 9px 16px; font: inherit; font-size: 17px;
+  font-weight: 700; letter-spacing: .02em;
+  color: #fff;
+  text-shadow:
+    -1px 0 var(--stroke), 1px 0 var(--stroke),
+    0 -1px var(--stroke), 0 1px var(--stroke),
+    -1px -1px var(--stroke), 1px -1px var(--stroke),
+    -1px 1px var(--stroke), 1px 1px var(--stroke);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, .10),
+              0 4px 0 var(--lip), 0 6px 9px rgba(0, 0, 0, .42);
+  transition: transform .06s, box-shadow .06s;
+}
+/* Pressing pushes the button down onto its own lip. */
+button.seg:active, .pick > button:active {
+  transform: translateY(3px);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, .10),
+              0 1px 0 var(--lip), 0 2px 4px rgba(0, 0, 0, .42);
+}
+button:focus-visible { outline: 2px solid var(--filter); outline-offset: 2px; }
 .seggroup { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
 /* Deck and stake are picked by their own art rather than by name -- the
    sprite is what you recognise, and five decks of buttons take less room
@@ -94,8 +134,20 @@ select:focus-visible, button:focus-visible { outline: 2px solid var(--filter); o
   cursor: pointer; white-space: nowrap;
 }
 .pick .menu button:hover, .pick .menu button:focus-visible { background: var(--sunken); }
-.pick .menu button[aria-selected="true"] { background: var(--mult); color: #2a1210; font-weight: 700; }
-button.seg[aria-pressed="true"] { background: var(--mult); color: #2a1210; font-weight: 700; }
+.pick .menu button[aria-selected="true"] {
+  --stroke: #7a241e;
+  background: var(--mult); color: #fff; font-weight: 700;
+  text-shadow:
+    -1px 0 var(--stroke), 1px 0 var(--stroke),
+    0 -1px var(--stroke), 0 1px var(--stroke),
+    -1px -1px var(--stroke), 1px -1px var(--stroke),
+    -1px 1px var(--stroke), 1px 1px var(--stroke);
+}
+button.seg[aria-pressed="true"] {
+  --stroke: #7a241e;
+  --lip: #a8392f;
+  background: var(--mult);
+}
 
 /* ── stat tiles: hero numbers, no chart ───────────────────────────────── */
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
@@ -141,15 +193,23 @@ th.sortable .ind { display: inline-block; width: .8em; color: var(--gold); }
    somewhere else, so it copies on click rather than needing a careful drag. */
 .seed { font: inherit; font-size: 14px; letter-spacing: .06em; cursor: pointer;
         background: var(--sunken); color: var(--ink-dim);
-        border: 1px solid #40525a; border-radius: 999px;
-        padding: 3px 10px; transition: background .12s, color .12s; }
+        border: 0; border-radius: 999px; font-weight: 700;
+        padding: 5px 12px;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 3px 0 #10171a;
+        transition: background .12s, color .12s, transform .06s, box-shadow .06s; }
+.seed:active { transform: translateY(2px);
+               box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 1px 0 #10171a; }
 .seed:hover { background: #40525a; color: var(--ink); }
 .seed.seeded { border-color: var(--gold); color: var(--gold); }
 .seed.copied { background: var(--green); border-color: var(--green); color: #14211f; }
 td.num { font-variant-numeric: tabular-nums; }
 .chip {
-  display: inline-block; padding: 1px 7px; border-radius: 99px;
+  display: inline-block; padding: 2px 9px; border-radius: 99px;
   font-size: 13px; font-weight: 700; color: #1b2223;
+  /* text-shadow inherits, and the run dialog's chips sit inside its <h2>,
+     which carries the outlined lettering. A dark outline around dark text
+     on a gold chip filled the letters in solid. */
+  text-shadow: none;
 }
 .chip.win { background: var(--gold); }
 .chip.died { background: var(--blind); color: #fff; }
@@ -194,8 +254,22 @@ dialog .body { padding: 16px 18px; max-height: 72vh; overflow: auto; }
 dialog h3 { font-size: 16px; color: var(--ink-mute); text-transform: uppercase;
             letter-spacing: .07em; margin: 16px 0 6px; }
 dialog h3:first-child { margin-top: 0; }
-button.x { background: var(--sunken); color: var(--ink-dim); border: 0;
-           border-radius: .3rem; padding: 6px 12px; cursor: pointer; font: inherit; }
+/* Same pill as the filter buttons, so the dialog matches the page. */
+button.x { --stroke: #10171a; --lip: #10171a;
+           background: var(--sunken); color: #fff; border: 0; font: inherit;
+           border-radius: 999px; padding: 8px 16px; cursor: pointer;
+           font-weight: 700;
+           text-shadow:
+             -1px 0 var(--stroke), 1px 0 var(--stroke),
+             0 -1px var(--stroke), 0 1px var(--stroke),
+             -1px -1px var(--stroke), 1px -1px var(--stroke),
+             -1px 1px var(--stroke), 1px 1px var(--stroke);
+           box-shadow: inset 0 2px 0 rgba(255,255,255,.10),
+                       0 4px 0 var(--lip), 0 6px 9px rgba(0,0,0,.42);
+           transition: transform .06s, box-shadow .06s; }
+button.x:active { transform: translateY(3px);
+                  box-shadow: inset 0 2px 0 rgba(255,255,255,.10),
+                              0 1px 0 var(--lip), 0 2px 4px rgba(0,0,0,.42); }
 .empty { color: var(--ink-mute); padding: 14px 4px; }
 
 /* expandable round timeline */
