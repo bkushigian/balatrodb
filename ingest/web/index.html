@@ -142,6 +142,31 @@ dialog h3:first-child { margin-top: 0; }
 button.x { background: var(--sunken); color: var(--ink-dim); border: 0;
            border-radius: .3rem; padding: 6px 12px; cursor: pointer; font: inherit; }
 .empty { color: var(--ink-mute); padding: 14px 4px; }
+
+/* expandable round timeline */
+tr.roundrow td:first-child::before {
+  content: ""; display: inline-block; width: 0; height: 0; margin-right: 6px;
+  border: 4px solid transparent; border-left-color: var(--ink-mute);
+  transition: transform .12s; transform-origin: 2px 50%;
+}
+tr.roundrow.open td:first-child::before { transform: rotate(90deg); }
+tr.detail > td { padding: 0; border-top: 0; }
+.steps { background: var(--sunken); border-radius: .3rem; margin: 2px 0 8px;
+         padding: 8px 10px; display: grid; gap: 6px; }
+.step { display: grid; grid-template-columns: 74px 1fr auto; gap: 10px;
+        align-items: center; padding: 5px 6px; border-radius: .25rem; }
+.step.play { background: #2c393b; }
+.step .what { font-size: 12px; font-weight: 700; }
+.step.play .what { color: var(--chips); }
+.step.discard .what { color: var(--ink-mute); }
+.hand { display: flex; gap: 3px; align-items: center; flex-wrap: wrap; }
+.step .score { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.step .score b { color: var(--mult); }
+.step .score span { color: var(--ink-mute); font-size: 11px; }
+.jokrow { display: flex; gap: 4px; align-items: center; flex-wrap: wrap;
+          padding: 2px 6px 4px; }
+.jokrow .lbl { color: var(--ink-mute); font-size: 11px; margin-right: 4px; }
+.jv { color: var(--ink-dim); font-size: 10px; }
 .warn { color: var(--filter); font-size: 12px; }
 @media (max-width: 560px) { header h1 { font-size: 21px; } .tile .v { font-size: 21px; } }
 </style>
@@ -363,17 +388,21 @@ async function refresh() {
 }
 
 async function openRun(id) {
+  history.replaceState(null, "", `#run=${encodeURIComponent(id)}`);
   const d = await fetch("/api/run?id=" + encodeURIComponent(id)).then(r => r.json());
   if (!d.run) return;
   const r = d.run;
   $("#dtitle").innerHTML = `${r.deck_name || "?"} · ${(r.stake_key || "").replace("stake_", "")}
     ${resultChip(r)} ${r.went_endless ? '<span class="chip endless">ENDLESS</span>' : ""}`;
-  const rounds = d.rounds.map(x => `<tr><td class="num">${x.round_seq}</td>
-    <td class="num">${x.ante ?? "—"}</td><td>${x.blind_name || "—"}</td>
-    <td class="num">${fmt(x.required_txt)}</td><td class="num">${fmt(x.score_txt)}</td>
-    <td class="num">${x.cashout_total !== null ? "$" + x.cashout_total : "—"}</td>
-    <td class="num muted">${x.deck_size ?? "—"}</td>
-    <td>${x.endless ? '<span class="chip endless">ENDLESS</span>' : ""}</td></tr>`).join("");
+  const rounds = d.rounds.map(x => `
+    <tr class="roundrow clickable" data-round="${x.round_seq}">
+      <td class="num">${x.round_seq}</td>
+      <td class="num">${x.ante ?? "—"}</td><td>${x.blind_name || "—"}</td>
+      <td class="num">${fmt(x.required_txt)}</td><td class="num">${fmt(x.score_txt)}</td>
+      <td class="num">${x.cashout_total !== null ? "$" + x.cashout_total : "—"}</td>
+      <td class="num muted">${x.deck_size ?? "—"}</td>
+      <td>${x.endless ? '<span class="chip endless">ENDLESS</span>' : ""}</td></tr>
+    <tr class="detail" data-for="${x.round_seq}" hidden><td colspan="8"></td></tr>`).join("");
   const jok = d.jokers.map(j => `<tr><td>${shortKey(j.key)}</td><td class="muted">${j.field}</td>
     <td class="num" style="color:var(--mult)">${fmt(j.peak)}</td></tr>`).join("");
   $("#dbody").innerHTML = `
@@ -395,6 +424,61 @@ async function openRun(id) {
       <th class="num">Peak</th></tr></thead>
       <tbody>${jok || '<tr><td colspan="3" class="empty">No scaling jokers.</td></tr>'}</tbody></table></div>`;
   $("#detail").showModal();
+
+  // Expand a round to step through it: every play and discard in order, the
+  // cards in each, the running score, and the jokers held at the time.
+  $("#dbody").querySelectorAll("tr.roundrow").forEach(tr => {
+    tr.onclick = () => toggleRound(id, tr);
+  });
+}
+
+const cardSprite = c => sprite(`card:${c.suit}:${c.rank}`, "c", 32)
+  || `<span class="jv">${(c.rank || "?")}${(c.suit || "")[0] || ""}</span>`;
+
+async function toggleRound(runId, tr) {
+  const rs = tr.dataset.round;
+  const row = $(`#dbody tr.detail[data-for="${rs}"]`);
+  if (!row.hidden) { row.hidden = true; tr.classList.remove("open"); return; }
+  tr.classList.add("open");
+  row.hidden = false;
+  const cell = row.firstElementChild;
+  cell.innerHTML = `<div class="steps"><span class="muted">loading…</span></div>`;
+
+  const d = await fetch(`/api/round?id=${encodeURIComponent(runId)}&round=${rs}`)
+    .then(r => r.json());
+  if (!d.steps || !d.steps.length) {
+    cell.innerHTML = `<div class="steps"><span class="muted">Nothing recorded for this round.</span></div>`;
+    return;
+  }
+
+  let lastJokers = "";
+  cell.innerHTML = `<div class="steps">` + d.steps.map(s => {
+    const cards = (s.cards || []).map(cardSprite).join("");
+    // Only reprint the joker row when the loadout or its values changed.
+    const jkey = (s.jokers || []).map(j =>
+      `${j.key}:${j.mult ?? ""}/${j.x_mult ?? ""}/${j.chips ?? ""}/${j.extra ?? ""}`).join("|");
+    let jrow = "";
+    if (jkey && jkey !== lastJokers) {
+      lastJokers = jkey;
+      jrow = `<div class="jokrow"><span class="lbl">jokers</span>` +
+        s.jokers.map(j => {
+          const v = j.chips ?? j.mult ?? j.x_mult ?? j.extra;
+          return sprite(j.key, "j", 26) +
+            (v !== null && v !== undefined ? `<span class="jv">${fmt(v)}</span>` : "");
+        }).join("") + `</div>`;
+    }
+    if (s.kind === "play") {
+      return jrow + `<div class="step play">
+        <span class="what">${s.hand || "hand"}${s.level ? ` <span class="jv">lvl ${s.level}</span>` : ""}</span>
+        <span class="hand">${cards}</span>
+        <span class="score"><b>+${fmt(s.score_txt)}</b><br>
+          <span>${fmt(s.total_after)} total</span></span></div>`;
+    }
+    return jrow + `<div class="step discard">
+      <span class="what">discard</span>
+      <span class="hand">${cards}</span>
+      <span class="score"><span>${s.cards_n ?? (s.cards || []).length} cards</span></span></div>`;
+  }).join("") + `</div>`;
 }
 
 // ── wiring ───────────────────────────────────────────────────────────────
@@ -498,7 +582,25 @@ setInterval(async () => {
 }, 3000);
 };
 syncPhase();
-refresh();
+
+// #run=<id> opens that run, optionally with #round=<n> expanded. Makes a run
+// linkable, and means the dialog survives a reload.
+async function openFromHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  const id = p.get("run");
+  if (!id) return;
+  await openRun(id);
+  const rs = p.get("round");
+  if (rs) {
+    const tr = $(`#dbody tr.roundrow[data-round="${rs}"]`);
+    if (tr) await toggleRound(id, tr);
+  }
+}
+$("#detail").addEventListener("close", () => {
+  if (location.hash) history.replaceState(null, "", location.pathname);
+});
+
+refresh().then(openFromHash);
 
 // The server watches the log directory and folds in whatever changes, so a run
 // finished in Balatro shows up here on its own. Poll a counter rather than the

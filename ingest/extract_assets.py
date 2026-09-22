@@ -33,6 +33,7 @@ ATLASES = {
     "b": ("Enhancers.png", 142, 190),   # deck backs
     "stake": ("chips.png", 58, 58),     # stake chips
     "c": ("Tarots.png", 142, 190),      # consumables
+    "card": ("8BitDeck.png", 142, 190),  # playing cards, 13 ranks x 4 suits
 }
 
 
@@ -81,8 +82,20 @@ def main() -> int:
         sizes[name] = png_size(data)
         print(f"  {name:16s} {sizes[name][0]}x{sizes[name][1]}")
 
-    centers = parse_centers(z.read("game.lua").decode("utf-8", "replace"))
+    src = z.read("game.lua").decode("utf-8", "replace")
+    centers = parse_centers(src)
     sprites = {}
+
+    # Playing cards are keyed by suit and rank rather than a centre key, so the
+    # dashboard can look one up from the rank and suit it already stores.
+    # 13 ranks x 4 suits. Note [^{}] rather than [^}]: the entry ends with a
+    # nested `pos = {`, and a class allowing `{` runs straight past the entry.
+    card_re = re.compile(
+        r"[HCDS]_[0-9AJQKT]+\s*=\s*\{[^{}]*?value\s*=\s*'([^']+)'\s*,"
+        r"\s*suit\s*=\s*'([^']+)'\s*,\s*pos\s*=\s*\{\s*x\s*=\s*(\d+)\s*,\s*y\s*=\s*(\d+)")
+    for value, suit, x, y in card_re.findall(src):
+        sprites[f"card:{suit}:{value}"] = {"a": "8BitDeck.png",
+                                           "x": int(x), "y": int(y)}
     for key, (x, y) in centers.items():
         info = atlas_for(key)
         if not info:
@@ -107,7 +120,8 @@ def main() -> int:
 
     by_kind = {}
     for k in sprites:
-        by_kind[k.split("_")[0]] = by_kind.get(k.split("_")[0], 0) + 1
+        kind = "card" if k.startswith("card:") else k.split("_", 1)[0]
+        by_kind[kind] = by_kind.get(kind, 0) + 1
     print(f"  sprites.json     {len(sprites)} sprites {by_kind}")
     if len(doc["known_collisions"]) > 1:
         print(f"  note: cell (0,0) shared by {doc['known_collisions']}")

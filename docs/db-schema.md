@@ -254,6 +254,20 @@ CREATE TABLE IF NOT EXISTS hands (
 CREATE INDEX IF NOT EXISTS hands_round ON hands(run_id, round_seq);
 CREATE INDEX IF NOT EXISTS hands_best  ON hands(endless, score_ord DESC);
 
+-- Discards, so a round's timeline can interleave plays and discards. The
+-- cards themselves are already in `cards` at the same (seg, n).
+CREATE TABLE IF NOT EXISTS discards (
+  run_id    TEXT NOT NULL,
+  seg       INTEGER NOT NULL,
+  n         INTEGER NOT NULL,
+  round_seq INTEGER,
+  ante      INTEGER,
+  endless   INTEGER NOT NULL,
+  cards     INTEGER,
+  PRIMARY KEY (run_id, seg, n)
+);
+CREATE INDEX IF NOT EXISTS discards_round ON discards(run_id, round_seq);
+
 CREATE TABLE IF NOT EXISTS hand_levels (
   run_id    TEXT NOT NULL,
   seg       INTEGER NOT NULL,

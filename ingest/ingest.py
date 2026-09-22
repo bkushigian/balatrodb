@@ -180,8 +180,8 @@ class Ingester:
     def purge(self, run_id):
         """Everything derived from one run, so re-derivation cannot duplicate."""
         for t in ("cards", "joker_scale", "joker_state", "joker_derived", "hands",
-                  "hand_levels", "money", "cashout_items", "rounds", "segments",
-                  "blind_skips", "consumable_uses", "run_defects", "runs"):
+                  "hand_levels", "discards", "money", "cashout_items", "rounds",
+                  "segments", "blind_skips", "consumable_uses", "run_defects", "runs"):
             self.db.execute(f"DELETE FROM {t} WHERE run_id=?", (run_id,))
 
     # -- run level ----------------------------------------------------------
@@ -283,6 +283,11 @@ class Ingester:
                      as_int(d.get("hands_left_before")), as_int(d.get("discards_left_before"))))
                 self.sample_jokers(run_id, seg, n, open_round or round_seq, ante, el,
                                    d.get("jokers"))
+
+            elif e == "hand.discard":
+                self.db.execute("INSERT OR REPLACE INTO discards VALUES (?,?,?,?,?,?,?)",
+                                (run_id, seg, n, open_round or round_seq, ante, el,
+                                 len(d.get("cards") or [])))
 
             elif e == "hand.levelup":
                 self.db.execute("INSERT OR REPLACE INTO hand_levels VALUES (?,?,?,?,?,?,?,?)",

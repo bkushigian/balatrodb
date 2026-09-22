@@ -330,7 +330,62 @@ def api_version(db, q):
     return {"generation": generation, "last_sync": last_sync}
 
 
+def api_round(db, q):
+    """One round, step by step: every play and discard in order, the cards in
+    each, the running score, and the jokers held at the time.
+
+    Not a replay -- it is what was observed, not what can be re-executed -- but
+    enough to walk through a round and see how it went.
+    """
+    rid, rs = q.get("id"), q.get("round")
+    if not rid or not rs:
+        return {"error": "need id and round"}
+
+    steps = rows(db, """
+        SELECT seg, n, 'play' AS kind, hand, level, oneshot,
+               score_txt, score_num, chips_before_txt, chips_before_num,
+               hands_left_before, discards_left_before, NULL AS cards_n
+          FROM hands WHERE run_id = ? AND round_seq = ?
+        UNION ALL
+        SELECT seg, n, 'discard', NULL, NULL, NULL,
+               NULL, NULL, NULL, NULL, NULL, NULL, cards
+          FROM discards WHERE run_id = ? AND round_seq = ?
+        ORDER BY seg, n""", (rid, rs, rid, rs))
+
+    # cards and jokers for the steps, fetched once and bucketed by (seg, n)
+    keys = {(s["seg"], s["n"]) for s in steps}
+    cards, jokers = {}, {}
+    if keys:
+        for c in rows(db, f"""
+                SELECT seg, n, pos, rank, suit, enhancement, edition, seal, card_id
+                  FROM cards WHERE run_id = ? AND role = 'cards'
+                   AND event IN ('hand.play','hand.discard')
+                 ORDER BY seg, n, pos""", (rid,)):
+            cards.setdefault((c["seg"], c["n"]), []).append(c)
+        for j in rows(db, """
+                SELECT seg, n, card_id, key, mult, x_mult, chips, extra
+                  FROM joker_state WHERE run_id = ? AND round_seq = ?
+                 ORDER BY seg, n, card_id""", (rid, rs)):
+            jokers.setdefault((j["seg"], j["n"]), []).append(j)
+
+    running = None
+    for st in steps:
+        k = (st["seg"], st["n"])
+        st["cards"] = cards.get(k, [])
+        st["jokers"] = jokers.get(k, [])
+        if st["kind"] == "play":
+            # chips_before is the round total going in; the game floors each
+            # hand's contribution, so the running total is floor-summed.
+            base = st["chips_before_num"]
+            if base is None:
+                base = running or 0
+            running = base + int(st["score_num"] or 0)
+            st["total_after"] = running
+    return {"steps": steps}
+
+
 ROUTES = {
+    "/api/round": api_round,
     "/api/version": api_version,
     "/api/meta": api_meta,
     "/api/summary": api_summary,
