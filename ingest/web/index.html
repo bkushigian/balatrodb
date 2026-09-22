@@ -124,19 +124,29 @@ main > *, .cols > * { min-width: 0; }
     3px calc(100% - 12px), 0 calc(100% - 12px),
     0 12px, 3px 12px, 3px 6px, 6px 6px, 6px 3px, 12px 3px);
 }
-/* Three steps instead of four, for the chips and seeds -- the full corner
-   is taller than they are. */
+/* Chips and seeds round all the way to a pill instead of stopping a few
+   pixels in. The steps approximate a quarter circle of radius = half the
+   height, so the bands are given as percentages and keep their shape
+   whatever the element's height:
+       y   0%  11%  22%  39%  50%
+     inset 12   5    2    1    0  (px)
+   which is the staircase a pixel artist would draw for that curve. */
 .pixel-pill.sm {
   clip-path: polygon(
-    6px 0, calc(100% - 6px) 0,
-    calc(100% - 6px) 2px, calc(100% - 3px) 2px,
-    calc(100% - 3px) 4px, 100% 4px,
-    100% calc(100% - 4px), calc(100% - 3px) calc(100% - 4px),
-    calc(100% - 3px) calc(100% - 2px), calc(100% - 6px) calc(100% - 2px),
-    calc(100% - 6px) 100%, 6px 100%,
-    6px calc(100% - 2px), 3px calc(100% - 2px),
-    3px calc(100% - 4px), 0 calc(100% - 4px),
-    0 4px, 3px 4px, 3px 2px, 6px 2px);
+    12px 0, calc(100% - 12px) 0,
+    calc(100% - 12px) 11%, calc(100% - 5px) 11%,
+    calc(100% - 5px) 22%, calc(100% - 2px) 22%,
+    calc(100% - 2px) 39%, 100% 39%,
+    100% 61%, calc(100% - 2px) 61%,
+    calc(100% - 2px) 78%, calc(100% - 5px) 78%,
+    calc(100% - 5px) 89%, calc(100% - 12px) 89%,
+    calc(100% - 12px) 100%, 12px 100%,
+    12px 89%, 5px 89%,
+    5px 78%, 2px 78%,
+    2px 61%, 0 61%,
+    0 39%, 2px 39%,
+    2px 22%, 5px 22%,
+    5px 11%, 12px 11%);
 }
 
 button.seg, .pick > button {
@@ -248,7 +258,7 @@ th.sortable .ind { display: inline-block; width: .8em; color: var(--gold); }
    somewhere else, so it copies on click rather than needing a careful drag. */
 .seed { font: inherit; font-size: 15px; letter-spacing: .06em; cursor: pointer;
         color: var(--ink-dim); border: 0; border-radius: 0; font-weight: 700;
-        padding: 6px 13px 9px;
+        padding: 6px 16px 9px;
         background: linear-gradient(to bottom,
           rgba(255,255,255,.08) 0 1px, var(--sunken) 1px calc(100% - 3px),
           #10171a calc(100% - 3px) 100%);
@@ -259,7 +269,7 @@ th.sortable .ind { display: inline-block; width: .8em; color: var(--gold); }
 .seed.copied { background: var(--green); border-color: var(--green); color: #14211f; }
 td.num { font-variant-numeric: tabular-nums; }
 .chip {
-  display: inline-block; padding: 3px 10px; border-radius: 99px;
+  display: inline-block; padding: 3px 13px; border-radius: 99px;
   font-size: 14px; font-weight: 700; letter-spacing: .06em; color: #1b2223;
   /* text-shadow inherits, and the run dialog's chips sit inside its <h2>,
      which carries the outlined lettering. A dark outline around dark text
