@@ -15,13 +15,17 @@ money peaks come from the running balance rather than `before + delta`.
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import sqlite3
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+
+import ingest as ingester
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DB = os.path.join(HERE, "balatro.db")
@@ -36,6 +40,54 @@ def connect():
 
 def rows(db, sql, params=()):
     return [dict(r) for r in db.execute(sql, params).fetchall()]
+
+
+# ─── keeping current ──────────────────────────────────────────────────────
+# Finishing a run in Balatro should update the dashboard, with no manual step
+# and without waiting for a page load. A background thread watches the log
+# directory and folds in whatever changed; the page polls `generation` and
+# re-renders when it moves.
+#
+# The ingester only stats each log and skips unchanged ones, so a scan of a few
+# hundred runs is a few milliseconds. The lock serializes writes against the
+# request threads reading through the same connection.
+
+_sync_lock = threading.Lock()
+generation = 0          # bumped whenever a sync changed something
+last_sync = 0.0
+
+
+def sync(db, logs):
+    """Fold any changed logs in. Returns how many runs were re-derived."""
+    global generation, last_sync
+    with _sync_lock:
+        ing = ingester.Ingester(db)
+        changed = 0
+        for path in sorted(glob.glob(os.path.join(logs, "*.jsonl")) +
+                           glob.glob(os.path.join(logs, "*.jsonl.gz"))):
+            try:
+                _, did = ing.ingest_file(path)
+                changed += 1 if did else 0
+            except Exception as ex:                  # one unreadable log must
+                print(f"  sync: {os.path.basename(path)}: {ex}")  # not stop the rest
+        if changed:
+            ing.derive_counters()
+            db.commit()
+            generation += 1
+            print(f"  synced {changed} run(s) -> generation {generation}")
+        last_sync = time.time()
+        return changed
+
+
+def watch(db, logs, every=3.0):
+    """Poll the log directory forever. A live run's file grows as you play, so
+    an in-progress run appears and updates rather than waiting for the end."""
+    while True:
+        try:
+            sync(db, logs)
+        except Exception as ex:
+            print(f"  watch: {ex}")
+        time.sleep(every)
 
 
 # ─── filters ──────────────────────────────────────────────────────────────
@@ -274,7 +326,12 @@ def api_run(db, q):
     }
 
 
+def api_version(db, q):
+    return {"generation": generation, "last_sync": last_sync}
+
+
 ROUTES = {
+    "/api/version": api_version,
     "/api/meta": api_meta,
     "/api/summary": api_summary,
     "/api/runs": api_runs,
@@ -288,6 +345,7 @@ ROUTES = {
 
 class Handler(BaseHTTPRequestHandler):
     db = None
+    logs = None
 
     def log_message(self, *a):
         pass
@@ -327,6 +385,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8611)
+    ap.add_argument("--logs", default=ingester.DEFAULT_LOGS)
     ap.add_argument("--no-open", action="store_true")
     a = ap.parse_args()
 
@@ -334,10 +393,15 @@ def main():
         raise SystemExit(f"no database at {DB}\nrun: python ingest/ingest.py --rebuild")
 
     Handler.db = connect()
+    Handler.logs = a.logs
+    sync(Handler.db, a.logs)
+    threading.Thread(target=watch, args=(Handler.db, a.logs),
+                     daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
     url = f"http://localhost:{a.port}"
     n = Handler.db.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
     print(f"BalatroDB dashboard: {url}   ({n} runs)")
+    print(f"watching {a.logs} -- new runs appear automatically")
     print("Ctrl-C to stop.")
     if not a.no_open:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()

@@ -54,17 +54,24 @@ Requires Lovely and Steamodded. Logs land in
 ## Dashboard
 
 ```
-python ingest/ingest.py          # fold new runs into the database
 python ingest/dashboard.py       # http://localhost:8611
 ```
+
+Leave it running and it keeps itself current: a background thread watches the
+log directory, folds in whatever changed, and the page picks it up within a few
+seconds. Finish a run in Balatro and it appears on its own — no refresh, no
+separate ingest step. A run still in progress shows as such and updates as you
+play, because the mod appends to its log throughout.
+
+`python ingest/ingest.py` does the same fold as a one-off, for scripting or a
+first build.
 
 A local, Balatro-themed web dashboard over the database: record tiles, per-joker
 maxima, best hand by type, how far runs get, and a filterable run list that
 drills into a single run. Filters are deck, stake and endless phase, and they
 apply to every panel at once.
 
-It reads the SQLite database directly, so it is exactly as current as the last
-ingest. The palette is the game's own, lifted from `G.C` in `globals.lua`.
+The palette is the game's own, lifted from `G.C` in `globals.lua`.
 
 For joker, deck and stake sprites, extract the game's atlases once:
 
