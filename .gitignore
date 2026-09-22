@@ -1,0 +1,21 @@
+# Derived data — rebuildable from the logs, which are the system of record.
+ingest/*.db
+ingest/*.db-wal
+ingest/*.db-shm
+
+# Run logs, if any are ever copied into the tree. The real ones live in
+# %APPDATA%/Balatro/BalatroDB/runs/ and are deliberately outside the repo.
+runs/
+*.jsonl
+*.jsonl.gz
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
