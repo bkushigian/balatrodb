@@ -108,6 +108,28 @@ def parse_hand_order(z: zipfile.ZipFile) -> list:
     return re.findall(r'\[\"([^\"]+)\"\]\s*=\s*\{', block.replace("'", '"'))
 
 
+def parse_hand_planets(src: str) -> dict:
+    """Poker hand -> the Planet card that levels it.
+
+    Each Planet centre carries `config = {hand_type = '...'}`, so the pairing
+    is the game's own rather than a list here that would drift. It gives the
+    hand panels the same card art the rest of the dashboard uses, which also
+    makes their rows the same height as the joker rows.
+    """
+    # One centre per line, and each carries a nested `pos = {x=,y=}` before
+    # `set`, so a brace-bounded pattern cannot reach across it. Scan lines.
+    key_re = re.compile(r"(c_[a-z0-9_]+)\s*=")
+    hand_re = re.compile(r"hand_type\s*=\s*'([^']+)'")
+    out = {}
+    for line in src.split("\n"):
+        if '"Planet"' not in line and "'Planet'" not in line:
+            continue
+        k, h = key_re.search(line), hand_re.search(line)
+        if k and h:
+            out.setdefault(h.group(1), k.group(1))
+    return out
+
+
 def atlas_for(key: str) -> tuple[str, int, int] | None:
     if key in ATLAS_OVERRIDES:
         return ATLAS_OVERRIDES[key]
@@ -141,6 +163,7 @@ def main() -> int:
     centers = parse_centers(src)
     names = parse_names(z)
     hand_order = parse_hand_order(z)
+    hand_planets = parse_hand_planets(src)
     sprites = {}
 
     # Playing cards are keyed by suit and rank rather than a centre key, so the
@@ -164,6 +187,7 @@ def main() -> int:
         "names": names,
         # Strongest first, so a rank is len - index.
         "hand_order": hand_order,
+        "hand_planets": hand_planets,
         "atlases": {n: {"w": w, "h": h,
                         "cw": next(c for a, c, _ in ATLASES.values() if a == n),
                         "ch": next(h2 for a, _, h2 in ATLASES.values() if a == n)}

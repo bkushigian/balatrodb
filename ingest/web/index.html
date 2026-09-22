@@ -69,11 +69,26 @@ select:focus-visible, button:focus-visible { outline: 2px solid var(--filter); o
 /* Deck and stake are picked by their own art rather than by name -- the
    sprite is what you recognise, and five decks of buttons take less room
    than a dropdown you have to open to read. */
-.seg.icon { padding: 3px 5px; line-height: 0; background: var(--sunken); }
-/* Selection is the button's own highlight, not a dimming of the others: a
-   stake IS its colour, so desaturating the unpicked ones removed the only
-   thing that tells them apart. */
-.seg.icon:hover { background: #40525a; }
+/* A dropdown that shows the card art. A native <select> cannot, and laying
+   every deck out as a button would not survive the full set of them. */
+.pick { position: relative; display: inline-block; vertical-align: middle; }
+.pick > button { display: inline-flex; align-items: center; gap: 7px; }
+.pick .caret { color: var(--ink-mute); font-size: 11px; }
+.pick .menu {
+  position: absolute; z-index: 40; top: calc(100% + 5px); left: 0; display: none;
+  background: var(--surface); border: 1px solid #4a585c; border-radius: .4rem;
+  padding: 4px; min-width: 100%; max-height: 340px; overflow-y: auto;
+  box-shadow: 0 8px 22px rgba(0,0,0,.5);
+}
+.pick.open .menu { display: grid; gap: 2px; }
+.pick .menu button {
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+  background: transparent; border: 0; box-shadow: none; color: var(--ink);
+  font: inherit; font-size: 13px; padding: 5px 9px; border-radius: .3rem;
+  cursor: pointer; white-space: nowrap;
+}
+.pick .menu button:hover, .pick .menu button:focus-visible { background: var(--sunken); }
+.pick .menu button[aria-selected="true"] { background: var(--mult); color: #2a1210; font-weight: 700; }
 button.seg[aria-pressed="true"] { background: var(--mult); color: #2a1210; font-weight: 700; }
 
 /* ── stat tiles: hero numbers, no chart ───────────────────────────────── */
@@ -89,11 +104,19 @@ button.seg[aria-pressed="true"] { background: var(--mult); color: #2a1210; font-
 .v.purple { color: var(--purple); } .v.green { color: var(--green); }
 
 /* ── tables ───────────────────────────────────────────────────────────── */
-.cols { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
-         align-items: start; }
+/* Exactly two columns once there is room, rather than as many as fit: with
+   auto-fit a wide window gave three, which left the fourth panel alone on a
+   row with a hole beside it. */
+.cols { display: grid; gap: 16px; grid-template-columns: 1fr; align-items: start; }
+@media (min-width: 900px) { .cols { grid-template-columns: 1fr 1fr; } }
 /* A column of panels inside one `cols` cell, so the tall Jokers board can
    sit beside two shorter tables rather than leaving a gap under a short one. */
 .stack { display: grid; gap: 16px; align-content: start; }
+/* One row pitch everywhere. Rows are as tall as their tallest sprite, so
+   without this a table with card art sat at a different rhythm from one
+   without -- which is what made two panels of ten rows end at different
+   heights. */
+tbody td { height: 42px; }
 .scroll { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th {
@@ -245,12 +268,10 @@ tr.detail > td { padding: 0; border-top: 0; }
 
 <main>
   <section class="panel filters" aria-label="Filters">
-    <span><label>Deck</label>
-      <span class="seggroup pick" id="deck" role="group" aria-label="Deck"></span>
+    <span><label>Deck</label><span class="pick" id="deck"></span>
       <button class="seg" id="noplasma" aria-pressed="false"
         title="Plasma balances chips and mult before scoring, so its numbers are not comparable with other decks">No Plasma</button></span>
-    <span><label>Stake</label>
-      <span class="seggroup pick" id="stake" role="group" aria-label="Stake"></span></span>
+    <span><label>Stake</label><span class="pick" id="stake"></span></span>
     <span><label>Include</label>
       <span class="seggroup" id="phase" role="group" aria-label="Which phases to include">
         <button class="seg" data-v="0" aria-pressed="true"
@@ -262,27 +283,29 @@ tr.detail > td { padding: 0; border-top: 0; }
 
   <section class="tiles" id="tiles" aria-label="Records"></section>
 
+  <!-- One grid, not a tall column beside a stack of three: the panels are
+       all leaderboards of the same shape, so letting them flow two-up keeps
+       their bottoms near each other instead of running one column far past
+       the other. -->
   <section class="cols">
     <div class="panel">
       <h2>Jokers</h2>
       <div class="scroll"><table id="jokers"></table></div>
     </div>
 
-    <div class="stack">
-      <div class="panel">
-        <h2>Best hand by type</h2>
-        <div class="scroll"><table id="hands"></table></div>
-      </div>
+    <div class="panel">
+      <h2>Best hand by type</h2>
+      <div class="scroll"><table id="hands"></table></div>
+    </div>
 
-      <div class="panel">
-        <h2>Highest hand levels</h2>
-        <div class="scroll"><table id="handlevels"></table></div>
-      </div>
+    <div class="panel">
+      <h2>Highest hand levels</h2>
+      <div class="scroll"><table id="handlevels"></table></div>
+    </div>
 
-      <div class="panel">
-        <h2>Most played hands</h2>
-        <div class="scroll"><table id="handcounts"></table></div>
-      </div>
+    <div class="panel">
+      <h2>Most played hands</h2>
+      <div class="scroll"><table id="handcounts"></table></div>
     </div>
   </section>
 
@@ -370,6 +393,13 @@ const handRank = hand => {
   const i = o.indexOf(hand);
   return i < 0 ? null : o.length - i;
 };
+
+// The Planet card that levels a hand, from the game's own centre data. It
+// gives the hand panels real art, and with it their rows match the joker
+// rows' height instead of sitting at a different rhythm.
+const handCell = h => `<span class="namecell">${
+  sprite((SPR && SPR.hand_planets && SPR.hand_planets[h]) || "", "j", 30)
+  }<span>${esc(h)}</span></span>`;
 
 const nameOf = (key, fallback) =>
   (SPR && SPR.names && SPR.names[key]) || fallback ||
@@ -556,7 +586,7 @@ defineTable("jokers", [
 
 defineTable("hands", [
   { label: "Hand", title: "Sorts by poker-hand strength.",
-    cell: r => esc(r.hand), sort: r => handRank(r.hand) },
+    cell: r => handCell(r.hand), sort: r => handRank(r.hand) },
   { label: "Score", num: true, style: "color:var(--chips);font-weight:700",
     cell: r => fmt(r.value), sort: r => r.ord },
   { label: "Lvl", num: true, cls: "muted",
@@ -568,7 +598,7 @@ defineTable("hands", [
 
 defineTable("handlevels", [
   { label: "Hand", title: "Sorts by poker-hand strength.",
-    cell: r => esc(r.hand), sort: r => handRank(r.hand) },
+    cell: r => handCell(r.hand), sort: r => handRank(r.hand) },
   { label: "Level", num: true, style: "color:var(--green);font-weight:700",
     title: "The highest that hand has ever been levelled, and the run that did it.",
     cell: r => fmt(r.level), sort: r => r.level },
@@ -578,7 +608,7 @@ defineTable("handlevels", [
 
 defineTable("handcounts", [
   { label: "Hand", title: "Sorts by poker-hand strength.",
-    cell: r => esc(r.hand), sort: r => handRank(r.hand) },
+    cell: r => handCell(r.hand), sort: r => handRank(r.hand) },
   { label: "Played", num: true, style: "color:var(--gold);font-weight:700",
     title: "The most times this hand was played within a single run.",
     cell: r => fmt(r.played), sort: r => r.played },
@@ -763,34 +793,70 @@ async function toggleRound(runId, tr) {
 }
 
 // ── wiring ───────────────────────────────────────────────────────────────
-// A single-select row of sprites. Clicking the active one clears back to
-// "All", so there is no separate reset.
-function buildPicker(id, key, items, kind, px) {
-  const el = $("#" + id);
-  el.innerHTML = `<button class="seg" data-v="" aria-pressed="true">All</button>` +
-    items.map(it => {
-      const art = sprite(it.k, kind, px);
-      return `<button class="seg${art ? " icon" : ""}" data-v="${esc(it.k)}"
-        aria-pressed="false" title="${esc(it.n)}">${art || esc(it.n)}</button>`;
-    }).join("");
-  el.onclick = ev => {
-    const b = ev.target.closest("button.seg");
-    if (!b) return;
-    state[key] = state[key] === b.dataset.v ? "" : b.dataset.v;
-    el.querySelectorAll("button.seg").forEach(x =>
-      x.setAttribute("aria-pressed", x.dataset.v === state[key]));
-    refresh();
-  };
+// A dropdown that shows each option's own art. Options are real buttons so
+// Tab and Enter work; a native <select> cannot carry an image, and a row of
+// buttons per deck stops fitting once every deck is in play.
+function buildPicker(id, key, items, kind, px, allLabel) {
+  const root = $("#" + id);
+  const opts = [{ k: "", n: allLabel }].concat(items);
+  const face = it => (it.k ? sprite(it.k, kind, px) || "" : "") +
+    `<span>${esc(it.n)}</span>`;
+
+  function render() {
+    const cur = opts.find(o => o.k === state[key]) || opts[0];
+    root.innerHTML =
+      `<button class="seg" aria-haspopup="listbox" aria-expanded="false"
+        >${face(cur)}<span class="caret">▾</span></button>` +
+      `<div class="menu" role="listbox">` +
+      opts.map((o, i) => `<button role="option" data-i="${i}"
+        aria-selected="${o.k === state[key]}">${face(o)}</button>`).join("") +
+      `</div>`;
+
+    const btn = root.firstElementChild;
+    const close = () => {
+      root.classList.remove("open");
+      btn.setAttribute("aria-expanded", "false");
+    };
+    btn.onclick = ev => {
+      ev.stopPropagation();
+      const open = !root.classList.contains("open");
+      // Only one menu open at a time.
+      document.querySelectorAll(".pick.open").forEach(o => {
+        o.classList.remove("open");
+        o.firstElementChild.setAttribute("aria-expanded", "false");
+      });
+      root.classList.toggle("open", open);
+      btn.setAttribute("aria-expanded", open);
+    };
+    root.querySelector(".menu").onclick = ev => {
+      const b = ev.target.closest("button[role=option]");
+      if (!b) return;
+      ev.stopPropagation();
+      state[key] = opts[+b.dataset.i].k;
+      close();
+      render();
+      refresh();
+    };
+    root.onkeydown = ev => { if (ev.key === "Escape") { close(); btn.focus(); } };
+  }
+  render();
 }
 
-// Sprites must be loaded first or every button falls back to text.
+document.addEventListener("click", () => {
+  document.querySelectorAll(".pick.open").forEach(o => {
+    o.classList.remove("open");
+    o.firstElementChild.setAttribute("aria-expanded", "false");
+  });
+});
+
+// Sprites must be loaded first or every option falls back to text.
 Promise.all([
   fetch("/api/meta").then(r => r.json()),
   SPR_READY,
 ]).then(([m]) => {
-  buildPicker("deck", "deck", m.decks, "b", 26);
+  buildPicker("deck", "deck", m.decks, "b", 26, "All decks");
   buildPicker("stake", "stake",
-    m.stakes.map(s => ({ k: s.k, n: nameOf(s.k) })), "s", 24);
+    m.stakes.map(x => ({ k: x.k, n: nameOf(x.k) })), "s", 22, "All stakes");
 });
 
 $("#noplasma").onclick = e => {
