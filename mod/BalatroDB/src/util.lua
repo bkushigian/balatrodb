@@ -38,6 +38,19 @@ local function log10(x)
     return math.log(x) / LOG10
 end
 
+--- The ordering key: sign(x) * log10(1 + |x|).
+---
+--- It has to be exactly the transform the ingester applies to ordinary
+--- numbers, because wrapped and unwrapped values are sorted against each
+--- other. A bare log10(|x|) is not interchangeable with it: for |x| < 1 it is
+--- negative, so a small positive number sorted below zero and below every
+--- negative one.
+local function ord(x)
+    local a = x < 0 and -x or x
+    local l = log10(1 + a)
+    return x < 0 and -l or l
+end
+
 --- Pull an exact string and a log10 out of a Talisman-style big number.
 --- Their __tostring yields a numeral like "1.234e+567"; anything we cannot
 --- parse still keeps its exact text and simply sorts last.
@@ -50,6 +63,13 @@ local function from_big_table(v)
         return n
     end
 
+    -- Representable as a double, just not by %.14g: the exact key applies.
+    if n and n == n and n ~= math.huge and n ~= -math.huge then
+        return big(s, ord(n))
+    end
+
+    -- Beyond a double (Talisman territory). Only the exponent is available,
+    -- and at that magnitude log10(1 + x) and log10(x) are indistinguishable.
     local mant, exp = s:match('^(%-?[%d%.]+)[eE]%+?(%-?%d+)$')
     if mant and exp then
         local m, e = tonumber(mant), tonumber(exp)
@@ -72,9 +92,7 @@ function util.num(v)
         if v == math.huge then return big('inf', 1e308) end
         if v == -math.huge then return big('-inf', -1e308) end
         if not round_trips(v) then
-            local a = v < 0 and -v or v
-            local l = log10(a)
-            return big(string.format('%.17g', v), v < 0 and -l or l)
+            return big(string.format('%.17g', v), ord(v))
         end
         return v
     end

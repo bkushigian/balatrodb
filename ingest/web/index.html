@@ -248,6 +248,12 @@ tr.detail > td { padding: 0; border-top: 0; }
 
 <script>
 const $ = s => document.querySelector(s);
+
+// Everything rendered here came out of a log file, and a log can carry a
+// modded deck or joker name verbatim. These strings go into innerHTML, so they
+// are escaped at the point of interpolation rather than trusted.
+const esc = v => String(v ?? "").replace(/[&<>"']/g,
+  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 // Two independent toggles rather than three exclusive options. Both on (or
 // both off) means no phase filter at all -- which is what "all runs" should
 // mean, and is not expressible with mutually exclusive buttons.
@@ -288,7 +294,7 @@ function sprite(key, kind, px) {
   const s = SPR.sprites[key], a = SPR.atlases[s.a];
   if (!a) return "";
   const scale = px / a.cw;
-  return `<span class="spr ${kind}" title="${key}" style="
+  return `<span class="spr ${kind}" title="${esc(key)}" style="
       width:${px}px; height:${(a.ch * scale).toFixed(1)}px;
       background-image:url(assets/${s.a});
       background-size:${(a.w * scale).toFixed(1)}px ${(a.h * scale).toFixed(1)}px;
@@ -296,9 +302,9 @@ function sprite(key, kind, px) {
 }
 
 const deckCell = r => `<span class="deckcell">${sprite(r.deck_key, "b", 26)}
-  <span>${r.deck_name || "—"}</span></span>`;
+  <span>${esc(r.deck_name) || "—"}</span></span>`;
 const stakeCell = r => `<span class="deckcell">${sprite(r.stake_key, "s", 20)}
-  <span class="muted">${(r.stake_key || "").replace("stake_", "") || "—"}</span></span>`;
+  <span class="muted">${esc((r.stake_key || "").replace("stake_", "")) || "—"}</span></span>`;
 const shortRun = r => (r || "").split("-")[1] || r;
 
 const qs = () => {
@@ -339,26 +345,26 @@ async function refresh() {
      <div class="n">${n}</div></div>`).join("");
 
   $("#jokers tbody").innerHTML = jok.length ? jok.map(j => `
-    <tr class="clickable" onclick="openRun('${j.run_id}')">
+    <tr class="clickable" onclick="openRun('${esc(j.run_id}')">
       <td><span class="namecell">${sprite(j.key, "j", 30)}
-          <span>${shortKey(j.key)}</span></span></td>
-      <td class="muted">${j.field}</td>
+          <span>${esc(shortKey(j.key))}</span></span></td>
+      <td class="muted">${esc(j.field)}</td>
       <td class="num" style="color:var(--mult);font-weight:700">${fmt(j.value)}</td>
       <td>${deckCell(j)}</td><td>${stakeCell(j)}</td></tr>`).join("")
     : `<tr><td colspan="5" class="empty">No scaling jokers recorded yet.</td></tr>`;
 
   $("#derived tbody").innerHTML = der.length ? der.map(d => `
-    <tr class="clickable" onclick="openRun('${d.run_id}')">
+    <tr class="clickable" onclick="openRun('${esc(d.run_id}')">
       <td><span class="namecell">${sprite(d.joker_key, "j", 30)}
-          <span>${d.joker}<br><span class="sub2">${d.what}</span></span></span></td>
+          <span>${esc(d.joker)}<br><span class="sub2">${esc(d.what)}</span></span></span></td>
       <td class="num" style="color:var(--green);font-weight:700">${fmt(d.value)}</td>
       <td>${deckCell(d)}</td><td>${stakeCell(d)}</td></tr>`).join("")
     : `<tr><td colspan="4" class="empty">Nothing yet.</td></tr>`;
 
   const lvl = Object.fromEntries(hands.levels.map(l => [l.hand, l.level]));
   $("#hands tbody").innerHTML = hands.best.length ? hands.best.map(h => `
-    <tr class="clickable" onclick="openRun('${h.run_id}')">
-      <td>${h.hand}</td>
+    <tr class="clickable" onclick="openRun('${esc(h.run_id}')">
+      <td>${esc(h.hand)}</td>
       <td class="num" style="color:var(--chips);font-weight:700">${fmt(h.value)}</td>
       <td class="num muted">${h.level ?? "—"}</td>
       <td class="num muted">${lvl[h.hand] ?? "—"}</td>
@@ -373,7 +379,7 @@ async function refresh() {
     : `<div class="empty">No completed runs yet.</div>`;
 
   $("#runs tbody").innerHTML = runs.length ? runs.map(r => `
-    <tr class="clickable" onclick="openRun('${r.run_id}')">
+    <tr class="clickable" onclick="openRun('${esc(r.run_id}')">
       <td class="muted">${ago(r.started_ts)}</td>
       <td>${deckCell(r)}</td>
       <td>${stakeCell(r)}</td>
@@ -383,7 +389,7 @@ async function refresh() {
       <td class="num">${r.peak_money !== null ? "$" + fmt(r.peak_money) : "—"}</td>
       <td class="num muted">${r.hands_played ?? "—"}</td>
       <td class="num muted">${r.deck_size ?? "—"}</td>
-      <td class="muted">${r.seed || "—"}${r.seeded ? " ·seeded" : ""}</td></tr>`).join("")
+      <td class="muted">${esc(r.seed) || "—"}${r.seeded ? " ·seeded" : ""}</td></tr>`).join("")
     : `<tr><td colspan="10" class="empty">No runs match these filters.</td></tr>`;
 }
 
@@ -392,27 +398,27 @@ async function openRun(id) {
   const d = await fetch("/api/run?id=" + encodeURIComponent(id)).then(r => r.json());
   if (!d.run) return;
   const r = d.run;
-  $("#dtitle").innerHTML = `${r.deck_name || "?"} · ${(r.stake_key || "").replace("stake_", "")}
+  $("#dtitle").innerHTML = `${esc(r.deck_name) || "?"} · ${esc((r.stake_key || "").replace("stake_", ""))}
     ${resultChip(r)} ${r.went_endless ? '<span class="chip endless">ENDLESS</span>' : ""}`;
   const rounds = d.rounds.map(x => `
     <tr class="roundrow clickable" data-round="${x.round_seq}">
       <td class="num">${x.round_seq}</td>
-      <td class="num">${x.ante ?? "—"}</td><td>${x.blind_name || "—"}</td>
+      <td class="num">${x.ante ?? "—"}</td><td>${esc(x.blind_name) || "—"}</td>
       <td class="num">${fmt(x.required_txt)}</td><td class="num">${fmt(x.score_txt)}</td>
       <td class="num">${x.cashout_total !== null ? "$" + x.cashout_total : "—"}</td>
       <td class="num muted">${x.deck_size ?? "—"}</td>
       <td>${x.endless ? '<span class="chip endless">ENDLESS</span>' : ""}</td></tr>
     <tr class="detail" data-for="${x.round_seq}" hidden><td colspan="8"></td></tr>`).join("");
-  const jok = d.jokers.map(j => `<tr><td>${shortKey(j.key)}</td><td class="muted">${j.field}</td>
+  const jok = d.jokers.map(j => `<tr><td>${shortKey(j.key)}</td><td class="muted">${esc(j.field)}</td>
     <td class="num" style="color:var(--mult)">${fmt(j.peak)}</td></tr>`).join("");
   $("#dbody").innerHTML = `
     <h3>Run</h3>
-    <div class="muted">seed ${r.seed || "?"} · ${r.hands_played ?? "?"} hands ·
+    <div class="muted">seed ${esc(r.seed) || "?"} · ${r.hands_played ?? "?"} hands ·
       ended ante ${r.ended_ante ?? "?"} · $${r.final_dollars ?? "?"} ·
       ${d.segments.length} session${d.segments.length === 1 ? "" : "s"} ·
-      log <code>${r.log_file}</code></div>
+      log <code>${esc(r.log_file)}</code></div>
     ${d.defects.length ? `<div class="warn" style="margin-top:8px">⚠ capture defects:
-      ${d.defects.map(x => x.defect).join(", ")} — figures from this run may not be
+      ${d.defects.map(x => esc(x.defect)).join(", ")} — figures from this run may not be
       comparable with newer ones.</div>` : ""}
     <h3>Rounds</h3>
     <div class="scroll"><table><thead><tr><th>#</th><th>Ante</th><th>Blind</th>
@@ -469,7 +475,7 @@ async function toggleRound(runId, tr) {
     }
     if (s.kind === "play") {
       return jrow + `<div class="step play">
-        <span class="what">${s.hand || "hand"}${s.level ? ` <span class="jv">lvl ${s.level}</span>` : ""}</span>
+        <span class="what">${esc(s.hand) || "hand"}${s.level ? ` <span class="jv">lvl ${s.level}</span>` : ""}</span>
         <span class="hand">${cards}</span>
         <span class="score"><b>+${fmt(s.score_txt)}</b><br>
           <span>${fmt(s.total_after)} total</span></span></div>`;
@@ -484,102 +490,18 @@ async function toggleRound(runId, tr) {
 // ── wiring ───────────────────────────────────────────────────────────────
 fetch("/api/meta").then(r => r.json()).then(m => {
   $("#deck").innerHTML = '<option value="">All decks</option>' +
-    m.decks.map(d => `<option value="${d.k}">${d.n}</option>`).join("");
+    m.decks.map(d => `<option value="${esc(d.k)}">${esc(d.n)}</option>`).join("");
   $("#stake").innerHTML = '<option value="">All stakes</option>' +
-    m.stakes.map(s => `<option value="${s.k}">${s.k.replace("stake_", "")}</option>`).join("");
+    m.stakes.map(s => `<option value="${esc(s.k)}">${esc(s.k.replace("stake_", ""))}</option>`).join("");
 });
-$("#deck").onchange = e => { state.deck = e.target.value; refresh();
-
-// The server watches the log directory and folds in whatever changes, so a run
-// finished in Balatro shows up here on its own. Poll a counter rather than the
-// data: it is one tiny query, and re-rendering only on a real change avoids
-// yanking the page out from under someone mid-read.
-let seenGeneration = null;
-setInterval(async () => {
-  if (document.hidden) return;
-  try {
-    const v = await fetch("/api/version").then(r => r.json());
-    if (seenGeneration === null) { seenGeneration = v.generation; return; }
-    if (v.generation !== seenGeneration) {
-      seenGeneration = v.generation;
-      await refresh();
-      const sub = $("#sub");
-      sub.classList.remove("fresh");
-      void sub.offsetWidth;          // restart the animation
-      sub.classList.add("fresh");
-    }
-  } catch { /* server gone; keep showing what we have */ }
-}, 3000); };
-$("#stake").onchange = e => { state.stake = e.target.value; refresh();
-
-// The server watches the log directory and folds in whatever changes, so a run
-// finished in Balatro shows up here on its own. Poll a counter rather than the
-// data: it is one tiny query, and re-rendering only on a real change avoids
-// yanking the page out from under someone mid-read.
-let seenGeneration = null;
-setInterval(async () => {
-  if (document.hidden) return;
-  try {
-    const v = await fetch("/api/version").then(r => r.json());
-    if (seenGeneration === null) { seenGeneration = v.generation; return; }
-    if (v.generation !== seenGeneration) {
-      seenGeneration = v.generation;
-      await refresh();
-      const sub = $("#sub");
-      sub.classList.remove("fresh");
-      void sub.offsetWidth;          // restart the animation
-      sub.classList.add("fresh");
-    }
-  } catch { /* server gone; keep showing what we have */ }
-}, 3000); };
-$("#sort").onchange = e => { state.sort = e.target.value; refresh();
-
-// The server watches the log directory and folds in whatever changes, so a run
-// finished in Balatro shows up here on its own. Poll a counter rather than the
-// data: it is one tiny query, and re-rendering only on a real change avoids
-// yanking the page out from under someone mid-read.
-let seenGeneration = null;
-setInterval(async () => {
-  if (document.hidden) return;
-  try {
-    const v = await fetch("/api/version").then(r => r.json());
-    if (seenGeneration === null) { seenGeneration = v.generation; return; }
-    if (v.generation !== seenGeneration) {
-      seenGeneration = v.generation;
-      await refresh();
-      const sub = $("#sub");
-      sub.classList.remove("fresh");
-      void sub.offsetWidth;          // restart the animation
-      sub.classList.add("fresh");
-    }
-  } catch { /* server gone; keep showing what we have */ }
-}, 3000); };
+$("#deck").onchange = e => { state.deck = e.target.value; refresh(); };
+$("#stake").onchange = e => { state.stake = e.target.value; refresh(); };
+$("#sort").onchange = e => { state.sort = e.target.value; refresh(); };
 $("#phase").onclick = e => {
   const b = e.target.closest("button.seg"); if (!b) return;
   phase[b.dataset.v] = !phase[b.dataset.v];
   b.setAttribute("aria-pressed", phase[b.dataset.v]);
   syncPhase(); refresh();
-
-// The server watches the log directory and folds in whatever changes, so a run
-// finished in Balatro shows up here on its own. Poll a counter rather than the
-// data: it is one tiny query, and re-rendering only on a real change avoids
-// yanking the page out from under someone mid-read.
-let seenGeneration = null;
-setInterval(async () => {
-  if (document.hidden) return;
-  try {
-    const v = await fetch("/api/version").then(r => r.json());
-    if (seenGeneration === null) { seenGeneration = v.generation; return; }
-    if (v.generation !== seenGeneration) {
-      seenGeneration = v.generation;
-      await refresh();
-      const sub = $("#sub");
-      sub.classList.remove("fresh");
-      void sub.offsetWidth;          // restart the animation
-      sub.classList.add("fresh");
-    }
-  } catch { /* server gone; keep showing what we have */ }
-}, 3000);
 };
 syncPhase();
 
@@ -606,6 +528,10 @@ refresh().then(openFromHash);
 // finished in Balatro shows up here on its own. Poll a counter rather than the
 // data: it is one tiny query, and re-rendering only on a real change avoids
 // yanking the page out from under someone mid-read.
+//
+// Exactly one timer, at page scope. An earlier version had this block pasted
+// into each filter handler as well, so every filter change started another
+// permanent poller.
 let seenGeneration = null;
 setInterval(async () => {
   if (document.hidden) return;

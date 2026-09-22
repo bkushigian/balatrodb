@@ -78,6 +78,34 @@ check("negatives order correctly",
 # work in SQL, so it must be present and numeric wherever a value is ordered.
 check("l is numeric, not text", isinstance(big['l'], float))
 
+# The ordering key must be the SAME transform the ingester applies to ordinary
+# numbers -- sign(x)*log10(1+|x|) -- because wrapped and unwrapped values are
+# sorted against each other. A bare log10(|x|) is not interchangeable: below 1
+# it goes negative, so a small POSITIVE number sorted beneath zero and beneath
+# every negative one. That shipped, and only a live review caught it.
+import math as _m
+ordref = lambda x: (-1 if x < 0 else 1) * _m.log10(1 + abs(x))
+for v, label in [(0.123456789012345, "small positive"),
+                 (-0.123456789012345, "small negative"),
+                 (123456789012345.0, "large positive"),
+                 (-123456789012345.0, "large negative")]:
+    w = num(L.eval(repr(v)))
+    if isinstance(w, float):
+        check(f"{label}: round-trips, no key needed", True)
+        continue
+    check(f"{label}: sign of ordering key matches the value",
+          (w['l'] < 0) == (v < 0), f"value {v} -> l {w['l']!r}")
+    check(f"{label}: ordering key matches the ingester's transform",
+          abs(w['l'] - ordref(v)) < 1e-9, f"got {w['l']!r} want {ordref(v)!r}")
+
+# and the ordering itself must hold across the wrapped/plain boundary
+seq = [-123456789012345.0, -0.123456789012345, 0.123456789012345, 123456789012345.0]
+keys = []
+for v in seq:
+    w = num(L.eval(repr(v)))
+    keys.append(w if isinstance(w, float) else w['l'])
+check("wrapped values sort in value order", keys == sorted(keys), f"got {keys}")
+
 print("\nutil.num -- Talisman-style big numbers")
 # A big-number table whose value fits a double AND round-trips unwraps to a
 # plain number -- it is then natively sortable and summable in SQL.

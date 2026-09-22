@@ -259,7 +259,7 @@ is the only way to derive Stone Joker, Hiker and max deck size.
 | Event | Payload |
 |---|---|
 | `hand.play` | `cards`, `hand`, `level`, `score`, `blind_chips`, `chips_before`, `oneshot`, `hands_left_before`, `discards_left_before`, `jokers` |
-| `hand.discard` | `cards`, `discards_left_before` |
+| `hand.discard` | `cards`, `discards_left_before`, `forced?` |
 | `hand.levelup` | `hand`, `from`, `to`, `amount` |
 
 `hand` is `G.GAME.last_hand_played`, the **internal key** set synchronously at
@@ -297,9 +297,10 @@ deltas here is exact; shop events deliberately carry no `dollars_after`.
 | `joker.add` / `card.add` / `consumable.add` / `voucher.add` | `card`, `area` |
 | `joker.remove` / `card.remove` / `consumable.remove` / `voucher.remove` | `card`, `reason` (`sold` \| `destroyed`) |
 | `card.modify` | `from`, `to`, `what` (`ability` \| `seal`) |
-| `consumable.use` | `card`, `targets` |
-| `pack.open` | `card`, `targets` |
-| `voucher.redeem` | `card`, `targets` |
+| `consumable.use` | `card`, `targets`, `set` |
+| `pack.open` | `card`, `targets`, `set` |
+| `pack.pick` | `card`, `targets`, `set` — taken out of a booster |
+| `voucher.redeem` | `card`, `targets`, `set` |
 
 **`joker.scale` carries most of the per-joker stat list.** Steamodded's
 `lovely/scaling.toml` rewrites the vanilla scaling jokers to call
@@ -312,8 +313,27 @@ Ownership is resolved rather than taken from the first argument: Madness passes
 (`card.lua:2901`), so a copied Madness would otherwise be logged against the
 Blueprint.
 
-`consumable.use`, `pack.open` and `voucher.redeem` are the same game function
-(`G.FUNCS.use_card`) split by the card's `set`.
+`consumable.use`, `pack.open`, `pack.pick` and `voucher.redeem` are all the
+same game function, `G.FUNCS.use_card`, split apart afterwards. **Taking a
+joker or a playing card out of a booster goes through it too**, which is why
+`pack.pick` exists — it is told apart by the card's area, the way the game
+itself does it (`button_callbacks.lua:2214`). Without that split, a joker
+picked from a pack was recorded as a consumable use.
+
+The event is only emitted when the function actually returns `true`. Its
+rejection branch returns *nothing* rather than `false`
+(`button_callbacks.lua:2187`), so a refused use — Ankh with no joker room —
+previously logged as a successful one.
+
+**`hand.discard` carries `forced: true`** when The Hook discarded for you
+(`blind.lua:526` calls the same function with `hook = true`). It is not a
+decision and does not spend one of your discards.
+
+**Ownership is tracked by the mod, not by `added_to_deck`.** The game clears
+that flag while a joker is debuffed and restores it afterwards
+(`card.lua:690-728`), so reading it directly logged a fresh acquisition on
+every Crimson Heart tick and lost the removal of any joker sold while
+debuffed.
 
 Adds and removes hook `Card:add_to_deck` (`card.lua:748`) and `Card:remove`
 (`card.lua:5169`), the universal funnels. Three earlier choices were wrong and

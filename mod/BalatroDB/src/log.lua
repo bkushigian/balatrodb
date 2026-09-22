@@ -88,7 +88,15 @@ end
 
 function log.close()
     log.flush()
-    path = nil
+    -- Only let go of the path if everything actually reached disk. Clearing it
+    -- after a failed flush strands the retry buffer: the next log.open resets
+    -- it, and those events are gone for good.
+    if #buffer == 0 then
+        path = nil
+    else
+        sendWarnMessage('closing with ' .. tostring(buffer_bytes) ..
+                        ' bytes unwritten; will retry on the next flush', 'BalatroDB')
+    end
 end
 
 --- Emit one event. Never raises: a failure to encode costs one line.

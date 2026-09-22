@@ -171,10 +171,20 @@ class Ingester:
             return 0, False
         run_id = events[0].get("run") or os.path.basename(path)
 
-        self.purge(run_id)
-        self.derive(run_id, os.path.basename(path), st.st_size, events, bad)
-        self.db.execute("INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?)",
-                        (path, run_id, st.st_size, st.st_mtime, sig, time.time()))
+        # Purge and re-derive as one unit. Without the savepoint a failure
+        # midway leaves the run purged and half rebuilt, and a later successful
+        # file commits that wreckage along with itself.
+        self.db.execute("SAVEPOINT run_rebuild")
+        try:
+            self.purge(run_id)
+            self.derive(run_id, os.path.basename(path), st.st_size, events, bad)
+            self.db.execute("INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?)",
+                            (path, run_id, st.st_size, st.st_mtime, sig, time.time()))
+        except Exception:
+            self.db.execute("ROLLBACK TO run_rebuild")
+            self.db.execute("RELEASE run_rebuild")
+            raise
+        self.db.execute("RELEASE run_rebuild")
         return len(events), True
 
     def purge(self, run_id):
@@ -197,7 +207,11 @@ class Ingester:
         if legacy:
             defects.add("legacy_no_baseline")
             defects.add("consumables_as_cards")
-        if "card.modify" not in kinds:
+        # Absence of card.modify is NOT evidence of a defect: a run in which
+        # nothing was ever enhanced legitimately has none. Only flag it for
+        # builds that predate the event, which are exactly the ones without a
+        # baseline.
+        if legacy and "card.modify" not in kinds:
             defects.add("no_card_modify")
 
         seg_lines, seg_max_n = {}, {}
@@ -459,7 +473,10 @@ class Ingester:
         for c in deck:
             if not isinstance(c, dict):
                 continue
-            if c.get("enhancement") == "Stone":
+            # The enhancement is named "Stone Card", not "Stone" -- the
+            # earlier comparison never matched, so deck_stone was always 0
+            # and Stone Joker was unreconstructable.
+            if (c.get("enhancement") or "").startswith("Stone"):
                 stone += 1
             stt = c.get("state")
             if isinstance(stt, dict):
@@ -572,14 +589,6 @@ def main():
         changed += 1 if did else 0
     ing.derive_counters()
     db.commit()
-
-    stats = os.path.join(HERE, "stats.sql")
-    if os.path.exists(stats):
-        try:
-            db.executescript(open(stats, encoding="utf-8").read())
-            db.commit()
-        except sqlite3.Error as ex:
-            print(f"warning: stats.sql not installed: {ex}")
 
     print(f"{len(files)} logs, {changed} re-derived, {total} events -> {a.db}")
     if a.report:

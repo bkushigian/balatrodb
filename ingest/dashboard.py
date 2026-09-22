@@ -140,8 +140,13 @@ def api_meta(db, q):
 def api_summary(db, q):
     w, p = where(q)
     total = db.execute(f"SELECT COUNT(*) FROM runs r WHERE 1=1{w}", p).fetchone()[0]
-    won = db.execute(f"SELECT COUNT(*) FROM runs r WHERE r.won=1{w}", p).fetchone()[0]
+    # Both sides must agree on the population. Counting wins over ALL runs
+    # while dividing by terminal runs inflated the rate: two corpus runs are
+    # won but suspended, which made 3/10 read as 50%.
+    won = db.execute(
+        f"SELECT COUNT(*) FROM runs r WHERE r.won=1 AND r.terminal=1{w}", p).fetchone()[0]
     term = db.execute(f"SELECT COUNT(*) FROM runs r WHERE r.terminal=1{w}", p).fetchone()[0]
+    won_any = db.execute(f"SELECT COUNT(*) FROM runs r WHERE r.won=1{w}", p).fetchone()[0]
 
     ew, ep = where(q, endless_col="h.endless")
     best = db.execute(
@@ -167,7 +172,7 @@ def api_summary(db, q):
 
     return {
         "runs": total,
-        "won": won,
+        "won": won_any,
         "terminal": term,
         "win_pct": round(100.0 * won / term, 1) if term else None,
         "best_hand": best["v"] if best else None,
@@ -184,7 +189,10 @@ def api_runs(db, q):
     w, p = where(q)
     sort = {
         "recent": "r.started_ts DESC",
-        "score": "r.best_hand_ord DESC NULLS LAST",
+        # Sort by the same thing the column displays. best_hand_ord is only
+        # set on terminal runs, so sorting by it buried a 221,539 hand beneath
+        # runs showing 348.
+        "score": "(SELECT MAX(score_ord) FROM hands h WHERE h.run_id = r.run_id) DESC",
         "ante": "COALESCE(r.furthest_ante, r.ended_ante) DESC",
         "money": "r.final_dollars DESC",
         "hands": "r.hands_played DESC",
@@ -416,7 +424,11 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         if u.path in ROUTES:
             try:
-                data = ROUTES[u.path](self.db, qdict(u.query))
+                # Share the sync lock: the watcher purges and rebuilds a run on
+                # this same connection, and a read landing in that window sees
+                # the run missing entirely.
+                with _sync_lock:
+                    data = ROUTES[u.path](self.db, qdict(u.query))
                 self.send_bytes(json.dumps(data).encode(), "application/json")
             except Exception as ex:
                 self.send_bytes(json.dumps({"error": str(ex)}).encode(),

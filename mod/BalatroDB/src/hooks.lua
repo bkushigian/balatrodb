@@ -437,16 +437,21 @@ end, function(_, _, pre)
 end)
 
 -- state_events.lua:389
-util.hook_around(G.FUNCS, 'discard_cards_from_highlighted', function()
+util.hook_around(G.FUNCS, 'discard_cards_from_highlighted', function(args)
     local round = (G.GAME or {}).current_round or {}
     return {
         cards = util.cards(G.hand and G.hand.highlighted),
         discards_left_before = round.discards_left,
+        -- The Hook discards for you, through this same function with
+        -- hook = true (blind.lua:526). Recorded, but marked: it is not a
+        -- decision, and it does not spend one of your discards.
+        forced = args[2] and true or nil,
     }
 end, function(_, _, pre)
     emit('hand.discard', {
         cards = pre and pre.cards,
         discards_left_before = pre and pre.discards_left_before,
+        forced = pre and pre.forced,
     })
 end)
 
@@ -660,15 +665,24 @@ util.hook_around(G.FUNCS, 'use_card', function(args)
     return {
         card = util.card(card),
         set = card.ability and card.ability.set,
+        -- Taking a joker or a playing card out of a booster runs through this
+        -- same function, so without this every pack pick was filed as a
+        -- consumable use -- 59 such rows in the existing corpus. The game
+        -- itself distinguishes them by area (button_callbacks.lua:2214).
+        from_pack = (G.pack_cards and card.area == G.pack_cards) or nil,
         targets = util.cards(G.hand and G.hand.highlighted),
     }
 end, function(_, rets, pre)
-    if not pre or rets[1] == false then return end
+    -- The rejection branch returns nothing, not false
+    -- (button_callbacks.lua:2187), so testing only for false logged refused
+    -- uses -- Ankh with no joker room, for instance -- as successful ones.
+    if not pre or rets[1] ~= true then return end
     local set = pre.set
-    local etype = (set == 'Booster' and 'pack.open')
+    local etype = pre.from_pack and 'pack.pick'
+        or (set == 'Booster' and 'pack.open')
         or (set == 'Voucher' and 'voucher.redeem')
         or 'consumable.use'
-    emit(etype, { card = pre.card, targets = pre.targets })
+    emit(etype, { card = pre.card, targets = pre.targets, set = set })
 end)
 
 --------------------------------------------------------------------------
@@ -735,13 +749,21 @@ end, function(args, _, pre)
 end)
 
 util.hook_around(Card, 'add_to_deck', function(args)
-    local card = args[1]
+    local card, from_debuff = args[1], args[2]
     if not card then return nil end
     -- Mid-set_ability: this is the card being put back, not acquired.
     if card.bdb_reapplying then return nil end
+    -- Debuffing a joker calls remove_from_deck(true), and un-debuffing calls
+    -- add_to_deck(true) (card.lua:690-728) -- which clear and restore
+    -- added_to_deck. Without this test every Crimson Heart tick and every
+    -- perishable expiry logged a fresh acquisition; all nine joker.add rows in
+    -- the existing corpus are exactly that.
+    if from_debuff then return nil end
     -- add_to_deck is idempotent via this flag (card.lua:752); only the first
     -- call is a real acquisition.
-    return not card.added_to_deck or nil
+    if card.added_to_deck then return nil end
+    card.bdb_owned = true
+    return true
 end, function(args, _, pre)
     if not pre then return end
     local card = args[1]
@@ -760,11 +782,13 @@ util.hook_around(Card, 'remove', function(args)
     -- them would report every run's entire final deck as destroyed.
     if G.in_delete_run then return nil end
     if card and card.bdb_reapplying then return nil end
-    -- Only cards that were actually part of the run. Screen-wipe cards
-    -- (button_callbacks.lua:3237) and the unlock-overlay card
-    -- (UI_definitions.lua:4524) are real Card objects that dissolve through
-    -- the same path, and would otherwise log as phantom removals.
-    if not (card and card.added_to_deck) then return nil end
+    -- Ownership is tracked separately from added_to_deck, which the game
+    -- clears while a joker is debuffed -- so a joker sold or destroyed while
+    -- debuffed (Crimson Heart, an expired perishable) previously left no
+    -- removal at all. Screen-wipe cards (button_callbacks.lua:3237) and the
+    -- unlock-overlay card (UI_definitions.lua:4524) travel the same path and
+    -- never acquire this flag.
+    if not (card and card.bdb_owned) then return nil end
     return {
         card = util.card(card),
         reason = card.bdb_selling and 'sold' or 'destroyed',

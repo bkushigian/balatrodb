@@ -75,7 +75,13 @@ function state.restore()
     local game = G and G.GAME
     if not (game and game.bdb_run_id) then return false end
     state.run_id = game.bdb_run_id
-    state.seg = (tonumber(game.bdb_seg) or 0) + 1
+    -- A wall-clock stamp, not a counter. A counter derived from the save is
+    -- not unique: resume, quit before the game next saves, resume again, and
+    -- both sessions read the same bdb_seg and claim seg+1. Since (run, seg, n)
+    -- is the ordering key and n restarts at 0, the second session then
+    -- silently overwrites the first. max() keeps it strictly increasing even
+    -- if the clock steps back.
+    state.seg = math.max((tonumber(game.bdb_seg) or 0) + 1, os.time())
     state.endless = game.bdb_endless and true or false
     state.won_pending = game.bdb_won_pending and true or false
     return true

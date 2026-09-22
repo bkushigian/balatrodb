@@ -405,31 +405,30 @@ CREATE INDEX IF NOT EXISTS money_peak ON money(endless, balance DESC);
 
 ## Ingest
 
-Idempotent, resumable, and safe over files that are still growing.
+Idempotent, atomic per run, and safe over files still being appended to.
 
 ```
-for each runs/*.jsonl:
-    row = files[path]
-    if row and row.mtime == mtime and row.bytes_read == size:  skip
-    seek to row.bytes_read (0 if new)
-    read to the last complete newline      # a live run may have a partial line
-    for each line: parse, INSERT OR REPLACE into the projections, run checks
-    files[path] = (size_consumed, mtime, lines, now)
+for each runs/*.jsonl[.gz]:
+    if size+mtime matches what was ingested:  skip
+    read every COMPLETE line          # a live run's last line may be partial
+    SAVEPOINT
+      purge this run's projections
+      re-derive them from the whole log
+      record the file signature
+    RELEASE                            # ROLLBACK on any failure
 ```
 
-Three properties that matter:
+**A whole run is re-derived whenever its log changes.** There is deliberately
+no byte-offset tail resume. An earlier version had one, and three independent
+reviews reproduced the same corruption: the per-run accumulators (round
+numbering especially) lived in memory, so a second process restarted `round_seq`
+at 1 and overwrote earlier rounds. A run is ~300 KB and re-deriving one takes
+milliseconds, so there is nothing to win and a whole bug class to lose.
 
-- **`INSERT OR REPLACE` keyed on `(run_id, seg, n)`** makes re-ingest a no-op
-  rather than a duplication, so a full rebuild and an incremental update are
-  the same code path.
-- **Never consume a partial trailing line.** The mod buffers and flushes on
-  thresholds, so the last line of a live run's file can be truncated. Stop at
-  the last `\n`.
-- **`bytes_read` is the resume point**, so an ingest of 300 runs after playing
-  one costs one file's tail, not 90 MB.
+The savepoint matters for the same reason: purge-then-fail would otherwise
+leave a run deleted and half rebuilt, and the next successful file would commit
+that wreckage along with itself.
 
-A `--rebuild` flag drops the database and re-reads the logs. That is the only
-rebuild path, and it is cheap: 17 MB of gzip for 1000 runs.
 
 ## The statistics
 
@@ -515,7 +514,12 @@ WHERE endless = :endless GROUP BY hand;`
 
 **Max deck size:** `SELECT MAX(deck_size) FROM rounds WHERE endless = :endless;`
 
-**Max money:** `SELECT MAX(before + delta) FROM money WHERE endless = :endless;`
+**Max money:** `SELECT MAX(balance) FROM money WHERE endless = :endless;`
+
+`balance` is a running sum from the baseline. **Do not use `before + delta`:**
+consecutive queued `ease_dollars` calls all report the same pre-value, so that
+form invents peaks that never happened — it reported 135 on a run whose true
+peak was 97.
 
 **Max ante:** `SELECT MAX(furthest_ante) FROM runs;` — the game maintains it,
 and unlike `MAX(ante)` it is immune to the Hieroglyph/Petroglyph vouchers,
@@ -538,7 +542,7 @@ two real capture bugs (consumables logged as deck cards, and tarot
 enhancements logged as card additions).
 
 The checks run in the ingester as it reads each stream, and land in
-`ingest_issues`:
+`run_defects`:
 
 | Check | What it asserts |
 |---|---|
@@ -549,9 +553,15 @@ The checks run in the ingester as it reads each stream, and land in
 | `unterminated` | no `run.end` — a crash, or a run still in progress |
 
 ```sql
-SELECT check_, COUNT(*) FROM ingest_issues GROUP BY check_;
-SELECT * FROM ingest_issues WHERE check_ = 'deck_identity';
+SELECT defect, COUNT(*) FROM run_defects GROUP BY defect;
+SELECT * FROM run_defects WHERE defect = 'deck_identity_fail';
 ```
+
+The format is **sniffed from which events and fields are present**, not from
+`v` or `env.balatrodb`: neither moved while the layout changed three times, so
+presence is the only reliable signal. A defect flag therefore means "this run
+was captured by a build with this known problem", which is what makes old and
+new runs safely distinguishable rather than silently mixed.
 
 The deck identity is not hygiene theatre: it caught two real capture bugs
 (consumables logged as deck cards, and tarot enhancements logged as card

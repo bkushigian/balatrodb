@@ -91,7 +91,7 @@ pip install lupa
 python tests/test_util.py
 ```
 
-56 checks over the parts that are pure logic and easy to get subtly wrong:
+65 checks over the parts that are pure logic and easy to get subtly wrong:
 number coercion at the 1e14 / inf / nan / Talisman boundaries, card
 serialization, and the hook wrapper's contract — return values and arity
 preserved, `false` returns reaching the caller intact, observer errors
@@ -195,7 +195,6 @@ load errors preventing the game from booting.
 
 ### Not yet implemented
 
-- The SQLite ingester and schema
 - `shop.enter` (shop contents on entry)
 - Replay-only decisions: joker/hand reordering, `reroll_boss`, `cash_out`,
   `skip_booster`, `toggle_shop`
