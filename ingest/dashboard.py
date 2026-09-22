@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import math
 import os
 import sqlite3
 import threading
@@ -213,6 +214,40 @@ def api_runs(db, q):
           FROM runs r WHERE 1=1{w} ORDER BY {sort} LIMIT 300""", p)
 
 
+def api_all_jokers(db, q):
+    """Every joker's peak value, however that value is stored.
+
+    Scaling jokers keep it in their own ability; the four counter jokers read
+    a game counter instead and are reconstructed at ingest. That split is an
+    implementation detail of Balatro, not something worth making a reader
+    care about, so the two are merged into one leaderboard here.
+    """
+    out = []
+    for j in api_jokers(db, q):
+        # The ability field a joker scales in ("chips", "mult") is how the
+        # game stores it, not something a reader wants on the row.
+        out.append({"key": j["key"], "value": j["value"], "ord": j["ord"],
+                    "what": None, "run_id": j["run_id"],
+                    "deck_name": j["deck_name"], "deck_key": j["deck_key"],
+                    "stake_key": j["stake_key"]})
+    for d in api_derived(db, q):
+        out.append({"key": d["joker_key"], "value": d["value"],
+                    "ord": ord_of(d["value"]), "what": d["what"],
+                    "run_id": d["run_id"], "deck_name": d["deck_name"],
+                    "deck_key": d["deck_key"], "stake_key": d["stake_key"]})
+    out.sort(key=lambda r: -(r["ord"] or 0))
+    return out
+
+
+def ord_of(v):
+    """Same ordering key the ingester writes, so merged rows sort together."""
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    return math.copysign(math.log10(1 + abs(x)), x)
+
+
 def api_jokers(db, q):
     """Per-joker maxima.
 
@@ -234,7 +269,8 @@ def api_jokers(db, q):
                       PARTITION BY key, field
                       ORDER BY to_ord DESC, CAST(to_txt AS REAL) DESC) rn
             FROM eligible)
-        SELECT key, field, to_txt value, run_id, deck_name, deck_key, stake_key
+        SELECT key, field, to_txt value, to_ord ord, run_id, deck_name,
+               deck_key, stake_key
           FROM ranked WHERE rn = 1 ORDER BY to_ord DESC""", p)
 
 
@@ -288,15 +324,31 @@ def api_hands(db, q):
                             ORDER BY h.score_ord DESC, CAST(h.score_txt AS REAL) DESC) rn
             FROM hands h JOIN runs r USING (run_id)
            WHERE h.hand IS NOT NULL AND h.score_ord IS NOT NULL{w})
-        SELECT hand, score_txt value, level, run_id, deck_name, deck_key, stake_key
+        SELECT hand, score_txt value, score_ord ord, level, run_id, deck_name,
+               deck_key, stake_key
           FROM ranked
          WHERE rn = 1 ORDER BY score_ord DESC""", p)
-    lw, lp = where(q, endless_col="hl.endless")
-    levels = rows(db, f"""
-        SELECT hl.hand, MAX(hl.lvl_to) level FROM hand_levels hl
-          JOIN runs r USING (run_id) WHERE hl.hand IS NOT NULL{lw}
-         GROUP BY hl.hand ORDER BY level DESC""", lp)
-    return {"best": best, "levels": levels}
+    return {"best": best}
+
+
+def api_hand_levels(db, q):
+    """The highest level each hand has ever been taken to, and in which run.
+
+    Separate from best-score because they answer different questions: a hand
+    can be levelled high and never scored well, and the run that did one is
+    rarely the run that did the other.
+    """
+    w, p = where(q, endless_col="hl.endless")
+    return rows(db, f"""
+        WITH ranked AS (
+          SELECT hl.hand, hl.lvl_to level, r.run_id, r.deck_name,
+                 r.deck_key, r.stake_key,
+                 ROW_NUMBER() OVER (PARTITION BY hl.hand
+                                    ORDER BY hl.lvl_to DESC) rn
+            FROM hand_levels hl JOIN runs r USING (run_id)
+           WHERE hl.hand IS NOT NULL AND hl.lvl_to IS NOT NULL{w})
+        SELECT hand, level, run_id, deck_name, deck_key, stake_key
+          FROM ranked WHERE rn = 1 ORDER BY level DESC""", p)
 
 
 def api_antes(db, q):
@@ -464,9 +516,9 @@ ROUTES = {
     "/api/meta": api_meta,
     "/api/summary": api_summary,
     "/api/runs": api_runs,
-    "/api/jokers": api_jokers,
-    "/api/derived": api_derived,
+    "/api/jokers": api_all_jokers,
     "/api/hands": api_hands,
+    "/api/hand_levels": api_hand_levels,
     "/api/antes": api_antes,
     "/api/run": api_run,
 }

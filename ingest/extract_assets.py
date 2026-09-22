@@ -60,6 +60,30 @@ def parse_centers(src: str) -> dict[str, tuple[int, int]]:
     return out
 
 
+def parse_names(z: zipfile.ZipFile) -> dict[str, str]:
+    """key -> display name, from the game's own English localization.
+
+    The logs record keys, not names, and deriving a name from the key gives
+    "ride the bus" and "mail in rebate". The game already has the real strings,
+    so use those rather than inventing a second, worse set.
+    """
+    try:
+        src = z.read("localization/en-us.lua").decode("utf-8", "replace")
+    except KeyError:
+        return {}
+    # `key={ name="..."` -- the name is always the entry's first field.
+    pat = re.compile(r"((?:j|b|c|m|p|v|tag|bl)_[a-z0-9_]+|stake_[a-z]+)\s*=\s*\{"
+                     r"\s*name\s*=\s*\"([^\"]*)\"")
+    out: dict[str, str] = {}
+    for key, name in pat.findall(src):
+        out.setdefault(key, name)
+    # Poker hands are keyed by their English name already, but carry a
+    # localized string; keep the mapping so the dashboard need not guess.
+    for m in re.finditer(r"\['([A-Z][A-Za-z ]+)'\]\s*=\s*\"([^\"]*)\"", src):
+        out.setdefault(m.group(1), m.group(2))
+    return out
+
+
 def atlas_for(key: str) -> tuple[str, int, int] | None:
     if key in ATLAS_OVERRIDES:
         return ATLAS_OVERRIDES[key]
@@ -91,6 +115,7 @@ def main() -> int:
 
     src = z.read("game.lua").decode("utf-8", "replace")
     centers = parse_centers(src)
+    names = parse_names(z)
     sprites = {}
 
     # Playing cards are keyed by suit and rank rather than a centre key, so the
@@ -111,6 +136,7 @@ def main() -> int:
         sprites[key] = {"a": atlas, "x": x, "y": y}
 
     doc = {
+        "names": names,
         "atlases": {n: {"w": w, "h": h,
                         "cw": next(c for a, c, _ in ATLASES.values() if a == n),
                         "ch": next(h2 for a, _, h2 in ATLASES.values() if a == n)}

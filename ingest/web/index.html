@@ -93,6 +93,19 @@ th {
 td { padding: 6px 8px; border-top: 1px solid #2b3536; white-space: nowrap; }
 tbody tr:hover { background: #404d4f; }
 td.num, th.num { text-align: right; }
+th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+th.sortable:hover { color: var(--ink); }
+th.sortable .ind { display: inline-block; width: .8em; color: var(--gold); }
+
+/* The seed, as something you press. It is the one cell people want to take
+   somewhere else, so it copies on click rather than needing a careful drag. */
+.seed { font: inherit; font-size: 11px; letter-spacing: .06em; cursor: pointer;
+        background: var(--sunken); color: var(--ink-dim);
+        border: 1px solid #40525a; border-radius: 999px;
+        padding: 3px 10px; transition: background .12s, color .12s; }
+.seed:hover { background: #40525a; color: var(--ink); }
+.seed.seeded { border-color: var(--gold); color: var(--gold); }
+.seed.copied { background: var(--green); border-color: var(--green); color: #14211f; }
 td.num { font-variant-numeric: tabular-nums; }
 .chip {
   display: inline-block; padding: 1px 7px; border-radius: 99px;
@@ -103,6 +116,7 @@ td.num { font-variant-numeric: tabular-nums; }
 .chip.endless { background: var(--purple); color: #fff; }
 .chip.susp { background: #566264; color: var(--ink-dim); }
 .chip.live { background: var(--green); }
+.chip.other { background: #4a585c; color: var(--ink-dim); }
 .muted { color: var(--ink-mute); }
 /* Sprites are cells of the game's own atlases, positioned with
    background-position. Scaled by background-size so one rule covers any
@@ -242,26 +256,8 @@ tr.detail > td { padding: 0; border-top: 0; }
 
   <section class="cols">
     <div class="panel">
-      <h2 title="Highest value ever reached, from joker.scale events.">Scaling jokers</h2>
-      <div class="scroll"><table id="jokers"><thead><tr>
-        <th>Joker</th><th>Field</th><th class="num">Peak</th><th>Deck</th><th>Stake</th>
-      </tr></thead><tbody></tbody></table></div>
-    </div>
-
-    <div class="panel">
-      <h2 title="These jokers read game counters rather than their own ability, so their value is reconstructed from run history.">Counter jokers</h2>
-      <div class="scroll"><table id="derived"><thead><tr>
-        <th>Joker</th><th class="num">Peak</th><th>Deck</th><th>Stake</th>
-      </tr></thead><tbody></tbody></table></div>
-    </div>
-  </section>
-
-  <section class="cols">
-    <div class="panel">
-      <h2>Best hand by type</h2>
-      <div class="scroll"><table id="hands"><thead><tr>
-        <th>Hand</th><th class="num">Score</th><th class="num">Lvl</th><th class="num">Max</th><th>Deck</th><th>Stake</th>
-      </tr></thead><tbody></tbody></table></div>
+      <h2>Jokers</h2>
+      <div class="scroll"><table id="jokers"></table></div>
     </div>
 
     <div class="panel">
@@ -270,13 +266,21 @@ tr.detail > td { padding: 0; border-top: 0; }
     </div>
   </section>
 
+  <section class="cols">
+    <div class="panel">
+      <h2>Best hand by type</h2>
+      <div class="scroll"><table id="hands"></table></div>
+    </div>
+
+    <div class="panel">
+      <h2>Highest hand levels</h2>
+      <div class="scroll"><table id="handlevels"></table></div>
+    </div>
+  </section>
+
   <section class="panel">
     <h2>Runs</h2>
-    <div class="scroll"><table id="runs"><thead><tr>
-      <th>When</th><th>Deck</th><th>Stake</th><th>Result</th>
-      <th class="num">Ante</th><th class="num">Best hand</th><th class="num">Peak $</th>
-      <th class="num">Hands</th><th class="num">Deck</th><th>Seed</th>
-    </tr></thead><tbody></tbody></table></div>
+    <div class="scroll"><table id="runs"></table></div>
   </section>
 </main>
 
@@ -341,10 +345,123 @@ function sprite(key, kind, px) {
       background-position:-${(s.x * a.cw * scale).toFixed(1)}px -${(s.y * a.ch * scale).toFixed(1)}px"></span>`;
 }
 
-const deckCell = r => `<span class="deckcell">${sprite(r.deck_key, "b", 26)}
-  <span>${esc(r.deck_name) || "—"}</span></span>`;
-const stakeCell = r => `<span class="deckcell">${sprite(r.stake_key, "s", 20)}
-  <span class="muted">${esc((r.stake_key || "").replace("stake_", "")) || "—"}</span></span>`;
+// The game's own display names, from localization/en-us.lua. Without them a
+// key has to be un-snake-cased, which gives "ride the bus" and "mail in
+// rebate" -- and mixed casing against the panels that do have real names.
+const nameOf = (key, fallback) =>
+  (SPR && SPR.names && SPR.names[key]) || fallback ||
+  (key || "").replace(/^(j|b|m|c)_/, "").replace(/_/g, " ");
+
+// Deck and stake are shown as their sprite alone; the name is a hover. The
+// icon is the thing you actually recognise, and the text was repeated down
+// every row of every panel.
+const deckCell = r => r.deck_key
+  ? `<span class="deckcell" title="${esc(nameOf(r.deck_key, r.deck_name))}">${
+      sprite(r.deck_key, "b", 26) ||
+      `<span class="muted">${esc(r.deck_name || r.deck_key)}</span>`}</span>`
+  : `<span class="muted">—</span>`;
+const stakeCell = r => r.stake_key
+  ? `<span class="deckcell" title="${esc(nameOf(r.stake_key))}">${
+      sprite(r.stake_key, "s", 20) ||
+      `<span class="muted">${esc(r.stake_key.replace("stake_", ""))}</span>`}</span>`
+  : `<span class="muted">—</span>`;
+
+// ── sortable tables ──────────────────────────────────────────────────────
+// Each panel declares its columns once: how to render a cell, and what to
+// sort it by. Sorting works on the row objects rather than the rendered DOM,
+// so a big score sorts by its ordering key and not by its digits as text.
+const TBL = {};
+
+function defineTable(id, cols, opts) {
+  const o = opts || {};
+  TBL[id] = { id, cols, rows: [], empty: o.empty || "Nothing yet.",
+              onclick: o.onclick,
+              sort: { i: o.sort === undefined ? null : o.sort, dir: -1 } };
+}
+
+function setRows(id, rows) { TBL[id].rows = rows || []; drawTable(id); }
+
+function sortKey(t, r) {
+  const c = t.cols[t.sort.i];
+  const v = c.sort ? c.sort(r) : null;
+  return v === undefined ? null : v;
+}
+
+function drawTable(id) {
+  const t = TBL[id], el = document.getElementById(id);
+  if (!el) return;
+  const head = t.cols.map((c, i) => {
+    const on = t.sort.i === i;
+    const dir = on ? (t.sort.dir < 0 ? "descending" : "ascending") : "none";
+    return `<th class="${c.num ? "num " : ""}sortable" data-i="${i}"
+      aria-sort="${dir}"${c.title ? ` title="${esc(c.title)}"` : ""}
+      >${esc(c.label)}<span class="ind">${on ? (t.sort.dir < 0 ? "▾" : "▴") : ""}</span></th>`;
+  }).join("");
+
+  let rows = t.rows.slice();
+  if (t.sort.i !== null) {
+    rows.sort((a, b) => {
+      const x = sortKey(t, a), y = sortKey(t, b);
+      // Missing values always sort last, whichever way the column is pointing.
+      if (x === null && y === null) return 0;
+      if (x === null) return 1;
+      if (y === null) return -1;
+      const d = typeof x === "string" || typeof y === "string"
+        ? String(x).localeCompare(String(y)) : (x - y);
+      return d * t.sort.dir;
+    });
+  }
+
+  const body = rows.length ? rows.map(r => {
+    const click = t.onclick ? ` class="clickable" onclick="${t.onclick(r)}"` : "";
+    return `<tr${click}>` + t.cols.map(c =>
+      `<td class="${[c.num ? "num" : "", c.cls || ""].filter(Boolean).join(" ")}"${
+        c.style ? ` style="${c.style}"` : ""}>${c.cell(r)}</td>`).join("") + `</tr>`;
+  }).join("")
+    : `<tr><td colspan="${t.cols.length}" class="empty">${esc(t.empty)}</td></tr>`;
+
+  el.innerHTML = `<thead><tr>${head}</tr></thead><tbody>${body}</tbody>`;
+  el.querySelectorAll("th.sortable").forEach(th => {
+    th.onclick = () => {
+      const i = +th.dataset.i;
+      // First click on a column sorts descending -- for these panels the
+      // interesting end is almost always the top.
+      if (t.sort.i === i) t.sort.dir = -t.sort.dir;
+      else { t.sort.i = i; t.sort.dir = -1; }
+      drawTable(id);
+    };
+  });
+}
+
+// Click to copy, with the seed itself as the confirmation.
+function copySeed(el, seed) {
+  const done = ok => {
+    const was = el.textContent;
+    el.textContent = ok ? "COPIED" : "PRESS ⌘C";
+    el.classList.toggle("copied", ok);
+    setTimeout(() => { el.textContent = was; el.classList.remove("copied"); }, 1100);
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(seed).then(() => done(true), () => done(false));
+    return;
+  }
+  // http://localhost is a secure context in Chrome but not everywhere, so
+  // fall back rather than silently doing nothing.
+  const ta = document.createElement("textarea");
+  ta.value = seed; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+  ta.remove();
+  done(ok);
+}
+
+const seedCell = r => r.seed
+  ? `<button class="seed${r.seeded ? " seeded" : ""}"
+       title="${r.seeded ? "Entered seed — " : ""}Click to copy"
+       onclick="event.stopPropagation();copySeed(this,'${esc(r.seed)}')"
+       >${esc(r.seed)}</button>`
+  : `<span class="muted">—</span>`;
 const shortRun = r => (r || "").split("-")[1] || r;
 
 const qs = () => {
@@ -359,15 +476,82 @@ function resultChip(r) {
   // grows as you play, so this row updates live.
   if (!r.result) return `<span class="chip live">IN PROGRESS</span>`;
   if (r.won) return `<span class="chip win">WON</span>`;
-  if (r.result === "died") return `<span class="chip died">DIED</span>`;
-  if (r.result === "suspended") return `<span class="chip susp">PAUSED</span>`;
-  return `<span class="muted">${r.result || "—"}</span>`;
+  // "loss" is the older spelling of "died"; both appear in the corpus. The
+  // rest are ways a run stopped without being finished, and each gets a chip
+  // rather than leaking the raw field into the table.
+  const CHIP = {
+    died:      ["died", "DIED"],
+    loss:      ["died", "DIED"],
+    suspended: ["susp", "PAUSED"],
+    quit:      ["susp", "QUIT"],
+    new_run:   ["other", "RESTARTED"],
+    completed: ["other", "ENDED"],
+    unknown:   ["other", "UNKNOWN"],
+  }[r.result];
+  return CHIP ? `<span class="chip ${CHIP[0]}">${CHIP[1]}</span>`
+              : `<span class="muted">${esc(r.result)}</span>`;
 }
 
+// ── panel definitions ────────────────────────────────────────────────────
+const openRunJS = r => `openRun('${esc(r.run_id)}')`;
+const jokerCell = r => `<span class="namecell">${sprite(r.key, "j", 30)}
+  <span>${esc(nameOf(r.key))}${r.what
+    ? `<br><span class="sub2">${esc(r.what)}</span>` : ""}</span></span>`;
+
+defineTable("jokers", [
+  { label: "Joker", cell: jokerCell, sort: r => nameOf(r.key) },
+  { label: "Peak", num: true, style: "color:var(--mult);font-weight:700",
+    cell: r => fmt(r.value), sort: r => r.ord },
+  { label: "Deck", cell: deckCell, sort: r => r.deck_name },
+  { label: "Stake", cell: stakeCell, sort: r => r.stake_key },
+], { empty: "No jokers recorded yet.", onclick: openRunJS, sort: 1 });
+
+defineTable("hands", [
+  { label: "Hand", cell: r => esc(r.hand), sort: r => r.hand },
+  { label: "Score", num: true, style: "color:var(--chips);font-weight:700",
+    cell: r => fmt(r.value), sort: r => r.ord },
+  { label: "Lvl", num: true, cls: "muted",
+    title: "The level that hand was at when this score was made.",
+    cell: r => r.level ?? "—", sort: r => r.level },
+  { label: "Deck", cell: deckCell, sort: r => r.deck_name },
+  { label: "Stake", cell: stakeCell, sort: r => r.stake_key },
+], { empty: "No hands recorded yet.", onclick: openRunJS, sort: 1 });
+
+defineTable("handlevels", [
+  { label: "Hand", cell: r => esc(r.hand), sort: r => r.hand },
+  { label: "Level", num: true, style: "color:var(--green);font-weight:700",
+    title: "The highest that hand has ever been levelled, and the run that did it.",
+    cell: r => fmt(r.level), sort: r => r.level },
+  { label: "Deck", cell: deckCell, sort: r => r.deck_name },
+  { label: "Stake", cell: stakeCell, sort: r => r.stake_key },
+], { empty: "No hand levels recorded yet.", onclick: openRunJS, sort: 1 });
+
+defineTable("runs", [
+  { label: "When", cls: "muted", cell: r => ago(r.started_ts),
+    sort: r => r.started_ts },
+  { label: "Deck", cell: deckCell, sort: r => r.deck_name },
+  { label: "Stake", cell: stakeCell, sort: r => r.stake_key },
+  { label: "Result",
+    cell: r => resultChip(r) + (r.went_endless
+      ? ' <span class="chip endless">ENDLESS</span>' : ""),
+    sort: r => r.result || "" },
+  { label: "Ante", num: true, cell: r => r.ante ?? "—", sort: r => r.ante },
+  { label: "Best hand", num: true, cell: r => fmt(r.best_hand),
+    sort: r => r.bh_ord },
+  { label: "Peak $", num: true,
+    cell: r => r.peak_money !== null ? "$" + fmt(r.peak_money) : "—",
+    sort: r => r.peak_money },
+  { label: "Hands", num: true, cls: "muted", cell: r => r.hands_played ?? "—",
+    sort: r => r.hands_played },
+  { label: "Deck size", num: true, cls: "muted", cell: r => r.deck_size ?? "—",
+    sort: r => r.deck_size },
+  { label: "Seed", cell: seedCell, sort: r => r.seed },
+], { empty: "No runs match these filters.", onclick: openRunJS, sort: 0 });
+
 async function refresh() {
-  const [s, jok, der, hands, antes, runs] = await Promise.all([
-    get("/api/summary"), get("/api/jokers"), get("/api/derived"),
-    get("/api/hands"), get("/api/antes"), get("/api/runs"),
+  const [s, jok, hands, levels, antes, runs] = await Promise.all([
+    get("/api/summary"), get("/api/jokers"), get("/api/hands"),
+    get("/api/hand_levels"), get("/api/antes"), get("/api/runs"),
   ]);
 
   $("#sub").textContent =
@@ -384,32 +568,10 @@ async function refresh() {
     `<div class="tile"><div class="k">${k}</div><div class="v ${c}">${v}</div>
      <div class="n">${n}</div></div>`).join("");
 
-  $("#jokers tbody").innerHTML = jok.length ? jok.map(j => `
-    <tr class="clickable" onclick="openRun('${esc(j.run_id)}')">
-      <td><span class="namecell">${sprite(j.key, "j", 30)}
-          <span>${esc(shortKey(j.key))}</span></span></td>
-      <td class="muted">${esc(j.field)}</td>
-      <td class="num" style="color:var(--mult);font-weight:700">${fmt(j.value)}</td>
-      <td>${deckCell(j)}</td><td>${stakeCell(j)}</td></tr>`).join("")
-    : `<tr><td colspan="5" class="empty">No scaling jokers recorded yet.</td></tr>`;
-
-  $("#derived tbody").innerHTML = der.length ? der.map(d => `
-    <tr class="clickable" onclick="openRun('${esc(d.run_id)}')">
-      <td><span class="namecell">${sprite(d.joker_key, "j", 30)}
-          <span>${esc(d.joker)}<br><span class="sub2">${esc(d.what)}</span></span></span></td>
-      <td class="num" style="color:var(--green);font-weight:700">${fmt(d.value)}</td>
-      <td>${deckCell(d)}</td><td>${stakeCell(d)}</td></tr>`).join("")
-    : `<tr><td colspan="4" class="empty">Nothing yet.</td></tr>`;
-
-  const lvl = Object.fromEntries(hands.levels.map(l => [l.hand, l.level]));
-  $("#hands tbody").innerHTML = hands.best.length ? hands.best.map(h => `
-    <tr class="clickable" onclick="openRun('${esc(h.run_id)}')">
-      <td>${esc(h.hand)}</td>
-      <td class="num" style="color:var(--chips);font-weight:700">${fmt(h.value)}</td>
-      <td class="num muted">${h.level ?? "—"}</td>
-      <td class="num muted">${lvl[h.hand] ?? "—"}</td>
-      <td>${deckCell(h)}</td><td>${stakeCell(h)}</td></tr>`).join("")
-    : `<tr><td colspan="6" class="empty">No hands recorded yet.</td></tr>`;
+  setRows("jokers", jok);
+  setRows("hands", hands.best);
+  setRows("handlevels", levels);
+  setRows("runs", runs);
 
   const max = Math.max(1, ...antes.map(a => a.n));
   $("#antes").innerHTML = antes.length ? antes.map(a => `
@@ -417,20 +579,6 @@ async function refresh() {
       <span class="track"><span class="fill" style="width:${(a.n / max * 100).toFixed(1)}%"></span></span>
       <span class="cnt">${a.n}</span></div>`).join("")
     : `<div class="empty">No completed runs yet.</div>`;
-
-  $("#runs tbody").innerHTML = runs.length ? runs.map(r => `
-    <tr class="clickable" onclick="openRun('${esc(r.run_id)}')">
-      <td class="muted">${ago(r.started_ts)}</td>
-      <td>${deckCell(r)}</td>
-      <td>${stakeCell(r)}</td>
-      <td>${resultChip(r)}${r.went_endless ? ' <span class="chip endless">ENDLESS</span>' : ""}</td>
-      <td class="num">${r.ante ?? "—"}</td>
-      <td class="num">${fmt(r.best_hand)}</td>
-      <td class="num">${r.peak_money !== null ? "$" + fmt(r.peak_money) : "—"}</td>
-      <td class="num muted">${r.hands_played ?? "—"}</td>
-      <td class="num muted">${r.deck_size ?? "—"}</td>
-      <td class="muted">${esc(r.seed) || "—"}${r.seeded ? " ·seeded" : ""}</td></tr>`).join("")
-    : `<tr><td colspan="10" class="empty">No runs match these filters.</td></tr>`;
 }
 
 async function openRun(id) {
