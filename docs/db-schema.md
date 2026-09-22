@@ -208,6 +208,12 @@ CREATE TABLE IF NOT EXISTS rounds (
   is_boss    INTEGER,
   reward     INTEGER,
   endless    INTEGER NOT NULL,
+  -- Event sequence of round.start. Money events carry no round, so this is
+  -- what bounds a round's window: ease_dollars is called synchronously inside
+  -- evaluate_play, whose AFTER hook emits hand.play, so a hand's money lands
+  -- at a LOWER n than the hand itself. Attributing money to the next action
+  -- needs a floor, and this is it.
+  start_n    INTEGER,
   required_ord REAL, required_num REAL, required_txt TEXT,
   score_ord    REAL, score_num    REAL, score_txt    TEXT,
   cashout_total INTEGER,
@@ -249,6 +255,10 @@ CREATE TABLE IF NOT EXISTS hands (
   chips_before_ord REAL, chips_before_num REAL, chips_before_txt TEXT,
   hands_left_before INTEGER,
   discards_left_before INTEGER,
+  -- Engine clock (love.timer) at the moment the event was emitted.
+  -- Money is attributed to an action by comparing these: a play's
+  -- money resolves in the SAME frame, a discard's a beat later.
+  t         REAL,
   PRIMARY KEY (run_id, seg, n)
 );
 CREATE INDEX IF NOT EXISTS hands_round ON hands(run_id, round_seq);
@@ -264,6 +274,10 @@ CREATE TABLE IF NOT EXISTS discards (
   ante      INTEGER,
   endless   INTEGER NOT NULL,
   cards     INTEGER,
+  -- Engine clock (love.timer) at the moment the event was emitted.
+  -- Money is attributed to an action by comparing these: a play's
+  -- money resolves in the SAME frame, a discard's a beat later.
+  t         REAL,
   PRIMARY KEY (run_id, seg, n)
 );
 CREATE INDEX IF NOT EXISTS discards_round ON discards(run_id, round_seq);
@@ -307,6 +321,10 @@ CREATE TABLE IF NOT EXISTS joker_state (
   round_seq INTEGER,
   ante      INTEGER,
   endless   INTEGER NOT NULL,
+  -- Board position, left to right. Joker order decides scoring order in
+  -- Balatro, so it is part of the observation -- card_id is creation order
+  -- and says nothing about where a joker sits.
+  pos       INTEGER,
   card_id   INTEGER,
   key       TEXT,
   mult      REAL,
@@ -398,9 +416,20 @@ CREATE TABLE IF NOT EXISTS money (
   delta   INTEGER,
   before  INTEGER,
   balance INTEGER,
+  -- What earned or spent it: the event type the change was traced back to
+  -- ('hand.play', 'shop.sell', 'round.end', ...), and, when that was a play
+  -- or a discard, that action's `n`. Derived here because it needs the whole
+  -- ordered stream, which only ingest has.
+  cause    TEXT,
+  cause_n  INTEGER,
+  -- Engine clock (love.timer) at the moment the event was emitted.
+  -- Money is attributed to an action by comparing these: a play's
+  -- money resolves in the SAME frame, a discard's a beat later.
+  t         REAL,
   PRIMARY KEY (run_id, seg, n)
 );
 CREATE INDEX IF NOT EXISTS money_peak ON money(endless, balance DESC);
+CREATE INDEX IF NOT EXISTS money_cause ON money(run_id, seg, cause_n);
 ```
 
 ## Ingest

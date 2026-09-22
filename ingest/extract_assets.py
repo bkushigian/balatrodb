@@ -33,8 +33,13 @@ ATLASES = {
     "b": ("Enhancers.png", 142, 190),   # deck backs
     "stake": ("chips.png", 58, 58),     # stake chips
     "c": ("Tarots.png", 142, 190),      # consumables
-    "card": ("8BitDeck.png", 142, 190),  # playing cards, 13 ranks x 4 suits
+    "m": ("Enhancers.png", 142, 190),   # card enhancements: bonus, lucky, ...
+    "card": ("8BitDeck.png", 142, 190),  # playing card faces, 13 ranks x 4 suits
 }
+
+# c_base is the plain white card back every playing card is drawn on. It is
+# the one c_* key that is not a consumable, so it does not follow the prefix.
+ATLAS_OVERRIDES = {"c_base": ("Enhancers.png", 142, 190)}
 
 
 def png_size(data: bytes) -> tuple[int, int]:
@@ -44,8 +49,8 @@ def png_size(data: bytes) -> tuple[int, int]:
 def parse_centers(src: str) -> dict[str, tuple[int, int]]:
     """key -> (x, y) atlas cell, from the centre tables in game.lua."""
     entry = re.compile(
-        r"(\b(?:j|b|c)_[a-z0-9_]+|stake_[a-z]+)\s*=\s*\{(.*?)\},?\s*"
-        r"(?=\n|\b(?:j|b|c)_[a-z0-9_]+\s*=)", re.S)
+        r"(\b(?:j|b|c|m)_[a-z0-9_]+|stake_[a-z]+)\s*=\s*\{(.*?)\},?\s*"
+        r"(?=\n|\b(?:j|b|c|m)_[a-z0-9_]+\s*=)", re.S)
     pos = re.compile(r"pos\s*=\s*\{\s*x\s*=\s*(\d+)\s*,\s*y\s*=\s*(\d+)")
     out: dict[str, tuple[int, int]] = {}
     for key, body in entry.findall(src):
@@ -56,6 +61,8 @@ def parse_centers(src: str) -> dict[str, tuple[int, int]]:
 
 
 def atlas_for(key: str) -> tuple[str, int, int] | None:
+    if key in ATLAS_OVERRIDES:
+        return ATLAS_OVERRIDES[key]
     prefix = "stake" if key.startswith("stake_") else key.split("_", 1)[0]
     return ATLASES.get(prefix)
 

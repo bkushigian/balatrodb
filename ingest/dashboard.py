@@ -339,8 +339,11 @@ def api_version(db, q):
 
 
 def api_round(db, q):
-    """One round, step by step: every play and discard in order, the cards in
-    each, the running score, and the jokers held at the time.
+    """One round: the board going in, then every action in the order taken.
+
+    Returns `board` (the jokers held, left to right) and `steps` -- plays and
+    discards interleaved by event sequence, each with its cards, its score,
+    the money it earned and any joker values it moved.
 
     Not a replay -- it is what was observed, not what can be re-executed -- but
     enough to walk through a round and see how it went.
@@ -350,12 +353,12 @@ def api_round(db, q):
         return {"error": "need id and round"}
 
     steps = rows(db, """
-        SELECT seg, n, 'play' AS kind, hand, level, oneshot,
+        SELECT seg, n, t, 'play' AS kind, hand, level, oneshot,
                score_txt, score_num, chips_before_txt, chips_before_num,
                hands_left_before, discards_left_before, NULL AS cards_n
           FROM hands WHERE run_id = ? AND round_seq = ?
         UNION ALL
-        SELECT seg, n, 'discard', NULL, NULL, NULL,
+        SELECT seg, n, t, 'discard', NULL, NULL, NULL,
                NULL, NULL, NULL, NULL, NULL, NULL, cards
           FROM discards WHERE run_id = ? AND round_seq = ?
         ORDER BY seg, n""", (rid, rs, rid, rs))
@@ -365,22 +368,31 @@ def api_round(db, q):
     cards, jokers = {}, {}
     if keys:
         for c in rows(db, f"""
-                SELECT seg, n, pos, rank, suit, enhancement, edition, seal, card_id
+                SELECT seg, n, pos, rank, suit, key, enhancement, edition,
+                       seal, card_id
                   FROM cards WHERE run_id = ? AND role = 'cards'
                    AND event IN ('hand.play','hand.discard')
                  ORDER BY seg, n, pos""", (rid,)):
             cards.setdefault((c["seg"], c["n"]), []).append(c)
         for j in rows(db, """
-                SELECT seg, n, card_id, key, mult, x_mult, chips, extra
+                SELECT seg, n, pos, card_id, key, mult, x_mult, chips, extra
                   FROM joker_state WHERE run_id = ? AND round_seq = ?
-                 ORDER BY seg, n, card_id""", (rid, rs)):
+                 ORDER BY seg, n, pos, card_id""", (rid, rs)):
             jokers.setdefault((j["seg"], j["n"]), []).append(j)
 
+    attribute_money(db, rid, rs, steps)
+
     running = None
+    prev = None
     for st in steps:
         k = (st["seg"], st["n"])
         st["cards"] = cards.get(k, [])
         st["jokers"] = jokers.get(k, [])
+        # What this action moved, so scaling is visible without reprinting the
+        # whole board on every row.
+        st["joker_delta"] = joker_delta(prev, st["jokers"])
+        if st["jokers"]:
+            prev = st["jokers"]
         if st["kind"] == "play":
             # chips_before is the round total going in; the game floors each
             # hand's contribution, so the running total is floor-summed.
@@ -389,7 +401,61 @@ def api_round(db, q):
                 base = running or 0
             running = base + int(st["score_num"] or 0)
             st["total_after"] = running
-    return {"steps": steps}
+
+    # The board is the earliest sample in the round. Jokers are only sampled
+    # when a hand is played, so its VALUES are those after the first scored
+    # hand, not at the blind -- the lineup is what this is for.
+    board = next((st["jokers"] for st in steps if st["jokers"]), [])
+    return {"board": board, "steps": steps}
+
+
+# Joker fields that carry a scaling value, in the order they are reported.
+SCALE_FIELDS = ("chips", "mult", "x_mult", "extra")
+
+
+def joker_delta(before, after):
+    """Which jokers changed value between two samples, as display rows.
+
+    `before` is None for the round's first sample: nothing to compare against,
+    so nothing is reported rather than every joker appearing to have changed.
+    """
+    if not before or not after:
+        return []
+    was = {j["card_id"]: j for j in before}
+    out = []
+    for j in after:
+        b = was.get(j["card_id"])
+        if not b:
+            continue
+        for f in SCALE_FIELDS:
+            if j[f] is not None and b[f] is not None and j[f] != b[f]:
+                out.append({"key": j["key"], "field": f,
+                            "from": b[f], "to": j[f]})
+    return out
+
+
+def attribute_money(db, rid, rs, steps):
+    """Attach each action's money to it, in place.
+
+    Which action earned a dollar is worked out at ingest time, where the whole
+    ordered event stream is available -- see classify_money() there. Money the
+    round produced but no action did (the cash out, a sell, a reroll) has a
+    different cause and simply does not match here; the cash-out panel already
+    accounts for it.
+    """
+    for st in steps:
+        st["money"] = 0
+    if not steps:
+        return
+    owed = {}
+    for m in rows(db, """
+            SELECT seg, cause_n, SUM(delta) d FROM money
+             WHERE run_id = ? AND cause_n IS NOT NULL
+               AND cause IN ('hand.play', 'hand.discard')
+             GROUP BY seg, cause_n""", (rid,)):
+        owed[(m["seg"], m["cause_n"])] = m["d"]
+    for st in steps:
+        st["money"] = owed.get((st["seg"], st["n"]), 0)
 
 
 ROUTES = {

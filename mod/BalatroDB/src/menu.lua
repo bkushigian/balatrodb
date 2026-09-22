@@ -33,7 +33,12 @@ function menu.launch()
     end
     -- The .bat itself uses `start`, so os.execute returns immediately. Quoted
     -- because the path runs through %APPDATA% and will contain spaces.
-    local ok = pcall(os.execute, ('start "" /MIN "%s"'):format(path))
+    --
+    -- `cmd /c` is explicit because START runs a .BAT under `cmd /K`, which
+    -- leaves the console open forever once the batch finishes. Those shells
+    -- stay in Balatro's process tree, so Steam goes on reporting the game as
+    -- running long after it has quit.
+    local ok = pcall(os.execute, ('start "" /MIN cmd /c "%s"'):format(path))
     if not ok then
         return false, 'could not start the dashboard'
     end

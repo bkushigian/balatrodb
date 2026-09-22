@@ -92,7 +92,8 @@ th {
 }
 td { padding: 6px 8px; border-top: 1px solid #2b3536; white-space: nowrap; }
 tbody tr:hover { background: #404d4f; }
-td.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.num, th.num { text-align: right; }
+td.num { font-variant-numeric: tabular-nums; }
 .chip {
   display: inline-block; padding: 1px 7px; border-radius: 99px;
   font-size: 11px; font-weight: 700; color: #1b2223;
@@ -153,19 +154,59 @@ tr.roundrow.open td:first-child::before { transform: rotate(90deg); }
 tr.detail > td { padding: 0; border-top: 0; }
 .steps { background: var(--sunken); border-radius: .3rem; margin: 2px 0 8px;
          padding: 8px 10px; display: grid; gap: 6px; }
-.step { display: grid; grid-template-columns: 74px 1fr auto; gap: 10px;
+/* 74px could not hold "Five of a Kind" plus its level, and an overflowing
+   grid track is not clipped -- the name ran out under the cards. Wider, and
+   the name wraps with the level on its own line. */
+.step { display: grid; grid-template-columns: 104px 1fr auto; gap: 10px;
         align-items: center; padding: 5px 6px; border-radius: .25rem; }
 .step.play { background: #2c393b; }
-.step .what { font-size: 12px; font-weight: 700; }
+.step .what { font-size: 12px; font-weight: 700; line-height: 1.25;
+              overflow-wrap: anywhere; }
+.step .what .jv { display: block; font-weight: 400; }
 .step.play .what { color: var(--chips); }
 .step.discard .what { color: var(--ink-mute); }
-.hand { display: flex; gap: 3px; align-items: center; flex-wrap: wrap; }
+.hand { display: flex; gap: 3px; align-items: center; flex-wrap: wrap;
+        min-width: 0; }
+
+/* ── playing cards ────────────────────────────────────────────────────────
+   A card is two atlas cells stacked: the base (plain white c_base, or an
+   enhancement like m_lucky) with the 8BitDeck rank/suit face on top. */
+.pcard { position: relative; display: inline-block; line-height: 0;
+         vertical-align: middle; border-radius: 3px; }
+.pcard .face { position: absolute; left: 0; top: 0; }
+/* Editions are shaders in-game with no atlas cell, so these are CSS
+   approximations -- enough to tell a foil from a polychrome at a glance.
+   The card's title attribute names the real one. */
+.pcard.ed::after { content: ""; position: absolute; inset: 0; border-radius: 3px;
+                   pointer-events: none; mix-blend-mode: screen; opacity: .55; }
+.pcard.ed-foil::after   { background: linear-gradient(120deg, #2b6cff, #8fd8ff 60%, #2b6cff); }
+.pcard.ed-holo::after   { background: linear-gradient(120deg, #ff4fd8, #7a4bff 60%, #ff4fd8); }
+.pcard.ed-polychrome::after { background: linear-gradient(120deg,
+        #ff5c5c, #ffd84f 25%, #63ff8f 50%, #4fd8ff 75%, #c06cff); }
+.pcard.ed-negative::after { background: #2a2350; mix-blend-mode: exclusion; opacity: .85; }
+/* Seals have no `pos` in the game's data, so there is no cell to blit --
+   a corner pip in the seal's colour stands in for it. */
+.pcard .seal { position: absolute; left: 1px; top: 50%; margin-top: -3px;
+               width: 5px; height: 5px;
+               border-radius: 50%; box-shadow: 0 0 0 1px rgba(0,0,0,.55); }
+.seal.gold { background: #e8c547; } .seal.red { background: #fe5f55; }
+.seal.blue { background: #009dff; } .seal.purple { background: #8867a6; }
 .step .score { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .step .score b { color: var(--mult); }
 .step .score span { color: var(--ink-mute); font-size: 11px; }
-.jokrow { display: flex; gap: 4px; align-items: center; flex-wrap: wrap;
-          padding: 2px 6px 4px; }
-.jokrow .lbl { color: var(--ink-mute); font-size: 11px; margin-right: 4px; }
+/* The board: state going into the round, not an action. Jokers are only
+   sampled when a hand is played, so the values shown are those after the
+   round's first scored hand -- the lineup is the point. */
+.board { display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+         background: var(--sunken); border-radius: .3rem;
+         padding: 6px 10px; margin: 2px 0 6px; }
+.board .lbl { color: var(--ink-mute); font-size: 11px; letter-spacing: .06em;
+              text-transform: uppercase; margin-right: 2px; }
+.bj { display: inline-flex; flex-direction: column; align-items: center; }
+.moved { display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+         width: 100%; margin-top: 2px; opacity: .85; }
+.moved .bj { flex-direction: row; gap: 2px; }
+.cash { display: block; color: var(--money); font-size: 11px; font-weight: 700; }
 .jv { color: var(--ink-dim); font-size: 10px; }
 .warn { color: var(--filter); font-size: 12px; }
 @media (max-width: 560px) { header h1 { font-size: 21px; } .tile .v { font-size: 21px; } }
@@ -291,7 +332,9 @@ function sprite(key, kind, px) {
   const s = SPR.sprites[key], a = SPR.atlases[s.a];
   if (!a) return "";
   const scale = px / a.cw;
-  return `<span class="spr ${kind}" title="${esc(key)}" style="
+  // Playing-card layers carry their own combined title on the wrapper.
+  const tip = kind.startsWith("pc") ? "" : ` title="${esc(key)}"`;
+  return `<span class="spr ${kind}"${tip} style="
       width:${px}px; height:${(a.ch * scale).toFixed(1)}px;
       background-image:url(assets/${s.a});
       background-size:${(a.w * scale).toFixed(1)}px ${(a.h * scale).toFixed(1)}px;
@@ -435,8 +478,25 @@ async function openRun(id) {
   });
 }
 
-const cardSprite = c => sprite(`card:${c.suit}:${c.rank}`, "c", 32)
-  || `<span class="jv">${(c.rank || "?")}${(c.suit || "")[0] || ""}</span>`;
+// `c.key` is the card's base: c_base for a plain card, m_lucky / m_steel /
+// ... for an enhanced one. A stone card has no rank or suit to show -- the
+// enhancement is the whole card -- so it gets no face.
+function cardSprite(c) {
+  const base = sprite(c.key || "c_base", "pc", 30);
+  const face = c.key === "m_stone" ? ""
+    : sprite(`card:${c.suit}:${c.rank}`, "pc face", 30);
+  if (!base && !face) {
+    return `<span class="jv">${esc((c.rank || "?") + ((c.suit || "")[0] || ""))}</span>`;
+  }
+  const ed = c.edition ? ` ed ed-${String(c.edition).replace(/^e_/, "")}` : "";
+  const seal = c.seal
+    ? `<span class="seal ${esc(String(c.seal).toLowerCase())}"></span>` : "";
+  const what = [c.enhancement, c.seal && c.seal + " Seal",
+                c.edition && String(c.edition).replace(/^e_/, "")]
+    .filter(Boolean).join(", ");
+  const label = `${c.rank || ""}${c.suit ? " of " + c.suit : ""}${what ? " (" + what + ")" : ""}`;
+  return `<span class="pcard${ed}" title="${esc(label.trim())}">${base}${face}${seal}</span>`;
+}
 
 async function toggleRound(runId, tr) {
   const rs = tr.dataset.round;
@@ -454,33 +514,45 @@ async function toggleRound(runId, tr) {
     return;
   }
 
-  let lastJokers = "";
-  cell.innerHTML = `<div class="steps">` + d.steps.map(s => {
+  // Board first, then the actions in the order they were taken. The board is
+  // its own thing rather than a row spliced between actions -- it is state,
+  // not something that happened.
+  const board = (d.board || []).length
+    ? `<div class="board"><span class="lbl">Jokers</span>` +
+      d.board.map(j => {
+        const v = j.chips ?? j.mult ?? j.x_mult ?? j.extra;
+        return `<span class="bj">` + (sprite(j.key, "j", 28)
+            || `<span class="jv">${esc(j.key || "?")}</span>`) +
+          (v !== null && v !== undefined ? `<span class="jv">${fmt(v)}</span>` : "") +
+          `</span>`;
+      }).join("") + `</div>`
+    : "";
+
+  cell.innerHTML = board + `<div class="steps">` + d.steps.map(s => {
     const cards = (s.cards || []).map(cardSprite).join("");
-    // Only reprint the joker row when the loadout or its values changed.
-    const jkey = (s.jokers || []).map(j =>
-      `${j.key}:${j.mult ?? ""}/${j.x_mult ?? ""}/${j.chips ?? ""}/${j.extra ?? ""}`).join("|");
-    let jrow = "";
-    if (jkey && jkey !== lastJokers) {
-      lastJokers = jkey;
-      jrow = `<div class="jokrow"><span class="lbl">jokers</span>` +
-        s.jokers.map(j => {
-          const v = j.chips ?? j.mult ?? j.x_mult ?? j.extra;
-          return sprite(j.key, "j", 26) +
-            (v !== null && v !== undefined ? `<span class="jv">${fmt(v)}</span>` : "");
-        }).join("") + `</div>`;
-    }
+    // Only what this action moved, so scaling stays visible without
+    // reprinting the whole board on every row.
+    const moved = (s.joker_delta || []).length
+      ? `<div class="moved">` + s.joker_delta.map(m =>
+          `<span class="bj" title="${esc(m.key + " " + m.field)}">` +
+          (sprite(m.key, "j", 18) || `<span class="jv">${esc(m.key)}</span>`) +
+          `<span class="jv">${fmt(m.from)}→${fmt(m.to)}</span></span>`).join("") +
+        `</div>`
+      : "";
+    const cash = s.money ? `<span class="cash">+$${fmt(s.money)}</span>` : "";
+
     if (s.kind === "play") {
-      return jrow + `<div class="step play">
-        <span class="what">${esc(s.hand) || "hand"}${s.level ? ` <span class="jv">lvl ${s.level}</span>` : ""}</span>
-        <span class="hand">${cards}</span>
+      return `<div class="step play">
+        <span class="what">${esc(s.hand) || "hand"}${s.level ? `<span class="jv">lvl ${s.level}</span>` : ""}</span>
+        <span class="hand">${cards}${moved}</span>
         <span class="score"><b>+${fmt(s.score_txt)}</b><br>
-          <span>${fmt(s.total_after)} total</span></span></div>`;
+          <span>${fmt(s.total_after)} total</span>${cash}</span></div>`;
     }
-    return jrow + `<div class="step discard">
+    const nc = s.cards_n ?? (s.cards || []).length;
+    return `<div class="step discard">
       <span class="what">discard</span>
-      <span class="hand">${cards}</span>
-      <span class="score"><span>${s.cards_n ?? (s.cards || []).length} cards</span></span></div>`;
+      <span class="hand">${cards}${moved}</span>
+      <span class="score"><span>${nc} card${nc === 1 ? "" : "s"}</span>${cash}</span></div>`;
   }).join("") + `</div>`;
 }
 

@@ -28,6 +28,7 @@ import json
 import math
 import os
 import sqlite3
+import zlib
 import sys
 import time
 
@@ -154,6 +155,74 @@ def read_events(path):
     return out, bad
 
 
+MONEY_SKIP = {"state.change", "snapshot", "joker.scale", "money.change",
+              "card.modify"}
+# A play resolves its money inside evaluate_play, in the frame that ends with
+# the hand.play event -- observed gap 0.00s. A discard's triggers are queued
+# and land a beat later -- observed 0.22s, and the next thing the player can
+# do is seconds away, so a one-second window separates the two cleanly.
+MONEY_SAME_FRAME = 0.05
+MONEY_QUEUED = 1.0
+
+
+def classify_money(events):
+    """Trace every money.change back to what caused it.
+
+    Returns {(seg, n): (cause_event_type, action_n or None)}.
+
+    `money` records only that the balance moved, so the cause has to come from
+    position in the stream -- which means the whole ordered stream, and so it
+    is derived here rather than guessed from timestamps at query time.
+
+    The direction differs by action, which is why this is not simply "the
+    previous event":
+
+      * a PLAY emits its money from inside evaluate_play, whose AFTER hook
+        emits hand.play -- the money arrives just BEFORE the play, same frame.
+      * a DISCARD's jokers fire from queued events that run once
+        discard_cards_from_highlighted has returned -- the money arrives AFTER.
+
+    Anything else (a sell, a reroll, a purchase, the cash out) is named by the
+    event it follows, and owns no action.
+    """
+    by_seg = {}
+    for ev in events:
+        by_seg.setdefault(ev.get("seg", 0), []).append(ev)
+    # Position in the stream is the whole signal, so order by it explicitly
+    # rather than trusting the order the events arrived in.
+    for lst in by_seg.values():
+        lst.sort(key=lambda e: (e.get("n") is None, e.get("n")))
+
+    out = {}
+    for seg, lst in by_seg.items():
+        for i, ev in enumerate(lst):
+            if ev.get("e") != "money.change":
+                continue
+            t = ev.get("t")
+            j = i + 1
+            while j < len(lst) and lst[j].get("e") in MONEY_SKIP:
+                j += 1
+            k = i - 1
+            while k >= 0 and lst[k].get("e") in MONEY_SKIP:
+                k -= 1
+            nxt = lst[j] if j < len(lst) else None
+            prv = lst[k] if k >= 0 else None
+
+            cause = cause_n = None
+            if (nxt is not None and nxt.get("e") in ("hand.play", "hand.discard")
+                    and t is not None and nxt.get("t") is not None
+                    and abs(nxt["t"] - t) <= MONEY_SAME_FRAME):
+                cause, cause_n = nxt["e"], nxt.get("n")
+            elif (prv is not None and prv.get("e") == "hand.discard"
+                  and t is not None and prv.get("t") is not None
+                  and 0 <= t - prv["t"] <= MONEY_QUEUED):
+                cause, cause_n = "hand.discard", prv.get("n")
+            elif prv is not None:
+                cause = prv.get("e")
+            out[(seg, ev.get("n"))] = (cause, cause_n)
+    return out
+
+
 class Ingester:
     def __init__(self, db):
         self.db = db
@@ -194,6 +263,9 @@ class Ingester:
                   "segments", "blind_skips", "consumable_uses", "run_defects", "runs"):
             self.db.execute(f"DELETE FROM {t} WHERE run_id=?", (run_id,))
 
+# Events that sit between a money change and whatever caused it, or that are
+# part of the same burst. The scoring burst interleaves joker.scale and
+# money.change, so both have to be stepped over to find its edges.
     # -- run level ----------------------------------------------------------
     def derive(self, run_id, log_file, log_bytes, events, bad_lines):
         kinds = {e.get("e") for e in events}
@@ -214,6 +286,7 @@ class Ingester:
         if legacy and "card.modify" not in kinds:
             defects.add("no_card_modify")
 
+        causes = classify_money(events)
         seg_lines, seg_max_n = {}, {}
         round_seq, open_round = 0, None
         baseline_deck = baseline_dollars = None
@@ -227,6 +300,7 @@ class Ingester:
             seg, n = ev.get("seg", 0), ev.get("n")
             el = 1 if ev.get("el") else 0
             ante = as_int(ev.get("a"))
+            ts = ev.get("t") if isinstance(ev.get("t"), (int, float)) else None
 
             seg_lines[seg] = seg_lines.get(seg, 0) + 1
             if isinstance(n, int):
@@ -262,11 +336,12 @@ class Ingester:
                 o, nu, t = triple(d.get("chips"))
                 self.db.execute(
                     "INSERT OR REPLACE INTO rounds (run_id,round_seq,seg,ante,blind_key,"
-                    "blind_name,is_boss,reward,endless,required_ord,required_num,required_txt)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "blind_name,is_boss,reward,endless,start_n,"
+                    "required_ord,required_num,required_txt)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (run_id, round_seq, seg, as_int(d.get("ante")) or ante, d.get("blind_key"),
                      d.get("name"), 1 if d.get("boss") else 0, as_int(d.get("reward")), el,
-                     o, nu, t))
+                     n, o, nu, t))
 
             elif e == "round.end":
                 rs = open_round or round_seq
@@ -290,18 +365,19 @@ class Ingester:
                 so, sn, stx = triple(d.get("score"))
                 co, cn, ctx = triple(d.get("chips_before"))
                 self.db.execute(
-                    "INSERT OR REPLACE INTO hands VALUES (" + ",".join("?" * 17) + ")",
+                    "INSERT OR REPLACE INTO hands VALUES (" + ",".join("?" * 18) + ")",
                     (run_id, seg, n, open_round or round_seq, ante, el, d.get("hand"),
                      as_int(d.get("level")), 1 if d.get("oneshot") else 0,
                      so, sn, stx, co, cn, ctx,
-                     as_int(d.get("hands_left_before")), as_int(d.get("discards_left_before"))))
+                     as_int(d.get("hands_left_before")), as_int(d.get("discards_left_before")),
+                     ts))
                 self.sample_jokers(run_id, seg, n, open_round or round_seq, ante, el,
                                    d.get("jokers"))
 
             elif e == "hand.discard":
-                self.db.execute("INSERT OR REPLACE INTO discards VALUES (?,?,?,?,?,?,?)",
+                self.db.execute("INSERT OR REPLACE INTO discards VALUES (?,?,?,?,?,?,?,?)",
                                 (run_id, seg, n, open_round or round_seq, ante, el,
-                                 len(d.get("cards") or [])))
+                                 len(d.get("cards") or []), ts))
 
             elif e == "hand.levelup":
                 self.db.execute("INSERT OR REPLACE INTO hand_levels VALUES (?,?,?,?,?,?,?,?)",
@@ -325,9 +401,11 @@ class Ingester:
                     balance = baseline_dollars if baseline_dollars is not None \
                         else (as_int(d.get("before")) or 0)
                 balance += delta
-                self.db.execute("INSERT OR REPLACE INTO money VALUES (?,?,?,?,?,?,?,?)",
+                cause, cause_n = causes.get((seg, n), (None, None))
+                self.db.execute("INSERT OR REPLACE INTO money VALUES (" +
+                                ",".join("?" * 11) + ")",
                                 (run_id, seg, n, ante, el, delta,
-                                 as_int(d.get("before")), balance))
+                                 as_int(d.get("before")), balance, cause, cause_n, ts))
 
             elif e == "blind.skip":
                 # Throwback's value is the running skip count, so the skips
@@ -446,19 +524,21 @@ class Ingester:
         if not isinstance(jokers, list):
             return
         rows = []
-        for j in jokers:
+        for pos, j in enumerate(jokers):
             if not isinstance(j, dict):
                 continue
             st = j.get("state") if isinstance(j.get("state"), dict) else {}
+            # The mod samples G.jokers.cards in board order, so the index is
+            # the board position.
             rows.append((run_id, seg, n, round_seq, ante, el,
-                         as_int(j.get("id")), j.get("key"),
+                         pos, as_int(j.get("id")), j.get("key"),
                          as_num(st.get("mult")), as_num(st.get("x_mult")),
                          as_num(st.get("chips")), as_num(st.get("extra")),
                          as_num(st.get("stone_tally")), as_num(st.get("perma_bonus")),
                          json.dumps(st) if st else None))
         if rows:
             self.db.executemany(
-                "INSERT OR REPLACE INTO joker_state VALUES (" + ",".join("?" * 15) + ")", rows)
+                "INSERT OR REPLACE INTO joker_state VALUES (" + ",".join("?" * 16) + ")", rows)
 
     def sample_deck(self, run_id, round_seq, deck):
         """Per-round scalars from a deck sample, rather than 40-50 card rows.
@@ -570,14 +650,29 @@ def main():
     ap.add_argument("--report", action="store_true")
     a = ap.parse_args()
 
-    if a.rebuild:
+    ddl = open(os.path.join(HERE, "schema.sql"), encoding="utf-8").read()
+    # CREATE TABLE IF NOT EXISTS adds tables but never columns, so editing
+    # schema.sql would otherwise leave an existing database one column short
+    # and fail at query time, far from the cause. The database is derived from
+    # the logs and disposable, so drift just rebuilds it.
+    want = zlib.crc32(ddl.encode("utf-8")) & 0x7FFFFFFF
+    stale = False
+    if not a.rebuild and os.path.exists(a.db):
+        probe = sqlite3.connect(a.db)
+        stale = probe.execute("PRAGMA user_version").fetchone()[0] != want
+        probe.close()
+        if stale:
+            print("schema changed since this database was built; rebuilding")
+
+    if a.rebuild or stale:
         for suffix in ("", "-wal", "-shm"):
             p = a.db + suffix
             if os.path.exists(p):
                 os.remove(p)
 
     db = sqlite3.connect(a.db)
-    db.executescript(open(os.path.join(HERE, "schema.sql"), encoding="utf-8").read())
+    db.executescript(ddl)
+    db.execute(f"PRAGMA user_version = {want}")
 
     ing = Ingester(db)
     total = changed = 0
