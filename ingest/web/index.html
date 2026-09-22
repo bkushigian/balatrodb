@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BalatroDB</title>
+<style>
+/* Balatro's own palette, lifted from G.C in globals.lua:
+   MULT/RED FE5F55 · MONEY f3b958 · GOLD eac058 · FILTER ff9a00
+   PURPLE 8867a5 · JOKER_GREY bfc7d5 · MAIN/DARK 374244 · BLIND_SIZE ad5353 */
+:root {
+  --bg:        #1b2223;
+  --surface:   #374244;   /* G.C.MAIN */
+  --raised:    #455254;
+  --sunken:    #222b2c;
+  --ink:       #ffffff;
+  --ink-dim:   #bfc7d5;   /* G.C.JOKER_GREY */
+  --ink-mute:  #8b969b;
+  --mult:      #fe5f55;   /* G.C.MULT */
+  --chips:     #009dff;
+  --money:     #f3b958;   /* G.C.MONEY */
+  --gold:      #eac058;   /* G.C.GOLD */
+  --filter:    #ff9a00;   /* G.C.FILTER */
+  --purple:    #8867a5;   /* G.C.PURPLE */
+  --green:     #4bc292;
+  --blind:     #ad5353;   /* G.C.BLIND_SIZE */
+  --r: 0.45rem;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 0 16px 64px;
+  background: var(--bg); color: var(--ink);
+  font: 14px/1.5 "m6x11", "Courier New", ui-monospace, monospace;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3 { margin: 0; font-weight: 700; letter-spacing: .02em; }
+a { color: var(--chips); }
+
+/* Balatro's chunky embossed panel: a lip of darker colour under each block */
+.panel {
+  background: var(--surface); border-radius: var(--r);
+  box-shadow: 0 4px 0 #222b2c, 0 5px 10px rgba(0,0,0,.35);
+  padding: 14px 16px;
+}
+header {
+  max-width: 1240px; margin: 0 auto; padding: 22px 0 14px;
+  display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+}
+header h1 { font-size: 26px; }
+header h1 span { color: var(--mult); }
+header .sub { color: var(--ink-mute); font-size: 12px; }
+main { max-width: 1240px; margin: 0 auto; display: grid; gap: 16px; }
+
+/* ── filters: one row above everything, per the interaction spec ───────── */
+.filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.filters label { color: var(--ink-dim); font-size: 12px; margin-right: 4px; }
+select, button.seg {
+  background: var(--sunken); color: var(--ink); border: 0;
+  border-radius: .35rem; padding: 7px 10px; font: inherit; font-size: 13px;
+  box-shadow: 0 2px 0 #171d1e; cursor: pointer;
+}
+select:focus-visible, button:focus-visible { outline: 2px solid var(--filter); outline-offset: 2px; }
+.seggroup { display: inline-flex; gap: 4px; }
+button.seg[aria-pressed="true"] { background: var(--mult); color: #2a1210; font-weight: 700; }
+
+/* ── stat tiles: hero numbers, no chart ───────────────────────────────── */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border-radius: var(--r); padding: 12px 14px;
+        box-shadow: 0 4px 0 #222b2c; }
+.tile .k { color: var(--ink-mute); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+.tile .v { font-size: 26px; font-weight: 700; line-height: 1.15; margin-top: 4px;
+           overflow-wrap: anywhere; }
+.tile .n { color: var(--ink-dim); font-size: 11px; margin-top: 2px; }
+.v.mult { color: var(--mult); } .v.money { color: var(--money); }
+.v.chips { color: var(--chips); } .v.gold { color: var(--gold); }
+.v.purple { color: var(--purple); } .v.green { color: var(--green); }
+
+/* ── tables ───────────────────────────────────────────────────────────── */
+.cols { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+         align-items: start; }
+.scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th {
+  text-align: left; color: var(--ink-mute); font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .06em; padding: 4px 8px 8px;
+  white-space: nowrap; position: sticky; top: 0; background: var(--surface);
+}
+td { padding: 6px 8px; border-top: 1px solid #2b3536; white-space: nowrap; }
+tbody tr:hover { background: #404d4f; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.chip {
+  display: inline-block; padding: 1px 7px; border-radius: 99px;
+  font-size: 11px; font-weight: 700; color: #1b2223;
+}
+.chip.win { background: var(--gold); }
+.chip.died { background: var(--blind); color: #fff; }
+.chip.endless { background: var(--purple); color: #fff; }
+.chip.susp { background: #566264; color: var(--ink-dim); }
+.muted { color: var(--ink-mute); }
+.clickable { cursor: pointer; }
+
+/* ── single-series bar chart: ante distribution ───────────────────────── */
+.bars { display: grid; gap: 5px; }
+.bar { display: grid; grid-template-columns: 54px 1fr 34px; align-items: center; gap: 8px; }
+.bar .track { background: var(--sunken); border-radius: 3px; height: 15px;
+               display: block; overflow: hidden; }
+.bar .fill { background: var(--chips); height: 100%; border-radius: 0 3px 3px 0;
+             min-width: 3px; display: block; }
+.bar .lab, .bar .cnt { color: var(--ink-dim); font-size: 12px; }
+.bar .cnt { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ── run detail drawer ────────────────────────────────────────────────── */
+dialog {
+  background: var(--surface); color: var(--ink); border: 0; border-radius: var(--r);
+  max-width: min(960px, 94vw); width: 100%; padding: 0;
+  box-shadow: 0 10px 0 #222b2c, 0 20px 50px rgba(0,0,0,.6);
+}
+dialog::backdrop { background: rgba(10,14,15,.72); }
+dialog .head { display: flex; justify-content: space-between; align-items: center;
+               padding: 14px 18px; border-bottom: 1px solid #2b3536; gap: 12px; }
+dialog .body { padding: 16px 18px; max-height: 72vh; overflow: auto; }
+dialog h3 { font-size: 13px; color: var(--ink-mute); text-transform: uppercase;
+            letter-spacing: .07em; margin: 16px 0 6px; }
+dialog h3:first-child { margin-top: 0; }
+button.x { background: var(--sunken); color: var(--ink-dim); border: 0;
+           border-radius: .3rem; padding: 6px 12px; cursor: pointer; font: inherit; }
+.empty { color: var(--ink-mute); padding: 14px 4px; }
+.warn { color: var(--filter); font-size: 12px; }
+@media (max-width: 560px) { header h1 { font-size: 21px; } .tile .v { font-size: 21px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Balatro<span>DB</span></h1>
+  <div class="sub" id="sub">loading…</div>
+</header>
+
+<main>
+  <section class="panel filters" aria-label="Filters">
+    <span><label for="deck">Deck</label><select id="deck"><option value="">All</option></select></span>
+    <span><label for="stake">Stake</label><select id="stake"><option value="">All</option></select></span>
+    <span><label>Phase</label>
+      <span class="seggroup" id="phase" role="group" aria-label="Endless phase">
+        <button class="seg" data-v="" aria-pressed="true">All</button>
+        <button class="seg" data-v="0" aria-pressed="false">Normal</button>
+        <button class="seg" data-v="1" aria-pressed="false">Endless</button>
+      </span></span>
+    <span><label for="sort">Sort runs</label><select id="sort">
+      <option value="recent">Most recent</option>
+      <option value="score">Best hand</option>
+      <option value="ante">Furthest ante</option>
+      <option value="money">Most money</option>
+      <option value="hands">Hands played</option>
+    </select></span>
+  </section>
+
+  <section class="tiles" id="tiles" aria-label="Records"></section>
+
+  <section class="cols">
+    <div class="panel">
+      <h2>Scaling jokers</h2>
+      <p class="muted" style="font-size:12px;margin:4px 0 10px">Highest value ever reached, from <code>joker.scale</code>.</p>
+      <div class="scroll"><table id="jokers"><thead><tr>
+        <th>Joker</th><th>Field</th><th class="num">Peak</th><th>Run</th>
+      </tr></thead><tbody></tbody></table></div>
+    </div>
+
+    <div class="panel">
+      <h2>Counter jokers</h2>
+      <p class="muted" style="font-size:12px;margin:4px 0 10px">These read game counters, not their own ability — reconstructed from run history.</p>
+      <div class="scroll"><table id="derived"><thead><tr>
+        <th>Counter</th><th>Subject</th><th class="num">Peak</th><th>Run</th>
+      </tr></thead><tbody></tbody></table></div>
+    </div>
+  </section>
+
+  <section class="cols">
+    <div class="panel">
+      <h2>Best hand by type</h2>
+      <div class="scroll"><table id="hands"><thead><tr>
+        <th>Hand</th><th class="num">Score</th><th class="num">Lvl</th><th class="num">Max lvl</th><th>Run</th>
+      </tr></thead><tbody></tbody></table></div>
+    </div>
+
+    <div class="panel">
+      <h2>How far runs get</h2>
+      <p class="muted" style="font-size:12px;margin:4px 0 10px">Runs by furthest ante reached.</p>
+      <div class="bars" id="antes"></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Runs</h2>
+    <div class="scroll"><table id="runs"><thead><tr>
+      <th>When</th><th>Deck</th><th>Stake</th><th>Result</th>
+      <th class="num">Ante</th><th class="num">Best hand</th><th class="num">Peak $</th>
+      <th class="num">Hands</th><th class="num">Deck</th><th>Seed</th>
+    </tr></thead><tbody></tbody></table></div>
+  </section>
+</main>
+
+<dialog id="detail"><div class="head"><h2 id="dtitle">Run</h2>
+  <button class="x" onclick="detail.close()">Close</button></div>
+  <div class="body" id="dbody"></div></dialog>
+
+<script>
+const $ = s => document.querySelector(s);
+const state = { deck: "", stake: "", endless: "", sort: "recent" };
+
+// Big numbers arrive as exact decimal text and can exceed Number range, so
+// format from the string rather than parseFloat where possible.
+const fmt = v => {
+  if (v === null || v === undefined || v === "") return "—";
+  const n = Number(v);
+  if (!isFinite(n)) return String(v);
+  if (Math.abs(n) >= 1e12) return n.toExponential(3).replace("e+", "e");
+  return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+};
+const ago = ts => {
+  if (!ts) return "—";
+  const d = new Date(ts * 1000), s = (Date.now() / 1000) - ts;
+  if (s < 86400) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+};
+const shortKey = k => (k || "").replace(/^j_/, "").replace(/_/g, " ");
+const shortRun = r => (r || "").split("-")[1] || r;
+
+const qs = () => {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(state)) if (v !== "") p.set(k, v);
+  return p.toString();
+};
+const get = path => fetch(path + "?" + qs()).then(r => r.json());
+
+function resultChip(r) {
+  if (r.won) return `<span class="chip win">WON</span>`;
+  if (r.result === "died") return `<span class="chip died">DIED</span>`;
+  if (r.result === "suspended") return `<span class="chip susp">PAUSED</span>`;
+  return `<span class="muted">${r.result || "—"}</span>`;
+}
+
+async function refresh() {
+  const [s, jok, der, hands, antes, runs] = await Promise.all([
+    get("/api/summary"), get("/api/jokers"), get("/api/derived"),
+    get("/api/hands"), get("/api/antes"), get("/api/runs"),
+  ]);
+
+  $("#sub").textContent =
+    `${s.runs} runs · ${s.won} won` + (s.win_pct !== null ? ` · ${s.win_pct}% win rate` : "");
+
+  $("#tiles").innerHTML = [
+    ["Best hand", fmt(s.best_hand), s.best_hand_name || "", "mult"],
+    ["Most money", s.max_money !== null ? "$" + fmt(s.max_money) : "—", "peak balance", "money"],
+    ["Furthest ante", fmt(s.max_ante), "", "gold"],
+    ["Biggest cash-out", s.max_cashout !== null ? "$" + fmt(s.max_cashout) : "—", "one round", "money"],
+    ["Largest deck", fmt(s.max_deck), "cards", "chips"],
+    ["Runs", fmt(s.runs), `${s.won} won`, "purple"],
+  ].map(([k, v, n, c]) =>
+    `<div class="tile"><div class="k">${k}</div><div class="v ${c}">${v}</div>
+     <div class="n">${n}</div></div>`).join("");
+
+  $("#jokers tbody").innerHTML = jok.length ? jok.map(j => `
+    <tr class="clickable" onclick="openRun('${j.run_id}')">
+      <td>${shortKey(j.key)}</td><td class="muted">${j.field}</td>
+      <td class="num" style="color:var(--mult);font-weight:700">${fmt(j.value)}</td>
+      <td class="muted">${j.deck_name || shortRun(j.run_id)}</td></tr>`).join("")
+    : `<tr><td colspan="4" class="empty">No scaling jokers recorded yet.</td></tr>`;
+
+  $("#derived tbody").innerHTML = der.length ? der.map(d => `
+    <tr class="clickable" onclick="openRun('${d.run_id}')">
+      <td>${d.metric.replace(/_/g, " ")}</td>
+      <td class="muted">${d.subject || "—"}</td>
+      <td class="num" style="color:var(--green);font-weight:700">${fmt(d.value)}</td>
+      <td class="muted">${d.deck_name || shortRun(d.run_id)}</td></tr>`).join("")
+    : `<tr><td colspan="4" class="empty">Nothing yet.</td></tr>`;
+
+  const lvl = Object.fromEntries(hands.levels.map(l => [l.hand, l.level]));
+  $("#hands tbody").innerHTML = hands.best.length ? hands.best.map(h => `
+    <tr class="clickable" onclick="openRun('${h.run_id}')">
+      <td>${h.hand}</td>
+      <td class="num" style="color:var(--chips);font-weight:700">${fmt(h.value)}</td>
+      <td class="num muted">${h.level ?? "—"}</td>
+      <td class="num muted">${lvl[h.hand] ?? "—"}</td>
+      <td class="muted">${h.deck_name || shortRun(h.run_id)}</td></tr>`).join("")
+    : `<tr><td colspan="5" class="empty">No hands recorded yet.</td></tr>`;
+
+  const max = Math.max(1, ...antes.map(a => a.n));
+  $("#antes").innerHTML = antes.length ? antes.map(a => `
+    <div class="bar"><span class="lab">Ante ${a.ante}</span>
+      <span class="track"><span class="fill" style="width:${(a.n / max * 100).toFixed(1)}%"></span></span>
+      <span class="cnt">${a.n}</span></div>`).join("")
+    : `<div class="empty">No completed runs yet.</div>`;
+
+  $("#runs tbody").innerHTML = runs.length ? runs.map(r => `
+    <tr class="clickable" onclick="openRun('${r.run_id}')">
+      <td class="muted">${ago(r.started_ts)}</td>
+      <td>${r.deck_name || "—"}</td>
+      <td class="muted">${(r.stake_key || "").replace("stake_", "")}</td>
+      <td>${resultChip(r)}${r.went_endless ? ' <span class="chip endless">ENDLESS</span>' : ""}</td>
+      <td class="num">${r.ante ?? "—"}</td>
+      <td class="num">${fmt(r.best_hand)}</td>
+      <td class="num">${r.peak_money !== null ? "$" + fmt(r.peak_money) : "—"}</td>
+      <td class="num muted">${r.hands_played ?? "—"}</td>
+      <td class="num muted">${r.deck_size ?? "—"}</td>
+      <td class="muted">${r.seed || "—"}${r.seeded ? " ·seeded" : ""}</td></tr>`).join("")
+    : `<tr><td colspan="10" class="empty">No runs match these filters.</td></tr>`;
+}
+
+async function openRun(id) {
+  const d = await fetch("/api/run?id=" + encodeURIComponent(id)).then(r => r.json());
+  if (!d.run) return;
+  const r = d.run;
+  $("#dtitle").innerHTML = `${r.deck_name || "?"} · ${(r.stake_key || "").replace("stake_", "")}
+    ${resultChip(r)} ${r.went_endless ? '<span class="chip endless">ENDLESS</span>' : ""}`;
+  const rounds = d.rounds.map(x => `<tr><td class="num">${x.round_seq}</td>
+    <td class="num">${x.ante ?? "—"}</td><td>${x.blind_name || "—"}</td>
+    <td class="num">${fmt(x.required_txt)}</td><td class="num">${fmt(x.score_txt)}</td>
+    <td class="num">${x.cashout_total !== null ? "$" + x.cashout_total : "—"}</td>
+    <td class="num muted">${x.deck_size ?? "—"}</td>
+    <td>${x.endless ? '<span class="chip endless">ENDLESS</span>' : ""}</td></tr>`).join("");
+  const jok = d.jokers.map(j => `<tr><td>${shortKey(j.key)}</td><td class="muted">${j.field}</td>
+    <td class="num" style="color:var(--mult)">${fmt(j.peak)}</td></tr>`).join("");
+  $("#dbody").innerHTML = `
+    <h3>Run</h3>
+    <div class="muted">seed ${r.seed || "?"} · ${r.hands_played ?? "?"} hands ·
+      ended ante ${r.ended_ante ?? "?"} · $${r.final_dollars ?? "?"} ·
+      ${d.segments.length} session${d.segments.length === 1 ? "" : "s"} ·
+      log <code>${r.log_file}</code></div>
+    ${d.defects.length ? `<div class="warn" style="margin-top:8px">⚠ capture defects:
+      ${d.defects.map(x => x.defect).join(", ")} — figures from this run may not be
+      comparable with newer ones.</div>` : ""}
+    <h3>Rounds</h3>
+    <div class="scroll"><table><thead><tr><th>#</th><th>Ante</th><th>Blind</th>
+      <th class="num">Needed</th><th class="num">Scored</th><th class="num">Cash</th>
+      <th class="num">Deck</th><th></th></tr></thead>
+      <tbody>${rounds || '<tr><td colspan="8" class="empty">No rounds.</td></tr>'}</tbody></table></div>
+    <h3>Joker peaks</h3>
+    <div class="scroll"><table><thead><tr><th>Joker</th><th>Field</th>
+      <th class="num">Peak</th></tr></thead>
+      <tbody>${jok || '<tr><td colspan="3" class="empty">No scaling jokers.</td></tr>'}</tbody></table></div>`;
+  $("#detail").showModal();
+}
+
+// ── wiring ───────────────────────────────────────────────────────────────
+fetch("/api/meta").then(r => r.json()).then(m => {
+  $("#deck").innerHTML = '<option value="">All decks</option>' +
+    m.decks.map(d => `<option value="${d.k}">${d.n}</option>`).join("");
+  $("#stake").innerHTML = '<option value="">All stakes</option>' +
+    m.stakes.map(s => `<option value="${s.k}">${s.k.replace("stake_", "")}</option>`).join("");
+});
+$("#deck").onchange = e => { state.deck = e.target.value; refresh(); };
+$("#stake").onchange = e => { state.stake = e.target.value; refresh(); };
+$("#sort").onchange = e => { state.sort = e.target.value; refresh(); };
+$("#phase").onclick = e => {
+  const b = e.target.closest("button.seg"); if (!b) return;
+  [...$("#phase").children].forEach(x => x.setAttribute("aria-pressed", x === b));
+  state.endless = b.dataset.v; refresh();
+};
+refresh();
+</script>
+</body>
+</html>

@@ -19,6 +19,11 @@ See [`docs/event-schema.md`](docs/event-schema.md) for the wire format.
 
 ```
 mod/BalatroDB/      the Steamodded mod (Lua)
+ingest/             SQLite schema, ingester and web dashboard
+  schema.sql          authoritative DDL; sync_schema.py copies it into the docs
+  ingest.py           folds logs into the database
+  dashboard.py        local web dashboard server
+  web/index.html      the dashboard itself
   main.lua          loads modules in dependency order, inside a pcall
   src/util.lua      serialization, number coercion, hook helpers
   src/log.lua       buffered JSONL writer
@@ -45,6 +50,21 @@ if you do.
 
 Requires Lovely and Steamodded. Logs land in
 `%APPDATA%\Balatro\BalatroDB\runs\<run_id>.jsonl`.
+
+## Dashboard
+
+```
+python ingest/ingest.py          # fold new runs into the database
+python ingest/dashboard.py       # http://localhost:8611
+```
+
+A local, Balatro-themed web dashboard over the database: record tiles, per-joker
+maxima, best hand by type, how far runs get, and a filterable run list that
+drills into a single run. Filters are deck, stake and endless phase, and they
+apply to every panel at once.
+
+It reads the SQLite database directly, so it is exactly as current as the last
+ingest. The palette is the game's own, lifted from `G.C` in `globals.lua`.
 
 ## Tests
 
