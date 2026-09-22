@@ -66,6 +66,17 @@ apply to every panel at once.
 It reads the SQLite database directly, so it is exactly as current as the last
 ingest. The palette is the game's own, lifted from `G.C` in `globals.lua`.
 
+For joker, deck and stake sprites, extract the game's atlases once:
+
+```
+python ingest/extract_assets.py
+```
+
+`Balatro.exe` is a LÖVE archive, so the textures and the lua that positions
+them can be read straight out of it. The extracted art is gitignored -- it is
+the game's own, not ours to redistribute -- and the dashboard falls back to
+plain text if it is absent.
+
 ## Tests
 
 ```

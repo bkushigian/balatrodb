@@ -19,3 +19,7 @@ __pycache__/
 .idea/
 Thumbs.db
 desktop.ini
+
+# Extracted game art — regenerate with `python ingest/extract_assets.py`.
+# Balatro's own copyrighted assets; not ours to redistribute.
+ingest/web/assets/

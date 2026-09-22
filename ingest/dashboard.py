@@ -160,16 +160,27 @@ def api_jokers(db, q):
     return rows(db, f"""
         WITH eligible AS (
           SELECT js.key, js.field, js.to_txt, js.to_ord, js.card_id,
-                 r.run_id, r.deck_name, r.stake_key
+                 r.run_id, r.deck_name, r.deck_key, r.stake_key
             FROM joker_scale js JOIN runs r USING (run_id)
-           WHERE js.is_reset = 0 AND js.to_ord IS NOT NULL{w}),
+           WHERE js.is_reset = 0 AND js.to_ord IS NOT NULL
+             AND js.key NOT IN ('j_turtle_bean'){w}),
         ranked AS (
           SELECT *, ROW_NUMBER() OVER (
                       PARTITION BY key, field
                       ORDER BY to_ord DESC, CAST(to_txt AS REAL) DESC) rn
             FROM eligible)
-        SELECT key, field, to_txt value, run_id, deck_name, stake_key
+        SELECT key, field, to_txt value, run_id, deck_name, deck_key, stake_key
           FROM ranked WHERE rn = 1 ORDER BY to_ord DESC""", p)
+
+
+# The jokers whose value IS a game counter. Their peak is the peak of that
+# counter, so the leaderboard row is the joker, not the counter.
+COUNTER_JOKERS = {
+    "hand_plays":  ("j_supernova",     "Supernova",      "plays of one hand type"),
+    "skips":       ("j_throwback",     "Throwback",      "blinds skipped"),
+    "tarots":      ("j_fortune_teller", "Fortune Teller", "tarots used"),
+    "stone_cards": ("j_stone",         "Stone Joker",    "stone cards held"),
+}
 
 
 def api_derived(db, q):
@@ -178,16 +189,28 @@ def api_derived(db, q):
     Supernova, Throwback, Fortune Teller and Stone Joker cannot be read from a
     joker sample at all -- their value is a function of run history, so it is
     reconstructed into joker_derived at ingest.
+
+    One row per joker, not per counter subject: Supernova's value is the count
+    for whichever hand you just played, so the record is the single highest
+    count reached, not a list of every hand type.
     """
     w, p = where(q, endless_col="d.endless")
-    return rows(db, f"""
+    raw = rows(db, f"""
         WITH ranked AS (
           SELECT d.metric, d.subject, d.value, r.run_id, r.deck_name,
-                 ROW_NUMBER() OVER (PARTITION BY d.metric, d.subject
-                                    ORDER BY d.value DESC) rn
+                 r.deck_key, r.stake_key,
+                 ROW_NUMBER() OVER (PARTITION BY d.metric ORDER BY d.value DESC) rn
             FROM joker_derived d JOIN runs r USING (run_id) WHERE 1=1{w})
-        SELECT metric, subject, value, run_id, deck_name FROM ranked
-         WHERE rn = 1 AND value > 0 ORDER BY metric, value DESC""", p)
+        SELECT * FROM ranked WHERE rn = 1 AND value > 0""", p)
+    out = []
+    for r in raw:
+        key, name, what = COUNTER_JOKERS.get(r["metric"], (None, r["metric"], ""))
+        out.append({"joker_key": key, "joker": name, "what": what,
+                    "detail": r["subject"], "value": r["value"],
+                    "run_id": r["run_id"], "deck_name": r["deck_name"],
+                    "deck_key": r["deck_key"], "stake_key": r["stake_key"]})
+    out.sort(key=lambda r: -(r["value"] or 0))
+    return out
 
 
 def api_hands(db, q):
@@ -195,11 +218,13 @@ def api_hands(db, q):
     best = rows(db, f"""
         WITH ranked AS (
           SELECT h.hand, h.score_txt, h.score_ord, h.level, r.run_id, r.deck_name,
+                 r.deck_key, r.stake_key,
                  ROW_NUMBER() OVER (PARTITION BY h.hand
                             ORDER BY h.score_ord DESC, CAST(h.score_txt AS REAL) DESC) rn
             FROM hands h JOIN runs r USING (run_id)
            WHERE h.hand IS NOT NULL AND h.score_ord IS NOT NULL{w})
-        SELECT hand, score_txt value, level, run_id, deck_name FROM ranked
+        SELECT hand, score_txt value, level, run_id, deck_name, deck_key, stake_key
+          FROM ranked
          WHERE rn = 1 ORDER BY score_ord DESC""", p)
     lw, lp = where(q, endless_col="hl.endless")
     levels = rows(db, f"""
@@ -280,13 +305,16 @@ class Handler(BaseHTTPRequestHandler):
                                 "application/json", 500)
             return
 
-        name = "index.html" if u.path in ("/", "") else os.path.basename(u.path)
-        path = os.path.join(WEB, name)
-        if not os.path.isfile(path):
+        rel = "index.html" if u.path in ("/", "") else u.path.lstrip("/")
+        # Serve subdirectories (assets/) but never escape WEB.
+        path = os.path.normpath(os.path.join(WEB, rel))
+        if not path.startswith(os.path.normpath(WEB) + os.sep) or not os.path.isfile(path):
             self.send_bytes(b"not found", "text/plain", 404)
             return
         ctype = {"html": "text/html; charset=utf-8", "css": "text/css",
-                 "js": "text/javascript"}.get(name.rsplit(".", 1)[-1], "text/plain")
+                 "js": "text/javascript", "json": "application/json",
+                 "png": "image/png", "jpg": "image/jpeg", "svg": "image/svg+xml",
+                 "woff2": "font/woff2"}.get(rel.rsplit(".", 1)[-1].lower(), "text/plain")
         with open(path, "rb") as fh:
             self.send_bytes(fh.read(), ctype)
 

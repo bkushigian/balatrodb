@@ -97,6 +97,17 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .chip.endless { background: var(--purple); color: #fff; }
 .chip.susp { background: #566264; color: var(--ink-dim); }
 .muted { color: var(--ink-mute); }
+/* Sprites are cells of the game's own atlases, positioned with
+   background-position. Scaled by background-size so one rule covers any
+   display size. */
+.spr { display: inline-block; vertical-align: middle; background-repeat: no-repeat;
+       image-rendering: pixelated; flex: none; }
+.spr.j { width: 30px; height: 40px; }
+.spr.b { width: 26px; height: 35px; }
+.spr.s { width: 20px; height: 20px; }
+.namecell { display: flex; align-items: center; gap: 8px; }
+.sub2 { color: var(--ink-mute); font-size: 11px; }
+.deckcell { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .clickable { cursor: pointer; }
 
 /* ── single-series bar chart: ante distribution ───────────────────────── */
@@ -161,7 +172,7 @@ button.x { background: var(--sunken); color: var(--ink-dim); border: 0;
       <h2>Scaling jokers</h2>
       <p class="muted" style="font-size:12px;margin:4px 0 10px">Highest value ever reached, from <code>joker.scale</code>.</p>
       <div class="scroll"><table id="jokers"><thead><tr>
-        <th>Joker</th><th>Field</th><th class="num">Peak</th><th>Run</th>
+        <th>Joker</th><th>Field</th><th class="num">Peak</th><th>Deck</th><th>Stake</th>
       </tr></thead><tbody></tbody></table></div>
     </div>
 
@@ -169,7 +180,7 @@ button.x { background: var(--sunken); color: var(--ink-dim); border: 0;
       <h2>Counter jokers</h2>
       <p class="muted" style="font-size:12px;margin:4px 0 10px">These read game counters, not their own ability — reconstructed from run history.</p>
       <div class="scroll"><table id="derived"><thead><tr>
-        <th>Counter</th><th>Subject</th><th class="num">Peak</th><th>Run</th>
+        <th>Joker</th><th class="num">Peak</th><th>Deck</th><th>Stake</th>
       </tr></thead><tbody></tbody></table></div>
     </div>
   </section>
@@ -178,7 +189,7 @@ button.x { background: var(--sunken); color: var(--ink-dim); border: 0;
     <div class="panel">
       <h2>Best hand by type</h2>
       <div class="scroll"><table id="hands"><thead><tr>
-        <th>Hand</th><th class="num">Score</th><th class="num">Lvl</th><th class="num">Max lvl</th><th>Run</th>
+        <th>Hand</th><th class="num">Score</th><th class="num">Lvl</th><th class="num">Max</th><th>Deck</th><th>Stake</th>
       </tr></thead><tbody></tbody></table></div>
     </div>
 
@@ -223,6 +234,29 @@ const ago = ts => {
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 };
 const shortKey = k => (k || "").replace(/^j_/, "").replace(/_/g, " ");
+
+// Atlas metadata, extracted from the game by ingest/extract_assets.py. Absent
+// if that has not been run, in which case everything falls back to text.
+let SPR = null;
+fetch("assets/sprites.json").then(r => r.ok ? r.json() : null)
+  .then(d => { SPR = d; }).catch(() => {});
+
+function sprite(key, kind, px) {
+  if (!SPR || !key || !SPR.sprites[key]) return "";
+  const s = SPR.sprites[key], a = SPR.atlases[s.a];
+  if (!a) return "";
+  const scale = px / a.cw;
+  return `<span class="spr ${kind}" title="${key}" style="
+      width:${px}px; height:${(a.ch * scale).toFixed(1)}px;
+      background-image:url(assets/${s.a});
+      background-size:${(a.w * scale).toFixed(1)}px ${(a.h * scale).toFixed(1)}px;
+      background-position:-${(s.x * a.cw * scale).toFixed(1)}px -${(s.y * a.ch * scale).toFixed(1)}px"></span>`;
+}
+
+const deckCell = r => `<span class="deckcell">${sprite(r.deck_key, "b", 26)}
+  <span>${r.deck_name || "—"}</span></span>`;
+const stakeCell = r => `<span class="deckcell">${sprite(r.stake_key, "s", 20)}
+  <span class="muted">${(r.stake_key || "").replace("stake_", "") || "—"}</span></span>`;
 const shortRun = r => (r || "").split("-")[1] || r;
 
 const qs = () => {
@@ -261,17 +295,19 @@ async function refresh() {
 
   $("#jokers tbody").innerHTML = jok.length ? jok.map(j => `
     <tr class="clickable" onclick="openRun('${j.run_id}')">
-      <td>${shortKey(j.key)}</td><td class="muted">${j.field}</td>
+      <td><span class="namecell">${sprite(j.key, "j", 30)}
+          <span>${shortKey(j.key)}</span></span></td>
+      <td class="muted">${j.field}</td>
       <td class="num" style="color:var(--mult);font-weight:700">${fmt(j.value)}</td>
-      <td class="muted">${j.deck_name || shortRun(j.run_id)}</td></tr>`).join("")
-    : `<tr><td colspan="4" class="empty">No scaling jokers recorded yet.</td></tr>`;
+      <td>${deckCell(j)}</td><td>${stakeCell(j)}</td></tr>`).join("")
+    : `<tr><td colspan="5" class="empty">No scaling jokers recorded yet.</td></tr>`;
 
   $("#derived tbody").innerHTML = der.length ? der.map(d => `
     <tr class="clickable" onclick="openRun('${d.run_id}')">
-      <td>${d.metric.replace(/_/g, " ")}</td>
-      <td class="muted">${d.subject || "—"}</td>
+      <td><span class="namecell">${sprite(d.joker_key, "j", 30)}
+          <span>${d.joker}<br><span class="sub2">${d.what}</span></span></span></td>
       <td class="num" style="color:var(--green);font-weight:700">${fmt(d.value)}</td>
-      <td class="muted">${d.deck_name || shortRun(d.run_id)}</td></tr>`).join("")
+      <td>${deckCell(d)}</td><td>${stakeCell(d)}</td></tr>`).join("")
     : `<tr><td colspan="4" class="empty">Nothing yet.</td></tr>`;
 
   const lvl = Object.fromEntries(hands.levels.map(l => [l.hand, l.level]));
@@ -281,8 +317,8 @@ async function refresh() {
       <td class="num" style="color:var(--chips);font-weight:700">${fmt(h.value)}</td>
       <td class="num muted">${h.level ?? "—"}</td>
       <td class="num muted">${lvl[h.hand] ?? "—"}</td>
-      <td class="muted">${h.deck_name || shortRun(h.run_id)}</td></tr>`).join("")
-    : `<tr><td colspan="5" class="empty">No hands recorded yet.</td></tr>`;
+      <td>${deckCell(h)}</td><td>${stakeCell(h)}</td></tr>`).join("")
+    : `<tr><td colspan="6" class="empty">No hands recorded yet.</td></tr>`;
 
   const max = Math.max(1, ...antes.map(a => a.n));
   $("#antes").innerHTML = antes.length ? antes.map(a => `
@@ -294,8 +330,8 @@ async function refresh() {
   $("#runs tbody").innerHTML = runs.length ? runs.map(r => `
     <tr class="clickable" onclick="openRun('${r.run_id}')">
       <td class="muted">${ago(r.started_ts)}</td>
-      <td>${r.deck_name || "—"}</td>
-      <td class="muted">${(r.stake_key || "").replace("stake_", "")}</td>
+      <td>${deckCell(r)}</td>
+      <td>${stakeCell(r)}</td>
       <td>${resultChip(r)}${r.went_endless ? ' <span class="chip endless">ENDLESS</span>' : ""}</td>
       <td class="num">${r.ante ?? "—"}</td>
       <td class="num">${fmt(r.best_hand)}</td>
