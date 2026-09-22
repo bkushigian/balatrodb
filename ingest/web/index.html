@@ -483,16 +483,45 @@ function syncPhase() {
 
 // Big numbers arrive as exact decimal text and can exceed Number range, so
 // format from the string rather than parseFloat where possible.
-const fmt = v => {
+// Past ten billion the digits stop being readable and only the magnitude
+// means anything, so numbers switch to A.BBe12 there.
+const EXP_AT = 1e10;
+
+// A value the log carries but a double cannot hold. These arrive as exact
+// decimal strings -- either a very long run of digits or already in
+// exponential form -- so the exponent is counted off the string rather than
+// computed, which would have overflowed to Infinity.
+const sciFromString = str => {
+  const m = /^([+-]?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(str);
+  if (!m) return null;
+  const [, sign, int, frac = "", exp] = m;
+  const lead = int.replace(/^0+/, "");
+  const digits = (lead + frac) || "0";
+  const e = Math.max(lead.length - 1, 0) + (exp ? Number(exp) : 0);
+  return `${sign}${digits[0]}.${digits.slice(1, 3).padEnd(2, "0")}e${e}`;
+};
+
+const fmtNum = (v, whole) => {
   if (v === null || v === undefined || v === "") return "—";
-  const n = Number(v);
-  // Escaped: fmt is handed TEXT columns straight out of the log
-  // (score_txt, to_txt, required_txt), and a modded joker can put anything
-  // in them. Every caller interpolates the result into innerHTML.
-  if (!isFinite(n)) return esc(String(v));
-  if (Math.abs(n) >= 1e12) return n.toExponential(3).replace("e+", "e");
+  const str = String(v).trim();
+  const n = Number(str);
+  if (!isFinite(n)) {
+    // Escaped: fmt is handed TEXT columns straight out of the log
+    // (score_txt, to_txt, required_txt), and a modded joker can put
+    // anything in them. Every caller interpolates into innerHTML.
+    return sciFromString(str) ?? esc(str);
+  }
+  if (Math.abs(n) >= EXP_AT) return n.toExponential(2).replace("e+", "e");
+  // Balatro scores in whole chips, so a .75 is an artefact of the maths
+  // rather than something the player saw. Truncated, not rounded: rounding
+  // up would report more than was actually scored.
+  if (whole) return Math.trunc(n).toLocaleString();
   return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 };
+
+const fmt = v => fmtNum(v, false);
+// Scores and chip requirements: whole numbers only.
+const fmtScore = v => fmtNum(v, true);
 const ago = ts => {
   if (!ts) return "—";
   const d = new Date(ts * 1000), s = (Date.now() / 1000) - ts;
@@ -730,7 +759,7 @@ defineTable("hands", [
   { label: "Hand", title: "Sorts by poker-hand strength.",
     cell: r => handCell(r.hand), sort: r => handRank(r.hand) },
   { label: "Score", num: true, style: "color:var(--chips);font-weight:700",
-    cell: r => fmt(r.value), sort: r => r.ord },
+    cell: r => fmtScore(r.value), sort: r => r.ord },
   { label: "Lvl", num: true, cls: "muted",
     title: "The level that hand was at when this score was made.",
     cell: r => r.level ?? "—", sort: r => r.level },
@@ -771,7 +800,7 @@ defineTable("runs", [
   { label: "Rounds won", num: true, cls: "muted",
     title: "Blinds cleared. A round is only cashed out when its blind was beaten.",
     cell: r => r.rounds_won ?? "—", sort: r => r.rounds_won },
-  { label: "Best hand", num: true, cell: r => fmt(r.best_hand),
+  { label: "Best hand", num: true, cell: r => fmtScore(r.best_hand),
     sort: r => r.bh_ord },
   { label: "Peak $", num: true,
     cell: r => r.peak_money !== null ? "$" + fmt(r.peak_money) : "—",
@@ -793,7 +822,7 @@ async function refresh() {
     `${s.runs} runs · ${s.won} won` + (s.win_pct !== null ? ` · ${s.win_pct}% win rate` : "");
 
   $("#tiles").innerHTML = [
-    ["Best hand", fmt(s.best_hand), esc(s.best_hand_name || ""), "mult"],
+    ["Best hand", fmtScore(s.best_hand), esc(s.best_hand_name || ""), "mult"],
     ["Most money", s.max_money !== null ? "$" + fmt(s.max_money) : "—", "peak balance", "money"],
     ["Furthest ante", fmt(s.max_ante), "", "gold"],
     ["Biggest cash-out", s.max_cashout !== null ? "$" + fmt(s.max_cashout) : "—", "one round", "money"],
@@ -822,7 +851,7 @@ async function openRun(id) {
     <tr class="roundrow clickable" data-round="${x.round_seq}">
       <td class="num">${x.round_seq}</td>
       <td class="num">${x.ante ?? "—"}</td><td>${esc(x.blind_name) || "—"}</td>
-      <td class="num">${fmt(x.required_txt)}</td><td class="num">${fmt(x.score_txt)}</td>
+      <td class="num">${fmtScore(x.required_txt)}</td><td class="num">${fmtScore(x.score_txt)}</td>
       <td class="num">${x.cashout_total !== null ? "$" + x.cashout_total : "—"}</td>
       <td class="num muted">${x.deck_size ?? "—"}</td>
       <td>${x.endless ? '<span class="chip pixel-pill sm endless">ENDLESS</span>' : ""}</td></tr>
@@ -923,8 +952,8 @@ async function toggleRound(runId, tr) {
       return `<div class="step play">
         <span class="what">${esc(s.hand) || "hand"}${s.level ? `<span class="jv">lvl ${s.level}</span>` : ""}</span>
         <span class="hand">${cards}${moved}</span>
-        <span class="score"><b>+${fmt(s.score_txt)}</b><br>
-          <span>${fmt(s.total_after)} total</span>${cash}</span></div>`;
+        <span class="score"><b>+${fmtScore(s.score_txt)}</b><br>
+          <span>${fmtScore(s.total_after)} total</span>${cash}</span></div>`;
     }
     const nc = s.cards_n ?? (s.cards || []).length;
     return `<div class="step discard">

@@ -1,4 +1,5 @@
-"""Exercises the dashboard's column sorting, using the page's own code.
+"""Exercises the dashboard's sorting and number formatting, using the page's
+own code.
 
 Every panel is sortable by clicking a header, and the sort runs on the row
 objects rather than the rendered text -- a 765,450 score must not sort below
@@ -115,7 +116,18 @@ const handsSorted = HANDS.slice().sort((a, b) => {
   return (y - x);
 }).map(r => r.hand);
 
+// Formatting. Scores are whole chips; joker peaks keep their decimals,
+// because a Hologram really is at x1.25.
+const FMT = [
+  ["12345.75", "score"], ["20987.5", "score"], ["765450", "score"],
+  ["9999999999", "score"], ["10000000000", "score"], ["123456789012", "score"],
+  ["1.2345e+400", "score"],
+  ["2.75", "peak"], ["1.25", "peak"], ["2080", "peak"],
+  [null, "peak"], ["<img src=x onerror=1>", "peak"],
+];
+
 console.log(JSON.stringify({
+  fmt: FMT.map(([v, k]) => (k === "score" ? fmtScore(v) : fmt(v))),
   handsSorted,
   panels:    Object.keys(TBL),
   // Every panel must have a table element to render into, or it silently
@@ -140,7 +152,9 @@ PRELUDE = f"const TABLE_IDS = {json.dumps(table_ids)};\n"
 
 tmp = os.path.join(tempfile.gettempdir(), "balatrodb_sort.js")
 pathlib.Path(tmp).write_text(PRELUDE + STUB + blocks[0] + HARNESS, encoding="utf-8")
-r = subprocess.run(["node", tmp], capture_output=True, text=True)
+r = subprocess.run(["node", tmp], capture_output=True, text=True,
+                   encoding="utf-8")   # node emits UTF-8; the Windows
+                                       # locale would mangle an em dash
 os.unlink(tmp)
 if r.returncode:
     print("FAIL: page script did not run under node")
@@ -199,6 +213,28 @@ check("strongest first",
       res["handsSorted"])
 check("an unknown hand sorts last", res["handsSorted"][-1] == "Mystery Hand",
       res["handsSorted"])
+
+print("\nscores are whole numbers, joker peaks keep their decimals")
+got = dict(zip(
+    ["12345.75", "20987.5", "765450", "9999999999", "10000000000",
+     "123456789012", "1.2345e+400", "2.75", "1.25", "2080", "null", "xss"],
+    res["fmt"]))
+check("a fractional score truncates", got["12345.75"] == "12,345", got["12345.75"])
+check("truncates rather than rounds up", got["20987.5"] == "20,987", got["20987.5"])
+check("a whole score is untouched", got["765450"] == "765,450", got["765450"])
+check("9,999,999,999 still reads as digits",
+      got["9999999999"] == "9,999,999,999", got["9999999999"])
+check("ten billion switches to an exponent",
+      got["10000000000"] == "1.00e10", got["10000000000"])
+check("and stays there above it", got["123456789012"] == "1.23e11", got["123456789012"])
+# Number() gives Infinity for this one, so it is read off the string instead.
+check("a value beyond a double still formats",
+      got["1.2345e+400"] == "1.23e400", got["1.2345e+400"])
+check("a joker peak keeps its fraction", got["2.75"] == "2.75", got["2.75"])
+check("and its quarter", got["1.25"] == "1.25", got["1.25"])
+check("a big peak still groups", got["2080"] == "2,080", got["2080"])
+check("nothing renders as an em dash", got["null"] == "—", got["null"])
+check("a non-numeric string is escaped", "&lt;img" in got["xss"], got["xss"])
 
 print("\nevery panel opens on a sensible column")
 check("all panels have a default sort",
