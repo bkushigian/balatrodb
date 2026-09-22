@@ -30,7 +30,7 @@
 body {
   margin: 0; padding: 0 16px 64px;
   background: var(--bg); color: var(--ink);
-  font: 14px/1.5 "m6x11", "Courier New", ui-monospace, monospace;
+  font: 16px/1.5 "m6x11", "Courier New", ui-monospace, monospace;
   -webkit-font-smoothing: antialiased;
 }
 h1, h2, h3 { margin: 0; font-weight: 700; letter-spacing: .02em; }
@@ -43,25 +43,25 @@ a { color: var(--chips); }
   padding: 14px 16px;
 }
 header {
-  max-width: 1240px; margin: 0 auto; padding: 22px 0 14px;
+  max-width: 1480px; margin: 0 auto; padding: 22px 0 14px;
   display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
 }
-header h1 { font-size: 26px; }
+header h1 { font-size: 30px; }
 header h1 span { color: var(--mult); }
-header .sub { color: var(--ink-mute); font-size: 12px; }
+header .sub { color: var(--ink-mute); font-size: 14px; }
 /* brief pulse when new runs arrive, so an update is noticed without a banner
    that shifts the layout */
 @keyframes flash { from { color: var(--gold); } to { color: var(--ink-mute); } }
 header .sub.fresh { animation: flash 1.6s ease-out; }
 @media (prefers-reduced-motion: reduce) { header .sub.fresh { animation: none; } }
-main { max-width: 1240px; margin: 0 auto; display: grid; gap: 16px; }
+main { max-width: 1480px; margin: 0 auto; display: grid; gap: 16px; }
 
 /* ── filters: one row above everything, per the interaction spec ───────── */
 .filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-.filters label { color: var(--ink-dim); font-size: 12px; margin-right: 4px; }
+.filters label { color: var(--ink-dim); font-size: 14px; margin-right: 4px; }
 select, button.seg {
   background: var(--sunken); color: var(--ink); border: 0;
-  border-radius: .35rem; padding: 7px 10px; font: inherit; font-size: 13px;
+  border-radius: .35rem; padding: 8px 12px; font: inherit; font-size: 15px;
   box-shadow: 0 2px 0 #171d1e; cursor: pointer;
 }
 select:focus-visible, button:focus-visible { outline: 2px solid var(--filter); outline-offset: 2px; }
@@ -73,7 +73,7 @@ select:focus-visible, button:focus-visible { outline: 2px solid var(--filter); o
    every deck out as a button would not survive the full set of them. */
 .pick { position: relative; display: inline-block; vertical-align: middle; }
 .pick > button { display: inline-flex; align-items: center; gap: 7px; }
-.pick .caret { color: var(--ink-mute); font-size: 11px; }
+.pick .caret { color: var(--ink-mute); font-size: 13px; }
 .pick .menu {
   position: absolute; z-index: 40; top: calc(100% + 5px); left: 0; display: none;
   background: var(--surface); border: 1px solid #4a585c; border-radius: .4rem;
@@ -84,7 +84,7 @@ select:focus-visible, button:focus-visible { outline: 2px solid var(--filter); o
 .pick .menu button {
   display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
   background: transparent; border: 0; box-shadow: none; color: var(--ink);
-  font: inherit; font-size: 13px; padding: 5px 9px; border-radius: .3rem;
+  font: inherit; font-size: 15px; padding: 6px 10px; border-radius: .3rem;
   cursor: pointer; white-space: nowrap;
 }
 .pick .menu button:hover, .pick .menu button:focus-visible { background: var(--sunken); }
@@ -95,10 +95,10 @@ button.seg[aria-pressed="true"] { background: var(--mult); color: #2a1210; font-
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
 .tile { background: var(--surface); border-radius: var(--r); padding: 12px 14px;
         box-shadow: 0 4px 0 #222b2c; }
-.tile .k { color: var(--ink-mute); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
-.tile .v { font-size: 26px; font-weight: 700; line-height: 1.15; margin-top: 4px;
+.tile .k { color: var(--ink-mute); font-size: 13px; text-transform: uppercase; letter-spacing: .08em; }
+.tile .v { font-size: 31px; font-weight: 700; line-height: 1.15; margin-top: 4px;
            overflow-wrap: anywhere; }
-.tile .n { color: var(--ink-dim); font-size: 11px; margin-top: 2px; }
+.tile .n { color: var(--ink-dim); font-size: 13px; margin-top: 2px; }
 .v.mult { color: var(--mult); } .v.money { color: var(--money); }
 .v.chips { color: var(--chips); } .v.gold { color: var(--gold); }
 .v.purple { color: var(--purple); } .v.green { color: var(--green); }
@@ -116,11 +116,11 @@ button.seg[aria-pressed="true"] { background: var(--mult); color: #2a1210; font-
    without this a table with card art sat at a different rhythm from one
    without -- which is what made two panels of ten rows end at different
    heights. */
-tbody td { height: 42px; }
+tbody td { height: 64px; }
 .scroll { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+table { width: 100%; border-collapse: collapse; font-size: 15px; }
 th {
-  text-align: left; color: var(--ink-mute); font-size: 11px; font-weight: 700;
+  text-align: left; color: var(--ink-mute); font-size: 13px; font-weight: 700;
   text-transform: uppercase; letter-spacing: .06em; padding: 4px 8px 8px;
   white-space: nowrap; position: sticky; top: 0; background: var(--surface);
 }
@@ -133,7 +133,7 @@ th.sortable .ind { display: inline-block; width: .8em; color: var(--gold); }
 
 /* The seed, as something you press. It is the one cell people want to take
    somewhere else, so it copies on click rather than needing a careful drag. */
-.seed { font: inherit; font-size: 11px; letter-spacing: .06em; cursor: pointer;
+.seed { font: inherit; font-size: 13px; letter-spacing: .06em; cursor: pointer;
         background: var(--sunken); color: var(--ink-dim);
         border: 1px solid #40525a; border-radius: 999px;
         padding: 3px 10px; transition: background .12s, color .12s; }
@@ -143,7 +143,7 @@ th.sortable .ind { display: inline-block; width: .8em; color: var(--gold); }
 td.num { font-variant-numeric: tabular-nums; }
 .chip {
   display: inline-block; padding: 1px 7px; border-radius: 99px;
-  font-size: 11px; font-weight: 700; color: #1b2223;
+  font-size: 12px; font-weight: 700; color: #1b2223;
 }
 .chip.win { background: var(--gold); }
 .chip.died { background: var(--blind); color: #fff; }
@@ -161,7 +161,7 @@ td.num { font-variant-numeric: tabular-nums; }
 .spr.b { width: 26px; height: 35px; }
 .spr.s { width: 20px; height: 20px; }
 .namecell { display: flex; align-items: center; gap: 8px; }
-.sub2 { color: var(--ink-mute); font-size: 11px; }
+.sub2 { color: var(--ink-mute); font-size: 13px; }
 .deckcell { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .clickable { cursor: pointer; }
 
@@ -185,7 +185,7 @@ dialog::backdrop { background: rgba(10,14,15,.72); }
 dialog .head { display: flex; justify-content: space-between; align-items: center;
                padding: 14px 18px; border-bottom: 1px solid #2b3536; gap: 12px; }
 dialog .body { padding: 16px 18px; max-height: 72vh; overflow: auto; }
-dialog h3 { font-size: 13px; color: var(--ink-mute); text-transform: uppercase;
+dialog h3 { font-size: 15px; color: var(--ink-mute); text-transform: uppercase;
             letter-spacing: .07em; margin: 16px 0 6px; }
 dialog h3:first-child { margin-top: 0; }
 button.x { background: var(--sunken); color: var(--ink-dim); border: 0;
@@ -208,7 +208,7 @@ tr.detail > td { padding: 0; border-top: 0; }
 .step { display: grid; grid-template-columns: 104px 1fr auto; gap: 10px;
         align-items: center; padding: 5px 6px; border-radius: .25rem; }
 .step.play { background: #2c393b; }
-.step .what { font-size: 12px; font-weight: 700; line-height: 1.25;
+.step .what { font-size: 14px; font-weight: 700; line-height: 1.25;
               overflow-wrap: anywhere; }
 .step .what .jv { display: block; font-weight: 400; }
 .step.play .what { color: var(--chips); }
@@ -241,23 +241,23 @@ tr.detail > td { padding: 0; border-top: 0; }
 .seal.blue { background: #009dff; } .seal.purple { background: #8867a6; }
 .step .score { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .step .score b { color: var(--mult); }
-.step .score span { color: var(--ink-mute); font-size: 11px; }
+.step .score span { color: var(--ink-mute); font-size: 13px; }
 /* The board: state going into the round, not an action. Jokers are only
    sampled when a hand is played, so the values shown are those after the
    round's first scored hand -- the lineup is the point. */
 .board { display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
          background: var(--sunken); border-radius: .3rem;
          padding: 6px 10px; margin: 2px 0 6px; }
-.board .lbl { color: var(--ink-mute); font-size: 11px; letter-spacing: .06em;
+.board .lbl { color: var(--ink-mute); font-size: 13px; letter-spacing: .06em;
               text-transform: uppercase; margin-right: 2px; }
 .bj { display: inline-flex; flex-direction: column; align-items: center; }
 .moved { display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
          width: 100%; margin-top: 2px; opacity: .85; }
 .moved .bj { flex-direction: row; gap: 2px; }
-.cash { display: block; color: var(--money); font-size: 11px; font-weight: 700; }
-.jv { color: var(--ink-dim); font-size: 10px; }
-.warn { color: var(--filter); font-size: 12px; }
-@media (max-width: 560px) { header h1 { font-size: 21px; } .tile .v { font-size: 21px; } }
+.cash { display: block; color: var(--money); font-size: 13px; font-weight: 700; }
+.jv { color: var(--ink-dim); font-size: 12px; }
+.warn { color: var(--filter); font-size: 14px; }
+@media (max-width: 560px) { header h1 { font-size: 24px; } .tile .v { font-size: 25px; } }
 </style>
 </head>
 <body>
@@ -398,7 +398,7 @@ const handRank = hand => {
 // gives the hand panels real art, and with it their rows match the joker
 // rows' height instead of sitting at a different rhythm.
 const handCell = h => `<span class="namecell">${
-  sprite((SPR && SPR.hand_planets && SPR.hand_planets[h]) || "", "j", 30)
+  sprite((SPR && SPR.hand_planets && SPR.hand_planets[h]) || "", "j", 45)
   }<span>${esc(h)}</span></span>`;
 
 const nameOf = (key, fallback) =>
@@ -410,12 +410,12 @@ const nameOf = (key, fallback) =>
 // every row of every panel.
 const deckCell = r => r.deck_key
   ? `<span class="deckcell" title="${esc(nameOf(r.deck_key, r.deck_name))}">${
-      sprite(r.deck_key, "b", 26) ||
+      sprite(r.deck_key, "b", 39) ||
       `<span class="muted">${esc(r.deck_name || r.deck_key)}</span>`}</span>`
   : `<span class="muted">—</span>`;
 const stakeCell = r => r.stake_key
   ? `<span class="deckcell" title="${esc(nameOf(r.stake_key))}">${
-      sprite(r.stake_key, "s", 20) ||
+      sprite(r.stake_key, "s", 29) ||
       `<span class="muted">${esc(r.stake_key.replace("stake_", ""))}</span>`}</span>`
   : `<span class="muted">—</span>`;
 
@@ -572,7 +572,7 @@ function resultChip(r) {
 // ── panel definitions ────────────────────────────────────────────────────
 // Marks a table's rows as openable; the handler is attached in drawTable.
 const openRunJS = true;
-const jokerCell = r => `<span class="namecell">${sprite(r.key, "j", 30)}
+const jokerCell = r => `<span class="namecell">${sprite(r.key, "j", 45)}
   <span>${esc(nameOf(r.key))}${r.what
     ? `<br><span class="sub2">${esc(r.what)}</span>` : ""}</span></span>`;
 
@@ -718,9 +718,9 @@ async function openRun(id) {
 // ... for an enhanced one. A stone card has no rank or suit to show -- the
 // enhancement is the whole card -- so it gets no face.
 function cardSprite(c) {
-  const base = sprite(c.key || "c_base", "pc", 30);
+  const base = sprite(c.key || "c_base", "pc", 45);
   const face = c.key === "m_stone" ? ""
-    : sprite(`card:${c.suit}:${c.rank}`, "pc face", 30);
+    : sprite(`card:${c.suit}:${c.rank}`, "pc face", 45);
   if (!base && !face) {
     return `<span class="jv">${esc((c.rank || "?") + ((c.suit || "")[0] || ""))}</span>`;
   }
@@ -757,7 +757,7 @@ async function toggleRound(runId, tr) {
     ? `<div class="board"><span class="lbl">Jokers</span>` +
       d.board.map(j => {
         const v = j.chips ?? j.mult ?? j.x_mult ?? j.extra;
-        return `<span class="bj">` + (sprite(j.key, "j", 28)
+        return `<span class="bj">` + (sprite(j.key, "j", 42)
             || `<span class="jv">${esc(j.key || "?")}</span>`) +
           (v !== null && v !== undefined ? `<span class="jv">${fmt(v)}</span>` : "") +
           `</span>`;
@@ -771,7 +771,7 @@ async function toggleRound(runId, tr) {
     const moved = (s.joker_delta || []).length
       ? `<div class="moved">` + s.joker_delta.map(m =>
           `<span class="bj" title="${esc(m.key + " " + m.field)}">` +
-          (sprite(m.key, "j", 18) || `<span class="jv">${esc(m.key)}</span>`) +
+          (sprite(m.key, "j", 26) || `<span class="jv">${esc(m.key)}</span>`) +
           `<span class="jv">${fmt(m.from)}→${fmt(m.to)}</span></span>`).join("") +
         `</div>`
       : "";
@@ -854,9 +854,9 @@ Promise.all([
   fetch("/api/meta").then(r => r.json()),
   SPR_READY,
 ]).then(([m]) => {
-  buildPicker("deck", "deck", m.decks, "b", 26, "All decks");
+  buildPicker("deck", "deck", m.decks, "b", 39, "All decks");
   buildPicker("stake", "stake",
-    m.stakes.map(x => ({ k: x.k, n: nameOf(x.k) })), "s", 22, "All stakes");
+    m.stakes.map(x => ({ k: x.k, n: nameOf(x.k) })), "s", 29, "All stakes");
 });
 
 $("#noplasma").onclick = e => {
