@@ -739,10 +739,28 @@ class Ingester:
                 "INSERT OR REPLACE INTO run_records VALUES (" +
                 ",".join("?" * 8) + ")", out)
 
+    # Jokers whose value is a function of game state rather than of anything
+    # they store: the counter they read, and the key that reads it.
+    COUNTER_SOURCES = {
+        "hand_plays":  "j_supernova",
+        "skips":       "j_throwback",
+        "stone_cards": "j_stone",
+        "tarots":      "j_fortune_teller",
+        "dollars":     "j_bull",
+    }
+
     def derive_counters(self):
-        """Supernova, Throwback and Fortune Teller read GAME counters, not
-        their own ability fields, so their value cannot come from a joker
-        sample. Reconstruct the counters from the projections instead.
+        """Supernova, Throwback, Fortune Teller, Stone Joker and Bull read
+        GAME state rather than their own ability fields, so their value can
+        never come from a joker sample -- Bull's sample says `extra = 2`,
+        which is its rate, not its contribution.
+
+        Each row is also marked with whether the joker was actually in hand
+        at that moment. Without that the board credited a run with "Fortune
+        Teller 83" when that run had never held one: 83 tarots were simply
+        used in it. Both readings are useful, so both are kept -- `held` is
+        the joker's real peak, and the counter regardless of possession is
+        what it would have been worth.
         """
         self.db.execute("DELETE FROM joker_derived")
         # Supernova: times the played hand type has been played, so far.
@@ -775,6 +793,30 @@ class Ingester:
                    ROW_NUMBER() OVER (PARTITION BY run_id ORDER BY seg, n)
               FROM consumable_uses WHERE set_ = 'Tarot'
         """)
+        # Bull: dollars held. The balance is already a running series.
+        self.db.execute("""
+            INSERT INTO joker_derived (run_id, seg, n, endless, metric, subject, value)
+            SELECT run_id, seg, n, endless, 'dollars', NULL, balance
+              FROM money WHERE balance IS NOT NULL
+        """)
+
+        # A joker counts as held from its first sample to its last. Samples
+        # are taken when a hand is played and at round end, so the interval
+        # is a little coarse at the edges -- but a joker bought and sold
+        # without ever being sampled did not affect a score anyway.
+        for metric, key in self.COUNTER_SOURCES.items():
+            self.db.execute("""
+                UPDATE joker_derived SET held = 1
+                 WHERE metric = ?
+                   AND EXISTS (
+                     SELECT 1 FROM (
+                       SELECT run_id, seg, MIN(n) lo, MAX(n) hi
+                         FROM joker_state WHERE key = ?
+                        GROUP BY run_id, seg, card_id) h
+                      WHERE h.run_id = joker_derived.run_id
+                        AND h.seg    = joker_derived.seg
+                        AND joker_derived.n BETWEEN h.lo AND h.hi)
+            """, (metric, key))
 
 
 # ─── reporting ────────────────────────────────────────────────────────────

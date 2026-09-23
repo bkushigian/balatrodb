@@ -402,8 +402,11 @@ def api_all_jokers(db, q):
                     "deck_name": j["deck_name"], "deck_key": j["deck_key"],
                     "stake_key": j["stake_key"]})
     for d in api_derived(db, q):
+        # `what` stays off the row -- the board is the joker, not the
+        # counter behind it. It goes in the hover with the ambient figure.
         out.append({"key": d["joker_key"], "value": d["value"],
                     "ord": ord_of(d["value"]), "what": None,
+                    "counter": d["what"], "ambient": d.get("ambient"),
                     "run_id": d["run_id"], "deck_name": d["deck_name"],
                     "deck_key": d["deck_key"], "stake_key": d["stake_key"]})
     out.sort(key=lambda r: -(r["ord"] or 0))
@@ -453,10 +456,13 @@ def api_jokers(db, q):
 # The jokers whose value IS a game counter. Their peak is the peak of that
 # counter, so the leaderboard row is the joker, not the counter.
 COUNTER_JOKERS = {
-    "hand_plays":  ("j_supernova",     "Supernova",      "plays of one hand type"),
-    "skips":       ("j_throwback",     "Throwback",      "blinds skipped"),
+    "hand_plays":  ("j_supernova",      "Supernova",      "plays of one hand type"),
+    "skips":       ("j_throwback",      "Throwback",      "blinds skipped"),
     "tarots":      ("j_fortune_teller", "Fortune Teller", "tarots used"),
-    "stone_cards": ("j_stone",         "Stone Joker",    "stone cards held"),
+    "stone_cards": ("j_stone",          "Stone Joker",    "stone cards held"),
+    # Bull reads your money at score time; its sample says extra = 2, which
+    # is the rate (+2 chips per dollar), not the contribution.
+    "dollars":     ("j_bull",           "Bull",           "dollars held"),
 }
 
 
@@ -472,18 +478,34 @@ def api_derived(db, q):
     count reached, not a list of every hand type.
     """
     w, p = where(q, endless_col="d.endless")
+    # Only while the joker was actually in hand. Ranking the bare counter
+    # credited runs that never held it -- "Fortune Teller 83" for a run with
+    # no Fortune Teller in it, which had simply used 83 tarots.
     raw = rows(db, f"""
         WITH ranked AS (
           SELECT d.metric, d.subject, d.value, r.run_id, r.deck_name,
                  r.deck_key, r.stake_key,
                  ROW_NUMBER() OVER (PARTITION BY d.metric ORDER BY d.value DESC) rn
-            FROM joker_derived d JOIN runs r USING (run_id) WHERE 1=1{w})
+            FROM joker_derived d JOIN runs r USING (run_id)
+           WHERE d.held = 1{w})
         SELECT * FROM ranked WHERE rn = 1 AND value > 0""", p)
+
+    # The same counters with possession ignored: what the joker WOULD have
+    # been worth. Shown as context, never as the joker's own record.
+    amb = {r["metric"]: r for r in rows(db, f"""
+        WITH ranked AS (
+          SELECT d.metric, d.value, r.run_id,
+                 ROW_NUMBER() OVER (PARTITION BY d.metric ORDER BY d.value DESC) rn
+            FROM joker_derived d JOIN runs r USING (run_id) WHERE 1=1{w})
+        SELECT * FROM ranked WHERE rn = 1 AND value > 0""", p)}
     out = []
     for r in raw:
         key, name, what = COUNTER_JOKERS.get(r["metric"], (None, r["metric"], ""))
+        a = amb.get(r["metric"])
         out.append({"joker_key": key, "joker": name, "what": what,
                     "detail": r["subject"], "value": r["value"],
+                    "ambient": a["value"] if a else None,
+                    "ambient_run": a["run_id"] if a else None,
                     "run_id": r["run_id"], "deck_name": r["deck_name"],
                     "deck_key": r["deck_key"], "stake_key": r["stake_key"]})
     out.sort(key=lambda r: -(r["value"] or 0))

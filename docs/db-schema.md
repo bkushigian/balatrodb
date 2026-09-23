@@ -347,9 +347,15 @@ CREATE TABLE IF NOT EXISTS joker_derived (
   seg     INTEGER NOT NULL,
   n       INTEGER NOT NULL,
   endless INTEGER NOT NULL,
-  metric  TEXT NOT NULL,      -- hand_plays | skips | stone_cards | tarots
+  metric  TEXT NOT NULL,      -- hand_plays | skips | stone_cards | tarots | dollars
   subject TEXT,               -- the poker hand, for hand_plays
   value   REAL,
+  -- Whether the joker that reads this counter was actually in hand at the
+  -- time. Without it the board credited a run with "Fortune Teller 83" when
+  -- that run never held one -- 83 tarots were simply used. Both readings are
+  -- worth having: held is the joker's real peak, and the counter regardless
+  -- is what it WOULD have been worth.
+  held    INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (run_id, seg, n, metric, subject)
 );
 CREATE INDEX IF NOT EXISTS joker_derived_metric ON joker_derived(metric, endless, value DESC);
