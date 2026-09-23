@@ -441,6 +441,27 @@ CREATE TABLE IF NOT EXISTS run_records (
 );
 CREATE INDEX IF NOT EXISTS run_records_run ON run_records(run_id);
 
+-- The two records a counter joker can hold, which are different questions.
+--
+--   contributed: the counter's value at a moment the joker was actually
+--                scoring -- a hand played while it was in hand. This is the
+--                joker's own record.
+--   ambient:     the highest the counter reached at all, whether or not
+--                anyone held the joker. A Fortune Teller record set without
+--                ever owning a Fortune Teller is this one, and it is a real
+--                record about the run rather than about the joker.
+--
+-- Peak dollars mid-shop is not a Bull score, which is why contributed is
+-- evaluated at plays rather than over the whole series.
+CREATE TABLE IF NOT EXISTS joker_counter_peaks (
+  run_id      TEXT NOT NULL,
+  metric      TEXT NOT NULL,
+  endless     INTEGER NOT NULL,
+  contributed REAL,
+  ambient     REAL,
+  PRIMARY KEY (run_id, metric, endless)
+);
+
 CREATE TABLE IF NOT EXISTS money (
   run_id  TEXT    NOT NULL,
   seg     INTEGER NOT NULL,

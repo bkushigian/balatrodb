@@ -963,16 +963,20 @@ function resultChip(r) {
 // ── panel definitions ────────────────────────────────────────────────────
 // Marks a table's rows as openable; the handler is attached in drawTable.
 const openRunJS = true;
-// A counter joker reads game state rather than its own ability, so its row
-// carries what the counter is and what it would have been worth in the run
-// that pushed that counter highest -- whether or not anyone held the joker
-// there. The board figure is always the peak while actually in hand.
+// A counter joker reads game state rather than its own ability, and so can
+// hold two different records: the counter while it was actually scoring,
+// and the highest the counter ever reached whether or not anyone held the
+// joker. The second is a real record about the run -- a Fortune Teller best
+// set without ever owning one -- so it is its own row, marked, rather than
+// being folded into the first.
 const jokerTip = r => !r.counter ? "" :
-  ` title="${esc(r.counter + (r.ambient != null
-      ? ` · highest ever reached, held or not: ${fmt(r.ambient)}` : ""))}"`;
+  ` title="${esc(r.counter + (r.held === false
+      ? " · the counter reached this, but no one held the joker for it"
+      : ""))}"`;
 
 const jokerCell = r => `<span class="namecell"${jokerTip(r)}>${sprite(r.key, "j", 56)}
-  <span>${esc(nameOf(r.key))}${r.what
+  <span>${esc(nameOf(r.key))}${r.held === false
+      ? ` <span class="chip pixel-pill sm other">IF HELD</span>` : ""}${r.what
     ? `<br><span class="sub2">${esc(r.what)}</span>` : ""}</span></span>`;
 
 defineTable("jokers", [

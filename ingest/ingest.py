@@ -800,23 +800,71 @@ class Ingester:
               FROM money WHERE balance IS NOT NULL
         """)
 
-        # A joker counts as held from its first sample to its last. Samples
-        # are taken when a hand is played and at round end, so the interval
-        # is a little coarse at the edges -- but a joker bought and sold
-        # without ever being sampled did not affect a score anyway.
+        self.derive_counter_peaks()
+
+    def derive_counter_peaks(self):
+        """The two records a counter joker can hold.
+
+        `contributed` is the counter's value at a moment the joker was
+        actually scoring -- a hand played while it was in hand. That is the
+        joker's own record, and it is stricter than "owned it at some
+        point": your peak dollars may well happen mid-shop, when Bull is
+        contributing nothing.
+
+        `ambient` is the highest the counter reached at all, held or not. A
+        Fortune Teller record set without ever owning a Fortune Teller is
+        this one -- a real record about the run rather than about the joker.
+        """
+        self.db.execute("DELETE FROM joker_counter_peaks")
+
+        # When each joker was in hand, as (seg, lo, hi) spans per run. Samples
+        # are taken at plays and at round end, so a joker bought and sold
+        # without a hand in between never shows -- and never scored either.
+        spans = {}
         for metric, key in self.COUNTER_SOURCES.items():
-            self.db.execute("""
-                UPDATE joker_derived SET held = 1
-                 WHERE metric = ?
-                   AND EXISTS (
-                     SELECT 1 FROM (
-                       SELECT run_id, seg, MIN(n) lo, MAX(n) hi
-                         FROM joker_state WHERE key = ?
-                        GROUP BY run_id, seg, card_id) h
-                      WHERE h.run_id = joker_derived.run_id
-                        AND h.seg    = joker_derived.seg
-                        AND joker_derived.n BETWEEN h.lo AND h.hi)
-            """, (metric, key))
+            for run_id, seg, lo, hi in self.db.execute(
+                    "SELECT run_id, seg, MIN(n), MAX(n) FROM joker_state "
+                    "WHERE key = ? GROUP BY run_id, seg, card_id", (key,)):
+                spans.setdefault((run_id, metric), []).append((seg, lo, hi))
+
+        plays = {}
+        for run_id, seg, n, el in self.db.execute(
+                "SELECT run_id, seg, n, endless FROM hands ORDER BY run_id, seg, n"):
+            plays.setdefault(run_id, []).append((seg, n, el))
+
+        series = {}
+        for run_id, metric, seg, n, el, val in self.db.execute(
+                "SELECT run_id, metric, seg, n, endless, value FROM joker_derived "
+                "WHERE value IS NOT NULL ORDER BY run_id, metric, seg, n"):
+            series.setdefault((run_id, metric), []).append((seg, n, el, val))
+
+        out = []
+        for (run_id, metric), rows_ in series.items():
+            ambient, contributed = {}, {}
+            for seg, n, el, val in rows_:
+                if val > ambient.get(el, float("-inf")):
+                    ambient[el] = val
+
+            held = spans.get((run_id, metric), [])
+            if held:
+                # Carry the counter forward to each play and read it there.
+                i, cur = 0, None
+                for pseg, pn, pel in plays.get(run_id, []):
+                    while i < len(rows_) and (rows_[i][0], rows_[i][1]) <= (pseg, pn):
+                        cur = rows_[i][3]
+                        i += 1
+                    if cur is None:
+                        continue
+                    if any(s == pseg and lo <= pn <= hi for s, lo, hi in held):
+                        if cur > contributed.get(pel, float("-inf")):
+                            contributed[pel] = cur
+
+            for el in set(ambient) | set(contributed):
+                out.append((run_id, metric, el, contributed.get(el), ambient.get(el)))
+
+        if out:
+            self.db.executemany(
+                "INSERT OR REPLACE INTO joker_counter_peaks VALUES (?,?,?,?,?)", out)
 
 
 # ─── reporting ────────────────────────────────────────────────────────────

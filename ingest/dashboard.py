@@ -403,10 +403,10 @@ def api_all_jokers(db, q):
                     "stake_key": j["stake_key"]})
     for d in api_derived(db, q):
         # `what` stays off the row -- the board is the joker, not the
-        # counter behind it. It goes in the hover with the ambient figure.
+        # counter behind it. It goes in the hover instead.
         out.append({"key": d["joker_key"], "value": d["value"],
                     "ord": ord_of(d["value"]), "what": None,
-                    "counter": d["what"], "ambient": d.get("ambient"),
+                    "counter": d["what"], "held": d["held"],
                     "run_id": d["run_id"], "deck_name": d["deck_name"],
                     "deck_key": d["deck_key"], "stake_key": d["stake_key"]})
     out.sort(key=lambda r: -(r["ord"] or 0))
@@ -467,47 +467,35 @@ COUNTER_JOKERS = {
 
 
 def api_derived(db, q):
-    """The jokers that read GAME counters rather than their own ability.
+    """The jokers whose value is a function of GAME state, not their own.
 
-    Supernova, Throwback, Fortune Teller and Stone Joker cannot be read from a
-    joker sample at all -- their value is a function of run history, so it is
-    reconstructed into joker_derived at ingest.
+    Each can hold two different records, and both are returned:
 
-    One row per joker, not per counter subject: Supernova's value is the count
-    for whichever hand you just played, so the record is the single highest
-    count reached, not a list of every hand type.
+      * `contributed` -- the counter at a moment the joker was actually
+        scoring. The joker's own record.
+      * `ambient` -- the highest the counter reached at all, held or not. A
+        Fortune Teller record set without ever owning one is this; it is a
+        record about the run rather than about the joker.
+
+    Both are derived in ingest (joker_counter_peaks); nothing here counts.
     """
-    w, p = where(q, endless_col="d.endless")
-    # Only while the joker was actually in hand. Ranking the bare counter
-    # credited runs that never held it -- "Fortune Teller 83" for a run with
-    # no Fortune Teller in it, which had simply used 83 tarots.
-    raw = rows(db, f"""
-        WITH ranked AS (
-          SELECT d.metric, d.subject, d.value, r.run_id, r.deck_name,
-                 r.deck_key, r.stake_key,
-                 ROW_NUMBER() OVER (PARTITION BY d.metric ORDER BY d.value DESC) rn
-            FROM joker_derived d JOIN runs r USING (run_id)
-           WHERE d.held = 1{w})
-        SELECT * FROM ranked WHERE rn = 1 AND value > 0""", p)
-
-    # The same counters with possession ignored: what the joker WOULD have
-    # been worth. Shown as context, never as the joker's own record.
-    amb = {r["metric"]: r for r in rows(db, f"""
-        WITH ranked AS (
-          SELECT d.metric, d.value, r.run_id,
-                 ROW_NUMBER() OVER (PARTITION BY d.metric ORDER BY d.value DESC) rn
-            FROM joker_derived d JOIN runs r USING (run_id) WHERE 1=1{w})
-        SELECT * FROM ranked WHERE rn = 1 AND value > 0""", p)}
+    w, p = where(q, endless_col="cp.endless")
     out = []
-    for r in raw:
-        key, name, what = COUNTER_JOKERS.get(r["metric"], (None, r["metric"], ""))
-        a = amb.get(r["metric"])
-        out.append({"joker_key": key, "joker": name, "what": what,
-                    "detail": r["subject"], "value": r["value"],
-                    "ambient": a["value"] if a else None,
-                    "ambient_run": a["run_id"] if a else None,
-                    "run_id": r["run_id"], "deck_name": r["deck_name"],
-                    "deck_key": r["deck_key"], "stake_key": r["stake_key"]})
+    for col, held in (("contributed", True), ("ambient", False)):
+        for r in rows(db, f"""
+                WITH ranked AS (
+                  SELECT cp.metric, cp.{col} value, r.run_id, r.deck_name,
+                         r.deck_key, r.stake_key,
+                         ROW_NUMBER() OVER (PARTITION BY cp.metric
+                                            ORDER BY cp.{col} DESC) rn
+                    FROM joker_counter_peaks cp JOIN runs r USING (run_id)
+                   WHERE cp.{col} IS NOT NULL{w})
+                SELECT * FROM ranked WHERE rn = 1 AND value > 0""", p):
+            key, name, what = COUNTER_JOKERS.get(r["metric"], (None, r["metric"], ""))
+            out.append({"joker_key": key, "joker": name, "what": what,
+                        "held": held, "value": r["value"], "run_id": r["run_id"],
+                        "deck_name": r["deck_name"], "deck_key": r["deck_key"],
+                        "stake_key": r["stake_key"]})
     out.sort(key=lambda r: -(r["value"] or 0))
     return out
 
