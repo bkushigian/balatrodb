@@ -396,11 +396,19 @@ tr.detail > td { padding: 0; border-top: 0; }
 /* The board is sprites, and a sprite can be wrong: Balatro stores Wee Joker
    at the same atlas cell as Joker, so without a name it looks like a joker
    you do not have and the one you do have looks absent. */
+/* The game's own colour language: chips blue, mult red, money gold. */
+.sc { font-size: 15px; font-weight: 700; margin-top: 1px; white-space: nowrap; }
+.sc-chips { color: var(--chips); }
+.sc-mult  { color: var(--mult); }
+.sc-money { color: var(--money); }
+.sc-hand  { color: var(--ink-dim); }
+.sc-other { color: var(--ink-dim); }
 .bjn { font-size: 13px; color: var(--ink-dim); max-width: 74px; text-align: center;
        line-height: 1.15; margin-top: 2px; overflow-wrap: anywhere; }
 .moved { display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
          width: 100%; margin-top: 2px; opacity: .85; }
-.moved .bj { flex-direction: row; gap: 2px; }
+.moved .bj { flex-direction: row; gap: 5px; align-items: center; }
+.moved .sc { margin-top: 0; }
 .cash { display: block; color: var(--money); font-size: 15px; font-weight: 700; }
 .jv { color: var(--ink-dim); font-size: 15px; }
 .warn { color: var(--filter); font-size: 15px; }
@@ -573,6 +581,23 @@ const handRank = hand => {
 // The Planet card that levels a hand, from the game's own centre data. It
 // gives the hand panels real art, and with it their rows match the joker
 // rows' height instead of sitting at a different rhythm.
+// A scaling value, written the way the game writes it: chips blue and
+// additive, mult red and additive, X-mult red with the X. Only jokers that
+// are actually accumulating get one -- a static `extra` is not a score.
+const SCALE = {
+  chips:       ["sc-chips", "+", ""],
+  mult:        ["sc-mult",  "+", ""],
+  x_mult:      ["sc-mult",  "X", ""],
+  h_size:      ["sc-hand",  "+", " hand"],
+  extra_value: ["sc-money", "+$", ""],
+};
+const scaleTag = sc => {
+  if (!sc || sc.value === null || sc.value === undefined) return "";
+  const [cls, pre, post] = SCALE[sc.field] || ["sc-other", "+", ""];
+  return `<span class="sc ${cls}" title="${esc(sc.field)}"
+    >${pre}${fmt(sc.value)}${post}</span>`;
+};
+
 const handCell = h => `<span class="namecell">${
   sprite((SPR && SPR.hand_planets && SPR.hand_planets[h]) || "", "j", 56)
   }<span>${esc(h)}</span></span>`;
@@ -932,7 +957,6 @@ async function toggleRound(runId, tr) {
   const board = (d.board || []).length
     ? `<div class="board"><span class="lbl">Jokers</span>` +
       d.board.map(j => {
-        const v = j.chips ?? j.mult ?? j.x_mult ?? j.extra;
         // Named, not just drawn. Balatro's own data puts j_wee at the same
         // atlas cell as j_joker (game.lua:499, pos={x=0,y=0}), so Wee Joker
         // renders as a plain Joker and reads as missing from the board. The
@@ -940,8 +964,7 @@ async function toggleRound(runId, tr) {
         return `<span class="bj" title="${esc(nameOf(j.key))}">` +
           (sprite(j.key, "j", 52) || "") +
           `<span class="bjn">${esc(nameOf(j.key))}</span>` +
-          (v !== null && v !== undefined ? `<span class="jv">${fmt(v)}</span>` : "") +
-          `</span>`;
+          scaleTag(j.scale) + `</span>`;
       }).join("") + `</div>`
     : "";
 
@@ -953,7 +976,8 @@ async function toggleRound(runId, tr) {
       ? `<div class="moved">` + s.joker_delta.map(m =>
           `<span class="bj" title="${esc(nameOf(m.key) + " " + m.field)}">` +
           (sprite(m.key, "j", 32) || "") +
-          `<span class="jv">${esc(nameOf(m.key))} ${fmt(m.from)}→${fmt(m.to)}</span>`
+          `<span class="jv">${esc(nameOf(m.key))}</span>` +
+          scaleTag({ field: m.field, value: m.to })
           + `</span>`).join("") +
         `</div>`
       : "";

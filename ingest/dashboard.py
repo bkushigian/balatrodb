@@ -523,6 +523,7 @@ def api_round(db, q):
                  ORDER BY seg, n, pos, card_id""", (rid, rs)):
             jokers.setdefault((j["seg"], j["n"]), []).append(j)
 
+    attach_scaling(db, rid, jokers)
     attribute_money(db, rid, rs, steps)
 
     running = None
@@ -557,6 +558,39 @@ def api_round(db, q):
 
 # Joker fields that carry a scaling value, in the order they are reported.
 SCALE_FIELDS = ("chips", "mult", "x_mult", "extra")
+
+
+def attach_scaling(db, rid, jokers):
+    """Give every sampled joker the value it is actually accumulating.
+
+    A joker's ability fields are a poor guide to this. `extra` is a grab-bag:
+    static config for Mail-In Rebate (5), Hanging Chad (2) and Hack (1), but
+    the step size for Lucky Cat, whose real value is x_mult. And Wee Joker
+    keeps its count at ability.extra.chips, which is nested and so lands in
+    no column at all -- the one joker on the board with nothing under it.
+
+    joker_scale is the accumulation funnel (every vanilla scaling joker goes
+    through SMODS.scale_card), so it says exactly which jokers are changing
+    and what the value is. A joker with no scale events gets nothing shown,
+    which is the rule: only numbers that move.
+    """
+    events = rows(db, """
+        SELECT seg, n, card_id, field, to_txt, to_ord FROM joker_scale
+         WHERE run_id = ? ORDER BY seg, n""", (rid,))
+    if not events:
+        return
+    # Walk samples and events together in (seg, n) order, carrying the latest
+    # value per joker forward -- a joker that last scaled three rounds ago
+    # still shows what it reached.
+    cur, i = {}, 0
+    for key in sorted(jokers):
+        while i < len(events) and (events[i]["seg"], events[i]["n"]) <= key:
+            e = events[i]
+            cur[e["card_id"]] = {"field": e["field"], "value": e["to_txt"],
+                                 "ord": e["to_ord"]}
+            i += 1
+        for j in jokers[key]:
+            j["scale"] = cur.get(j["card_id"])
 
 
 def joker_delta(before, after):
