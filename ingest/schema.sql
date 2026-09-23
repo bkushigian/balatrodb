@@ -314,6 +314,12 @@ CREATE TABLE IF NOT EXISTS run_records (
   endless   INTEGER NOT NULL,
   value_txt TEXT,
   value_ord REAL,
+  -- What this beat: the value it displaced and the run that had held it.
+  -- Known only while walking the corpus in order, so it is recorded here
+  -- rather than reconstructed by a query that would have to re-derive the
+  -- same chronology.
+  prev_txt  TEXT,
+  prev_run  TEXT,
   PRIMARY KEY (run_id, kind, subject, endless)
 );
 CREATE INDEX IF NOT EXISTS run_records_run ON run_records(run_id);

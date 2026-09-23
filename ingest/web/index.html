@@ -417,6 +417,27 @@ tr.detail > td { padding: 0; border-top: 0; }
         align-self: center; }
 /* An endless record sits under a purple bar -- the same colour the ENDLESS
    chip uses, so the two read as the same idea. */
+/* A record's own panel. The native title attribute cannot be styled, and
+   a record has more to say than one line: what it was, which contest, and
+   what it displaced. */
+#tip {
+  position: fixed; z-index: 90; pointer-events: none;
+  max-width: 340px; padding: 12px 14px;
+  background: var(--surface); color: var(--ink);
+  border-radius: .4rem;
+  box-shadow: 0 6px 0 #1b2325, 0 10px 26px rgba(0, 0, 0, .55);
+}
+#tip .row { display: flex; gap: 12px; align-items: flex-start; }
+#tip .ttl { font-size: 19px; font-weight: 700; line-height: 1.2; }
+#tip .sub { color: var(--ink-mute); font-size: 14px; letter-spacing: .05em;
+            text-transform: uppercase; margin-top: 3px; }
+#tip .big { font-size: 26px; font-weight: 700; margin-top: 5px; }
+#tip .beat { margin-top: 10px; padding-top: 9px; border-top: 2px solid #2b3638;
+             color: var(--ink-dim); font-size: 15px; }
+#tip .beat b { color: var(--ink); font-weight: 700; }
+#tip .none { margin-top: 10px; padding-top: 9px; border-top: 2px solid #2b3638;
+             color: var(--ink-mute); font-size: 15px; }
+
 .rec-endless { position: relative; }
 .rec-endless::after {
   content: ""; position: absolute; left: 2px; right: 2px; bottom: -3px;
@@ -503,6 +524,7 @@ tr.detail > td { padding: 0; border-top: 0; }
   </section>
 </main>
 
+<div id="tip" role="tooltip" hidden></div>
 <dialog id="detail"><div class="head"><h2 id="dtitle">Run</h2>
   <button class="x pixel-pill" onclick="detail.close()">Close</button></div>
   <div class="body" id="dbody"></div></dialog>
@@ -591,8 +613,10 @@ function sprite(key, kind, px) {
   const s = SPR.sprites[key], a = SPR.atlases[s.a];
   if (!a) return "";
   const scale = px / a.cw;
-  // Playing-card layers carry their own combined title on the wrapper.
-  const tip = kind.startsWith("pc") ? "" : ` title="${esc(key)}"`;
+  // The game's name for it, not the asset key: hovering a stake said
+  // "stake_white" and a joker "j_wee". Playing-card layers carry their own
+  // combined title on the wrapper instead.
+  const tip = kind.startsWith("pc") ? "" : ` title="${esc(nameOf(key))}"`;
   return `<span class="spr ${kind}"${tip} style="
       width:${px}px; height:${(a.ch * scale).toFixed(1)}px;
       background-image:url(assets/${s.a});
@@ -637,21 +661,71 @@ const scaleTag = sc => {
 // since the three hand statistics share that art, the value carries the
 // distinction, and the colour says which: score blue, level green, plays
 // gold, joker peaks in mult red.
+// A hand score is whole chips like every other score; a joker peak is not
+// -- Lucky Cat really does sit at x5.5 -- so the formatter goes with the
+// kind rather than being chosen once for the whole panel.
 const RECORD_KIND = {
-  joker:       ["sc-mult",  k => nameOf(k),           "peak"],
-  hand_score:  ["sc-chips", h => h,                   "best score"],
-  hand_level:  ["sc-level", h => h,                   "level"],
-  hand_played: ["sc-money", h => h,                   "played"],
+  joker:       ["sc-mult",  k => nameOf(k), "peak",       fmt],
+  hand_score:  ["sc-chips", h => h,         "best score", fmtScore],
+  hand_level:  ["sc-level", h => h,         "level",      fmt],
+  hand_played: ["sc-money", h => h,         "played",     fmt],
 };
+const recFmt = rec => (RECORD_KIND[rec.kind] || [, , , fmt])[3];
 const recordArt = rec => rec.kind === "joker"
   ? sprite(rec.subject, "j", 34)
   : sprite((SPR && SPR.hand_planets && SPR.hand_planets[rec.subject]) || "", "j", 34);
 const recordText = rec => {
   const [, name, what] = RECORD_KIND[rec.kind] || ["", x => x, ""];
-  return `${name(rec.subject)} ${what} ${fmt(rec.value_txt)}`
+  return `${name(rec.subject)} ${what} ${recFmt(rec)(rec.value_txt)}`
     + (rec.endless ? " (endless)" : "");
 };
 const RECORDS_SHOWN = 2;
+
+// Records get a real panel rather than a title attribute: a title cannot be
+// styled, and there is more to say than fits on one line. The records
+// themselves are held here and referenced by index, so nothing has to be
+// serialised into an attribute and escaped back out.
+let TIPS = [];
+
+function tipHTML(rec) {
+  const [cls, name, what] = RECORD_KIND[rec.kind] || ["sc-other", x => x, ""];
+  const f = recFmt(rec);
+  const beat = rec.prev_txt === null || rec.prev_txt === undefined
+    ? `<div class="none">First of its kind — nothing to beat.</div>`
+    : `<div class="beat">Beat <b>${f(rec.prev_txt)}</b>` +
+      (rec.prev_deck ? ` · ${esc(rec.prev_deck)}` : "") +
+      (rec.prev_ts ? ` · ${ago(rec.prev_ts)}` : "") + `</div>`;
+  return `<div class="row">${recordArt(rec) || ""}<div>
+      <div class="ttl">${esc(name(rec.subject))}</div>
+      <div class="sub">${esc(what)}${rec.endless ? " · endless" : ""}</div>
+      <div class="big ${cls}">${f(rec.value_txt)}</div>
+    </div></div>${beat}`;
+}
+
+function showTip(el, html) {
+  const tip = $("#tip");
+  tip.innerHTML = html;
+  tip.hidden = false;
+  // Placed under the thing it describes, nudged back inside the viewport
+  // rather than allowed to run off the right or bottom edge.
+  const r = el.getBoundingClientRect(), t = tip.getBoundingClientRect();
+  let x = r.left, y = r.bottom + 8;
+  if (x + t.width > innerWidth - 8) x = innerWidth - t.width - 8;
+  if (y + t.height > innerHeight - 8) y = r.top - t.height - 8;
+  tip.style.left = Math.max(8, x) + "px";
+  tip.style.top = Math.max(8, y) + "px";
+}
+
+document.addEventListener("mouseover", e => {
+  const el = e.target.closest("[data-tip]");
+  if (!el) return;
+  const rec = TIPS[+el.dataset.tip];
+  if (rec) showTip(el, tipHTML(rec));
+});
+document.addEventListener("mouseout", e => {
+  if (e.target.closest("[data-tip]")) $("#tip").hidden = true;
+});
+document.addEventListener("scroll", () => { $("#tip").hidden = true; }, true);
 
 const recordsCell = r => {
   const recs = r.records || [];
@@ -660,10 +734,10 @@ const recordsCell = r => {
     const [cls] = RECORD_KIND[rec.kind] || ["sc-other"];
     // Endless records are a separate contest, so they are marked -- with no
     // phase filter on, a row can carry one of each for the same subject.
-    return `<span class="bj${rec.endless ? " rec-endless" : ""}"
-        title="${esc(recordText(rec))}">` +
+    const i = TIPS.push(rec) - 1;
+    return `<span class="bj${rec.endless ? " rec-endless" : ""}" data-tip="${i}">` +
       (recordArt(rec) || `<span class="jv">${esc(rec.subject)}</span>`) +
-      `<span class="sc ${cls}">${fmt(rec.value_txt)}</span></span>`;
+      `<span class="sc ${cls}">${recFmt(rec)(rec.value_txt)}</span></span>`;
   }).join("");
   const rest = recs.slice(RECORDS_SHOWN);
   const more = rest.length
@@ -987,6 +1061,7 @@ async function refresh() {
   setRows("hands", hands.best);
   setRows("handlevels", levels);
   setRows("handcounts", counts);
+  TIPS = [];                       // rebuilt with the rows that reference it
   defineRunsTable();
   setRows("runs", runs);
 

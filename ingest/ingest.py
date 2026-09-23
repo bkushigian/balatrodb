@@ -725,12 +725,19 @@ class Ingester:
                 high = {}
                 for (run_id, subject), (v, o) in sorted(
                         best.items(), key=lambda kv: order[kv[0][0]]):
-                    if subject not in high or o > high[subject]:
-                        high[subject] = o
-                        out.append((run_id, kind, subject, el, str(v), o))
+                    held = high.get(subject)
+                    if held is None or o > held[0]:
+                        # The displaced holder, captured while we still know
+                        # it -- a later query cannot tell which run it was
+                        # without redoing this whole walk.
+                        prev_txt, prev_run = (None, None) if held is None                             else (held[1], held[2])
+                        high[subject] = (o, str(v), run_id)
+                        out.append((run_id, kind, subject, el, str(v), o,
+                                    prev_txt, prev_run))
         if out:
             self.db.executemany(
-                "INSERT OR REPLACE INTO run_records VALUES (?,?,?,?,?,?)", out)
+                "INSERT OR REPLACE INTO run_records VALUES (" +
+                ",".join("?" * 8) + ")", out)
 
     def derive_counters(self):
         """Supernova, Throwback and Fortune Teller read GAME counters, not

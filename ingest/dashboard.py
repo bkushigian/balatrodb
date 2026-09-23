@@ -368,11 +368,15 @@ def attach_records(db, runs, q=None):
     params = list(by_id)
     ew = ""
     if (q or {}).get("endless") in ("0", "1"):
-        ew = " AND endless = ?"
+        ew = " AND rr.endless = ?"
         params.append(int(q["endless"]))
     for rec in rows(db, f"""
-            SELECT run_id, kind, subject, endless, value_txt, value_ord
-              FROM run_records WHERE run_id IN ({marks}){ew}""", params):
+            SELECT rr.run_id, rr.kind, rr.subject, rr.endless,
+                   rr.value_txt, rr.value_ord, rr.prev_txt,
+                   pr.started_ts prev_ts, pr.deck_name prev_deck
+              FROM run_records rr
+              LEFT JOIN runs pr ON pr.run_id = rr.prev_run
+             WHERE rr.run_id IN ({marks}){ew}""", params):
         by_id[rec["run_id"]]["records"].append(rec)
     for r in runs:
         # Endless records after non-endless ones of the same kind: the
