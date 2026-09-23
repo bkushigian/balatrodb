@@ -411,6 +411,10 @@ tr.detail > td { padding: 0; border-top: 0; }
 .sc-money { color: var(--money); }
 .sc-hand  { color: var(--ink-dim); }
 .sc-level { color: var(--green); }
+/* The hand says whether a counter joker's record was set while anyone
+   actually held it. Cut out of Four Fingers by the extractor. */
+.hand { height: 30px; width: auto; image-rendering: pixelated;
+        margin-left: 8px; flex: none; }
 .recs { display: flex; align-items: flex-start; gap: 9px; }
 .recscell { white-space: nowrap; }
 .more { color: var(--ink-mute); font-size: 13px; cursor: help;
@@ -969,15 +973,22 @@ const openRunJS = true;
 // joker. The second is a real record about the run -- a Fortune Teller best
 // set without ever owning one -- so it is its own row, marked, rather than
 // being folded into the first.
+// Which of the two a counter joker's record is, said with a hand rather
+// than with the words "IF HELD": the hand cut out of Four Fingers for one
+// it actually held, and the same hand crossed out for the counter reached
+// with nobody holding it.
+const handIcon = r => r.held === undefined || r.held === null ? "" :
+  `<img class="hand" src="assets/hand_${r.held ? "held" : "unheld"}.png"
+     alt="${r.held ? "held" : "not held"}">`;
+
 const jokerTip = r => !r.counter ? "" :
-  ` title="${esc(r.counter + (r.held === false
-      ? " · the counter reached this, but no one held the joker for it"
-      : ""))}"`;
+  ` title="${esc(r.counter + (r.held
+      ? " · while the joker was in hand"
+      : " · the counter reached this, but nobody held the joker for it"))}"`;
 
 const jokerCell = r => `<span class="namecell"${jokerTip(r)}>${sprite(r.key, "j", 56)}
-  <span>${esc(nameOf(r.key))}${r.held === false
-      ? ` <span class="chip pixel-pill sm other">IF HELD</span>` : ""}${r.what
-    ? `<br><span class="sub2">${esc(r.what)}</span>` : ""}</span></span>`;
+  <span>${esc(nameOf(r.key))}${r.what
+    ? `<br><span class="sub2">${esc(r.what)}</span>` : ""}</span>${handIcon(r)}</span>`;
 
 defineTable("jokers", [
   { label: "Joker", cell: jokerCell, sort: r => nameOf(r.key) },

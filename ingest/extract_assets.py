@@ -130,6 +130,67 @@ def parse_hand_planets(src: str) -> dict:
     return out
 
 
+def make_hand_icons(sprites: dict) -> list:
+    """Cut the hand out of Four Fingers and make a held / not-held pair.
+
+    Counter jokers hold two records -- the counter while the joker was
+    actually in hand, and the counter regardless -- and a small hand says
+    which far better than the words "IF HELD". The game has no hand icon, but
+    Four Fingers is a hand, so it is borrowed: the art is greyscale where the
+    card behind it is a saturated purple, which separates them cleanly.
+
+    Needs Pillow. Skipped rather than fatal if it is missing, since every
+    other asset is useful without it.
+    """
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        print("  hand icons      skipped (no Pillow)")
+        return []
+
+    spr = sprites.get("j_four_fingers")
+    if not spr:
+        return []
+    cw, ch = 142, 190
+    sheet = Image.open(os.path.join(OUT, spr["a"])).convert("RGBA")
+    cell = sheet.crop((spr["x"] * cw, spr["y"] * ch,
+                       (spr["x"] + 1) * cw, (spr["y"] + 1) * ch))
+    # Inside the border and inside the JOKER lettering down each side, or the
+    # crop picks up the white frame instead of the hand.
+    inner = cell.crop((28, 34, 116, 160))
+    src = inner.load()
+    cut = Image.new("RGBA", inner.size, (0, 0, 0, 0))
+    dst = cut.load()
+    for y in range(inner.height):
+        for x in range(inner.width):
+            r, g, b, a = src[x, y]
+            if a and max(r, g, b) - min(r, g, b) < 45:
+                dst[x, y] = (r, g, b, a)
+    hand = cut.crop(cut.getbbox())
+
+    written = []
+    hand.save(os.path.join(OUT, "hand_held.png"))
+    written.append("hand_held.png")
+
+    # Not held: the same hand, dimmed, under a hard red slash.
+    dim = Image.new("RGBA", hand.size, (0, 0, 0, 0))
+    hp, dp = hand.load(), dim.load()
+    for y in range(hand.height):
+        for x in range(hand.width):
+            r, g, b, a = hp[x, y]
+            if a:
+                v = (r + g + b) // 3
+                dp[x, y] = (v, v, v, int(a * 0.55))
+    d = ImageDraw.Draw(dim)
+    w, h = hand.size
+    d.line([(4, h - 5), (w - 5, 4)], fill=(26, 20, 20, 255), width=13)
+    d.line([(4, h - 5), (w - 5, 4)], fill=(254, 95, 85, 255), width=8)
+    dim.save(os.path.join(OUT, "hand_unheld.png"))
+    written.append("hand_unheld.png")
+    print(f"  hand icons      {hand.size[0]}x{hand.size[1]}  held + unheld")
+    return written
+
+
 def atlas_for(key: str) -> tuple[str, int, int] | None:
     if key in ATLAS_OVERRIDES:
         return ATLAS_OVERRIDES[key]
@@ -211,6 +272,8 @@ def main() -> int:
         "known_collisions": [k for k, v in sprites.items()
                              if (v["a"], v["x"], v["y"]) == ("Jokers.png", 0, 0)],
     }
+    make_hand_icons(sprites)
+
     with open(os.path.join(OUT, "sprites.json"), "w", encoding="utf-8") as fh:
         json.dump(doc, fh, indent=1)
 
