@@ -398,7 +398,7 @@ def api_all_jokers(db, q):
         # The ability field a joker scales in ("chips", "mult") is how the
         # game stores it, not something a reader wants on the row.
         out.append({"key": j["key"], "value": j["value"], "ord": j["ord"],
-                    "what": None, "run_id": j["run_id"],
+                    "what": None, "field": j["field"], "run_id": j["run_id"],
                     "deck_name": j["deck_name"], "deck_key": j["deck_key"],
                     "stake_key": j["stake_key"]})
     for d in api_derived(db, q):
@@ -406,8 +406,9 @@ def api_all_jokers(db, q):
         # counter behind it. It goes in the hover instead.
         out.append({"key": d["joker_key"], "value": d["value"],
                     "ord": ord_of(d["value"]), "what": None,
-                    "counter": d["what"], "held": d["held"],
-                    "run_id": d["run_id"], "deck_name": d["deck_name"],
+                    "field": d["field"],
+                    "counter": f'{d["counter"]:g} {d["what"]}',
+                    "held": d["held"], "run_id": d["run_id"], "deck_name": d["deck_name"],
                     "deck_key": d["deck_key"], "stake_key": d["stake_key"]})
     out.sort(key=lambda r: -(r["ord"] or 0))
     return out
@@ -455,14 +456,24 @@ def api_jokers(db, q):
 
 # The jokers whose value IS a game counter. Their peak is the peak of that
 # counter, so the leaderboard row is the joker, not the counter.
+# metric -> (joker key, name, what the counter counts, field, per-unit rate)
+#
+# The board shows what the joker CONTRIBUTES, not the raw counter: a player
+# watching Bull sees +378 Chips, not "189 dollars". Rates are the game's own
+# `extra` values (game.lua) and the field is the one its text adds to.
 COUNTER_JOKERS = {
-    "hand_plays":  ("j_supernova",      "Supernova",      "plays of one hand type"),
-    "skips":       ("j_throwback",      "Throwback",      "blinds skipped"),
-    "tarots":      ("j_fortune_teller", "Fortune Teller", "tarots used"),
-    "stone_cards": ("j_stone",          "Stone Joker",    "stone cards held"),
-    # Bull reads your money at score time; its sample says extra = 2, which
-    # is the rate (+2 chips per dollar), not the contribution.
-    "dollars":     ("j_bull",           "Bull",           "dollars held"),
+    "hand_plays":  ("j_supernova",      "Supernova",      "plays of this hand",
+                    "mult",   1),
+    "skips":       ("j_throwback",      "Throwback",      "blinds skipped",
+                    "x_mult", 0.25),
+    "tarots":      ("j_fortune_teller", "Fortune Teller", "tarots used",
+                    "mult",   1),
+    "stone_cards": ("j_stone",          "Stone Joker",    "stone cards in deck",
+                    "chips",  25),
+    # Bull's sample says extra = 2, which is its rate (+2 Chips per dollar),
+    # not its contribution.
+    "dollars":     ("j_bull",           "Bull",           "dollars held",
+                    "chips",  2),
 }
 
 
@@ -491,9 +502,14 @@ def api_derived(db, q):
                     FROM joker_counter_peaks cp JOIN runs r USING (run_id)
                    WHERE cp.{col} IS NOT NULL{w})
                 SELECT * FROM ranked WHERE rn = 1 AND value > 0""", p):
-            key, name, what = COUNTER_JOKERS.get(r["metric"], (None, r["metric"], ""))
+            key, name, what, field, rate = COUNTER_JOKERS.get(
+                r["metric"], (None, r["metric"], "", "chips", 1))
+            counter = r["value"]
+            # Throwback multiplies rather than adds: X1 + 0.25 per skip.
+            value = (1 + rate * counter) if field == "x_mult" else rate * counter
             out.append({"joker_key": key, "joker": name, "what": what,
-                        "held": held, "value": r["value"], "run_id": r["run_id"],
+                        "field": field, "counter": counter,
+                        "held": held, "value": value, "run_id": r["run_id"],
                         "deck_name": r["deck_name"], "deck_key": r["deck_key"],
                         "stake_key": r["stake_key"]})
     out.sort(key=lambda r: -(r["value"] or 0))
@@ -706,20 +722,43 @@ def attach_scaling(db, rid, jokers):
     events = rows(db, """
         SELECT seg, n, card_id, field, to_txt, to_ord FROM joker_scale
          WHERE run_id = ? ORDER BY seg, n""", (rid,))
-    if not events:
+    counters = rows(db, """
+        SELECT seg, n, metric, value FROM joker_derived
+         WHERE run_id = ? AND value IS NOT NULL ORDER BY seg, n""", (rid,))
+    if not events and not counters:
         return
     # Walk samples and events together in (seg, n) order, carrying the latest
     # value per joker forward -- a joker that last scaled three rounds ago
     # still shows what it reached.
+    # A counter joker stores nothing, so its value has to be read off the
+    # counter it watches and converted into what it actually contributes --
+    # Bull holds no number at all, it reads your money and adds 2 chips per
+    # dollar. Without this it was the one joker on the board with a blank
+    # under it.
+    by_key = {key: (metric, spec[3], spec[4])
+              for metric, spec in COUNTER_JOKERS.items()
+              for key in (spec[0],) if key}
+
     cur, i = {}, 0
+    cnt, ci = {}, 0
     for key in sorted(jokers):
         while i < len(events) and (events[i]["seg"], events[i]["n"]) <= key:
             e = events[i]
             cur[e["card_id"]] = {"field": e["field"], "value": e["to_txt"],
                                  "ord": e["to_ord"]}
             i += 1
+        while ci < len(counters) and (counters[ci]["seg"], counters[ci]["n"]) <= key:
+            cnt[counters[ci]["metric"]] = counters[ci]["value"]
+            ci += 1
         for j in jokers[key]:
-            j["scale"] = cur.get(j["card_id"])
+            scale = cur.get(j["card_id"])
+            if scale is None and j["key"] in by_key:
+                metric, field, rate = by_key[j["key"]]
+                c = cnt.get(metric)
+                if c is not None:
+                    v = (1 + rate * c) if field == "x_mult" else rate * c
+                    scale = {"field": field, "value": v, "ord": ord_of(v)}
+            j["scale"] = scale
 
 
 def joker_delta(before, after):

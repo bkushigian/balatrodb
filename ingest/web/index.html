@@ -981,8 +981,14 @@ const jokerCell = r => `<span class="namecell"${jokerTip(r)}>${sprite(r.key, "j"
 
 defineTable("jokers", [
   { label: "Joker", cell: jokerCell, sort: r => nameOf(r.key) },
-  { label: "Peak", num: true, style: "color:var(--mult);font-weight:700",
-    cell: r => fmt(r.value), sort: r => r.ord },
+  // Coloured by what it actually is: chips blue, mult red, X-mult red. The
+  // board shows a counter joker's CONTRIBUTION, so Bull reads +378 chips,
+  // the number a player watches it add, not "189 dollars".
+  { label: "Peak", num: true,
+    cell: r => `<span class="sc ${
+      { chips: "sc-chips", mult: "sc-mult", x_mult: "sc-mult" }[r.field] || "sc-mult"
+    }">${r.field === "x_mult" ? "X" : "+"}${fmt(r.value)}</span>`,
+    sort: r => r.ord },
   { label: "Deck", cell: deckCell, sort: r => r.deck_name },
   { label: "Stake", cell: stakeCell, sort: r => r.stake_key },
 ], { empty: "No jokers recorded yet.", onclick: openRunJS, sort: 1 });
