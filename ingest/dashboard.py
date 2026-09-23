@@ -371,7 +371,7 @@ def attach_records(db, runs, q=None):
         ew = " AND rr.endless = ?"
         params.append(int(q["endless"]))
     for rec in rows(db, f"""
-            SELECT rr.run_id, rr.kind, rr.subject, rr.endless, rr.field,
+            SELECT rr.run_id, rr.kind, rr.subject, rr.endless, rr.field, rr.held,
                    rr.value_txt, rr.value_ord, rr.prev_txt,
                    pr.started_ts prev_ts, pr.deck_name prev_deck
               FROM run_records rr
@@ -461,19 +461,20 @@ def api_jokers(db, q):
 # The board shows what the joker CONTRIBUTES, not the raw counter: a player
 # watching Bull sees +378 Chips, not "189 dollars". Rates are the game's own
 # `extra` values (game.lua) and the field is the one its text adds to.
+# Display names for the counter jokers. The mechanical part -- key, field
+# and per-unit rate -- comes from ingest, which needs it to turn a counter
+# into a score, so the two cannot drift.
+COUNTER_LABEL = {
+    "hand_plays":  ("Supernova",      "plays of this hand"),
+    "skips":       ("Throwback",      "blinds skipped"),
+    "tarots":      ("Fortune Teller", "tarots used"),
+    "stone_cards": ("Stone Joker",    "stone cards in deck"),
+    "dollars":     ("Bull",           "dollars held"),
+}
 COUNTER_JOKERS = {
-    "hand_plays":  ("j_supernova",      "Supernova",      "plays of this hand",
-                    "mult",   1),
-    "skips":       ("j_throwback",      "Throwback",      "blinds skipped",
-                    "x_mult", 0.25),
-    "tarots":      ("j_fortune_teller", "Fortune Teller", "tarots used",
-                    "mult",   1),
-    "stone_cards": ("j_stone",          "Stone Joker",    "stone cards in deck",
-                    "chips",  25),
-    # Bull's sample says extra = 2, which is its rate (+2 Chips per dollar),
-    # not its contribution.
-    "dollars":     ("j_bull",           "Bull",           "dollars held",
-                    "chips",  2),
+    m: (ingester.COUNTER_JOKERS[m][0], name, what,
+        ingester.COUNTER_JOKERS[m][1], ingester.COUNTER_JOKERS[m][2])
+    for m, (name, what) in COUNTER_LABEL.items()
 }
 
 
@@ -616,7 +617,7 @@ def api_run(db, q):
         # currently filtered to -- the dialog is about this run, not about
         # the slice you arrived from.
         "records": sorted(
-            rows(db, """SELECT rr.kind, rr.subject, rr.endless, rr.field,
+            rows(db, """SELECT rr.kind, rr.subject, rr.endless, rr.field, rr.held,
                                rr.value_txt, rr.value_ord, rr.prev_txt,
                                pr.started_ts prev_ts, pr.deck_name prev_deck
                           FROM run_records rr

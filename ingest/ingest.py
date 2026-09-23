@@ -168,6 +168,33 @@ def read_events(path):
     return out, bad
 
 
+# Jokers whose value is a function of game state rather than of anything
+# they store: the counter they read, the key that reads it, the field it
+# adds to, and how much per unit. Rates are the game's own `extra` values.
+# Bull's ability says extra = 2, which is +2 Chips per dollar -- the rate,
+# not the contribution.
+#
+# Lives here rather than in the dashboard because ingest needs it to turn a
+# counter into a score; the dashboard imports it so the two cannot drift.
+COUNTER_JOKERS = {
+    "hand_plays":  ("j_supernova",      "mult",   1),
+    "skips":       ("j_throwback",      "x_mult", 0.25),
+    "tarots":      ("j_fortune_teller", "mult",   1),
+    "stone_cards": ("j_stone",          "chips",  25),
+    "dollars":     ("j_bull",           "chips",  2),
+}
+
+
+def counter_value(metric, counter):
+    """What the joker contributes for a given counter reading."""
+    spec = COUNTER_JOKERS.get(metric)
+    if spec is None or counter is None:
+        return None, None
+    _key, field, rate = spec
+    # Throwback multiplies rather than adds: X1 + 0.25 per skip.
+    return field, (1 + rate * counter) if field == "x_mult" else rate * counter
+
+
 MONEY_SKIP = {"state.change", "snapshot", "joker.scale", "money.change",
               "card.modify"}
 # A play resolves its money inside evaluate_play, in the frame that ends with
@@ -713,8 +740,45 @@ class Ingester:
                  WHERE hand IS NOT NULL AND endless = ? GROUP BY run_id, hand""",
         }
 
+        # Counter jokers never scale, so joker_scale has nothing for them and
+        # they could not set a record at all -- Bull, Supernova, Stone Joker,
+        # Fortune Teller and Throwback were absent from the whole feature.
+        # Their peaks come from joker_counter_peaks instead, converted from
+        # the counter into what the joker actually contributes, and both of
+        # their records are eligible.
+        counter_rows = {0: [], 1: []}
+        for run_id, metric, el, contributed, ambient in self.db.execute(
+                "SELECT run_id, metric, endless, contributed, ambient "
+                "  FROM joker_counter_peaks"):
+            spec = COUNTER_JOKERS.get(metric)
+            if not spec:
+                continue
+            for counter, held in ((contributed, 1), (ambient, 0)):
+                field, value = counter_value(metric, counter)
+                if value:
+                    counter_rows[el].append((run_id, spec[0], value, field, held))
+
         out = []
         for el in (0, 1):
+            for want_held in (1, 0):
+                best, fields = {}, {}
+                for run_id, key, value, field, held in counter_rows.get(el, []):
+                    if held != want_held or run_id not in order:
+                        continue
+                    if value > best.get((run_id, key), float("-inf")):
+                        best[(run_id, key)] = value
+                        fields[key] = field
+                high = {}
+                for (run_id, key), value in sorted(
+                        best.items(), key=lambda kv: order[kv[0][0]]):
+                    prior = high.get(key)
+                    if prior is None or value > prior[0]:
+                        prev_txt, prev_run = (None, None) if prior is None                             else (f"{prior[0]:g}", prior[1])
+                        high[key] = (value, run_id)
+                        out.append((run_id, "joker", key, el, fields[key],
+                                    want_held, f"{value:g}", ord_num(value)[0],
+                                    prev_txt, prev_run))
+
             for kind, sql in sources.items():
                 # Best value per (run, subject) first, then walk the runs in
                 # the order they were played.
@@ -735,22 +799,14 @@ class Ingester:
                         # without redoing this whole walk.
                         prev_txt, prev_run = (None, None) if held is None                             else (held[1], held[2])
                         high[subject] = (o, str(v), run_id)
-                        out.append((run_id, kind, subject, el, field, str(v), o,
-                                    prev_txt, prev_run))
+                        out.append((run_id, kind, subject, el, field, None,
+                                    str(v), o, prev_txt, prev_run))
         if out:
             self.db.executemany(
                 "INSERT OR REPLACE INTO run_records VALUES (" +
-                ",".join("?" * 9) + ")", out)
+                ",".join("?" * 10) + ")", out)
 
-    # Jokers whose value is a function of game state rather than of anything
-    # they store: the counter they read, and the key that reads it.
-    COUNTER_SOURCES = {
-        "hand_plays":  "j_supernova",
-        "skips":       "j_throwback",
-        "stone_cards": "j_stone",
-        "tarots":      "j_fortune_teller",
-        "dollars":     "j_bull",
-    }
+    COUNTER_SOURCES = {m: spec[0] for m, spec in COUNTER_JOKERS.items()}
 
     def derive_counters(self):
         """Supernova, Throwback, Fortune Teller, Stone Joker and Bull read

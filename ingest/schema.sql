@@ -322,6 +322,10 @@ CREATE TABLE IF NOT EXISTS run_records (
   -- whichever of score/level/played it is. Without it a record cannot be
   -- shown in its own unit and every one rendered as Mult, including chips.
   field     TEXT,
+  -- For a counter joker, which of its two records this is: 1 while it was
+  -- actually in hand, 0 for the counter reached with nobody holding it.
+  -- NULL for everything else, which has no such distinction.
+  held      INTEGER,
   value_txt TEXT,
   value_ord REAL,
   -- What this beat: the value it displaced and the run that had held it.

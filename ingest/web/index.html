@@ -422,6 +422,8 @@ tr.detail > td { padding: 0; border-top: 0; }
 .jart { position: relative; display: inline-flex; flex: none; }
 .hand { position: absolute; right: -7px; bottom: -5px;
         width: 30px; height: 30px; image-rendering: pixelated; }
+.recs .hand, .rec .hand, #tip .hand { width: 22px; height: 22px;
+        right: -5px; bottom: -4px; }
 .recs { display: flex; align-items: flex-start; gap: 9px; }
 .recscell { white-space: nowrap; }
 .more { color: var(--ink-mute); font-size: 13px; cursor: help;
@@ -727,9 +729,17 @@ const FIELD_CLS = { chips: "sc-chips", mult: "sc-mult", x_mult: "sc-xmult" };
 const recCls = rec => FIELD_CLS[rec.field]
   || (RECORD_KIND[rec.kind] || ["sc-other"])[0];
 const recPre = rec => rec.field === "x_mult" ? "X" : "";
-const recordArt = rec => rec.kind === "joker"
-  ? sprite(rec.subject, "j", 34)
-  : sprite((SPR && SPR.hand_planets && SPR.hand_planets[rec.subject]) || "", "j", 34);
+// A counter joker's record carries the same seal the board uses, so which
+// of its two records this is reads the same way in both places.
+const recordArt = (rec, px) => {
+  const art = rec.kind === "joker"
+    ? sprite(rec.subject, "j", px || 34)
+    : sprite((SPR && SPR.hand_planets && SPR.hand_planets[rec.subject]) || "",
+             "j", px || 34);
+  if (!art) return "";
+  return rec.held === null || rec.held === undefined ? art
+    : `<span class="jart">${art}${handIcon(rec)}</span>`;
+};
 const recordText = rec => {
   const [, name, what] = RECORD_KIND[rec.kind] || ["", x => x, ""];
   return `${name(rec.subject)} ${what} ${recFmt(rec)(rec.value_txt)}`
@@ -751,7 +761,7 @@ function tipHTML(rec) {
     : `<div class="beat">Beat <b>${f(rec.prev_txt)}</b>` +
       (rec.prev_deck ? ` · ${esc(rec.prev_deck)}` : "") +
       (rec.prev_ts ? ` · ${ago(rec.prev_ts)}` : "") + `</div>`;
-  return `<div class="row">${recordArt(rec) || ""}<div>
+  return `<div class="row">${recordArt(rec, 44)}<div>
       <div class="ttl">${esc(name(rec.subject))}</div>
       <div class="sub">${esc(what)}${rec.endless ? " · endless" : ""}</div>
       <div class="big ${cls}">${recPre(rec)}${f(rec.value_txt)}</div>
@@ -1182,7 +1192,7 @@ async function openRun(id) {
       : `beat <b>${f(rec.prev_txt)}</b>` +
         (rec.prev_deck ? ` <span class="muted">· ${esc(rec.prev_deck)}</span>` : "");
     return `<div class="rec${rec.endless ? " rec-endless" : ""}">
-      ${recordArt(rec) || ""}
+      ${recordArt(rec, 44)}
       <div class="recmain">
         <div class="recttl">${esc(name(rec.subject))}</div>
         <div class="recsub">${esc(what)}${rec.endless ? " · endless" : ""}</div>
