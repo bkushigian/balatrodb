@@ -239,8 +239,12 @@ button.seg[aria-pressed="true"] {
 /* A column of panels inside one `cols` cell, so the tall Jokers board can
    sit beside two shorter tables rather than leaving a gap under a short one. */
 .stack { display: grid; gap: 16px; align-content: start; }
-.runsort { display: flex; align-items: center; gap: 10px; margin: 2px 0 10px; }
-.runsort label { color: var(--ink-dim); font-size: 15px; }
+.runsort { display: flex; align-items: center; gap: 14px; margin: 2px 0 12px;
+           flex-wrap: wrap; }
+.runsort > label { color: var(--ink-dim); font-size: 15px; }
+.mpick { display: flex; align-items: center; gap: 7px; }
+.mlab { color: var(--ink-mute); font-size: 13px; letter-spacing: .05em;
+        text-transform: uppercase; }
 .pick .menu .grp { padding: 7px 9px 3px; color: var(--ink-mute); font-size: 13px;
                    letter-spacing: .06em; text-transform: uppercase; }
 /* One row pitch everywhere. Rows are as tall as their tallest sprite, so
@@ -470,7 +474,12 @@ tr.detail > td { padding: 0; border-top: 0; }
 
   <section class="panel">
     <h2>Runs</h2>
-    <div class="runsort"><label>Sort by</label><span class="pick" id="metric"></span></div>
+    <div class="runsort"><label>Sort by</label>
+      <span class="mpick"><span class="mlab">Joker scores</span><span class="pick" id="m_joker"></span></span>
+      <span class="mpick"><span class="mlab">Hand scores</span><span class="pick" id="m_hand_score"></span></span>
+      <span class="mpick"><span class="mlab">Hand levels</span><span class="pick" id="m_hand_level"></span></span>
+      <span class="mpick"><span class="mlab">Hands played</span><span class="pick" id="m_hand_played"></span></span>
+    </div>
     <div class="scroll"><table id="runs"></table></div>
   </section>
 </main>
@@ -558,7 +567,7 @@ const SPR_READY = fetch("assets/sprites.json")
   .catch(() => {});
 
 function sprite(key, kind, px) {
-  if (!SPR || !key || !SPR.sprites[key]) return "";
+  if (!SPR || !SPR.sprites || !key || !SPR.sprites[key]) return "";
   const s = SPR.sprites[key], a = SPR.atlases[s.a];
   if (!a) return "";
   const scale = px / a.cw;
@@ -883,7 +892,7 @@ function defineRunsTable() {
   TBL.runs.onHeaderSort = i => {
     if (!state.metric || i === METRIC_AT) return false;
     state.metric = "";
-    buildMetricPicker();
+    buildMetricPickers();
     refresh();
     return true;
   };
@@ -1051,7 +1060,7 @@ async function toggleRound(runId, tr) {
 // A dropdown that shows each option's own art. Options are real buttons so
 // Tab and Enter work; a native <select> cannot carry an image, and a row of
 // buttons per deck stops fitting once every deck is in play.
-function buildPicker(id, key, items, kind, px, allLabel) {
+function buildPicker(id, key, items, kind, px, allLabel, onPick) {
   const root = $("#" + id);
   const opts = [{ k: "", n: allLabel }].concat(items);
   // An item may carry its own art (the metric list mixes jokers and
@@ -1094,6 +1103,9 @@ function buildPicker(id, key, items, kind, px, allLabel) {
       state[key] = opts[+b.dataset.i].k;
       close();
       render();
+      // Sibling pickers share this key, so they have to redraw: choosing a
+      // joker has to clear whatever the hand pickers were showing.
+      if (onPick) onPick();
       refresh();
     };
     root.onkeydown = ev => { if (ev.key === "Escape") { close(); btn.focus(); } };
@@ -1118,34 +1130,32 @@ Promise.all([
     m.stakes.map(x => ({ k: x.k, n: nameOf(x.k) })), "s", 36, "All stakes");
 });
 
-// The metric list: what the run table can be sorted by instead of a column.
-// Jokers wear their own art, hands their Planet card, so the menu reads the
-// same way the panels do.
+// What the run table can be sorted by instead of by one of its columns.
+// Four pickers rather than one long grouped list, but they all write the
+// same state.metric -- only one can be active, so choosing in any of them
+// clears the other three simply by no longer matching their options.
 let METRICS = null;
-function buildMetricPicker() {
+const METRIC_PICKERS = [
+  ["m_joker",       "joker",       "Joker",       j => nameOf(j)],
+  ["m_hand_score",  "hand_score",  "Hand",        h => h],
+  ["m_hand_level",  "hand_level",  "Hand",        h => h],
+  ["m_hand_played", "hand_played", "Hand",        h => h],
+];
+
+function buildMetricPickers() {
   if (!METRICS) return;
-  const opts = [];
-  if (METRICS.jokers.length) {
-    opts.push({ group: true, n: "Joker peak" });
-    for (const k of METRICS.jokers) {
-      opts.push({ k: "joker:" + k, n: nameOf(k), art: sprite(k, "j", 30) });
-    }
+  for (const [id, kind, placeholder, label] of METRIC_PICKERS) {
+    const subjects = kind === "joker" ? METRICS.jokers : METRICS.hands;
+    const art = kind === "joker"
+      ? k => sprite(k, "j", 30)
+      : h => sprite((SPR && SPR.hand_planets && SPR.hand_planets[h]) || "", "j", 30);
+    const opts = subjects.map(k => ({ k: `${kind}:${k}`, n: label(k), art: art(k) }));
+    buildPicker(id, "metric", opts, "j", 30, placeholder, buildMetricPickers);
   }
-  for (const [kind, label] of [["hand_score", "Best hand score"],
-                               ["hand_level", "Hand level"],
-                               ["hand_played", "Times played"]]) {
-    if (!METRICS.hands.length) break;
-    opts.push({ group: true, n: label });
-    for (const h of METRICS.hands) {
-      opts.push({ k: `${kind}:${h}`, n: h,
-                  art: sprite((SPR && SPR.hand_planets && SPR.hand_planets[h]) || "", "j", 30) });
-    }
-  }
-  buildPicker("metric", "metric", opts, "j", 30, "Table columns");
 }
 
 Promise.all([fetch("/api/metrics").then(r => r.json()), SPR_READY])
-  .then(([m]) => { METRICS = m; buildMetricPicker(); });
+  .then(([m]) => { METRICS = m; buildMetricPickers(); });
 
 $("#noplasma").onclick = e => {
   const on = e.currentTarget.getAttribute("aria-pressed") !== "true";

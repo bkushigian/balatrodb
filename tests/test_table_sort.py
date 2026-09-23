@@ -100,7 +100,7 @@ function order(id, i, dir) {
 
 // Hand strength must not be alphabetical. Feed the real ranking in, since
 // the stubbed fetch leaves SPR null.
-SPR = { names: { j_wee: "Wee Joker" }, hand_order: ["Flush Five", "Flush House", "Five of a Kind",
+SPR = { sprites: {}, names: { j_wee: "Wee Joker" }, hand_order: ["Flush Five", "Flush House", "Five of a Kind",
   "Straight Flush", "Four of a Kind", "Full House", "Flush", "Straight",
   "Three of a Kind", "Two Pair", "Pair", "High Card"] };
 const HANDS = [
@@ -126,6 +126,25 @@ const FMT = [
   [null, "peak"], ["<img src=x onerror=1>", "peak"],
 ];
 
+// The four metric pickers are mutually exclusive because they all write the
+// same state key -- choosing in one stops the others matching any option.
+// Spy on buildPicker to see how they are wired, rather than drive the DOM.
+const built = [];
+const realBuildPicker = buildPicker;
+buildPicker = (id, key, items, kind, px, label, onPick) =>
+  built.push({ id, key, specs: items.map(i => i.k), hasHook: !!onPick });
+METRICS = { jokers: ["j_wee"], hands: ["Pair", "Flush"] };
+buildMetricPickers();
+buildPicker = realBuildPicker;
+const pickerProbe = {
+  count: built.length,
+  keys: [...new Set(built.map(b => b.key))],
+  ids: built.map(b => b.id),
+  kinds: built.map(b => b.specs[0].split(":")[0]),
+  allHaveHook: built.every(b => b.hasHook),
+  wellFormed: built.every(b => b.specs.every(x => /^[a-z_]+:.+$/.test(x))),
+};
+
 // Column sorting and metric sorting are alternatives. Picking a metric adds
 // its column and takes the sort; clicking any OTHER header drops the metric.
 const metricProbe = {};
@@ -149,6 +168,7 @@ metricProbe.colsAfterClear = TBL.runs.cols.map(c => c.label);
 
 console.log(JSON.stringify({
   metricProbe,
+  pickerProbe,
   fmt: FMT.map(([v, k]) => (k === "score" ? fmtScore(v) : fmt(v))),
   handsSorted,
   panels:    Object.keys(TBL),
@@ -257,6 +277,28 @@ check("and its quarter", got["1.25"] == "1.25", got["1.25"])
 check("a big peak still groups", got["2080"] == "2,080", got["2080"])
 check("nothing renders as an em dash", got["null"] == "—", got["null"])
 check("a non-numeric string is escaped", "&lt;img" in got["xss"], got["xss"])
+
+print("\nthe four metric pickers are mutually exclusive")
+pp = res["pickerProbe"]
+check("four pickers are built", pp["count"] == 4, pp["ids"])
+check("all write the same state key, so only one can be active",
+      pp["keys"] == ["metric"], pp["keys"])
+check("each redraws its siblings when picked", pp["allHaveHook"])
+# The kinds are a contract between the page and the server. Compare against
+# the real dict rather than a copy of it, so the two cannot drift apart.
+try:
+    sys.path.insert(0, str(ROOT / "ingest"))
+    from dashboard import METRICS as SERVER_METRICS
+except Exception as exc:                                   # noqa: BLE001
+    print(f"  SKIP server contract ({exc})")
+else:
+    check("every kind the pickers emit is one the server accepts",
+          set(pp["kinds"]) <= set(SERVER_METRICS),
+          f"page {sorted(set(pp['kinds']))} vs server {sorted(SERVER_METRICS)}")
+    check("and the pickers cover every kind the server offers",
+          set(pp["kinds"]) == set(SERVER_METRICS),
+          f"page {sorted(set(pp['kinds']))} vs server {sorted(SERVER_METRICS)}")
+check("every option is a well-formed kind:subject spec", pp["wellFormed"])
 
 print("\na metric sort and a column sort are alternatives")
 mp = res["metricProbe"]
