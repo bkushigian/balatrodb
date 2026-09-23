@@ -673,6 +673,59 @@ class Ingester:
             " WHERE run_id=? AND round_seq=?", (stone, best, total, run_id, round_seq))
 
     # -- counters the derived jokers actually read --------------------------
+    def derive_records(self):
+        """Work out what each run held a record for at the time it was played.
+
+        Cross-run and order-dependent, so it is recomputed wholesale rather
+        than per run: inserting an older log changes what every later run was
+        first to achieve.
+
+        Strictly greater, so the run that first reached a value keeps the
+        moment; a later run that merely equals it does not take it away.
+        Comparison is on the ordering key, never the text -- an 8,293,927,041
+        Pair sorts below 998 as a string.
+        """
+        self.db.execute("DELETE FROM run_records")
+        order = {r[0]: i for i, r in enumerate(self.db.execute(
+            "SELECT run_id FROM runs ORDER BY started_ts, run_id"))}
+
+        sources = {
+            "joker": """
+                SELECT run_id, key subject, to_txt v, to_ord o FROM joker_scale js
+                 WHERE is_reset = 0 AND to_ord IS NOT NULL
+                   AND key NOT IN ('j_turtle_bean','j_popcorn','j_ice_cream','j_ramen')""",
+            "hand_score": """
+                SELECT run_id, hand subject, score_txt v, score_ord o FROM hands
+                 WHERE hand IS NOT NULL AND score_ord IS NOT NULL""",
+            "hand_level": """
+                SELECT run_id, hand subject, lvl_to v, lvl_to o FROM hand_levels
+                 WHERE hand IS NOT NULL AND lvl_to IS NOT NULL""",
+            "hand_played": """
+                SELECT run_id, hand subject, COUNT(*) v, COUNT(*) o FROM hands
+                 WHERE hand IS NOT NULL GROUP BY run_id, hand""",
+        }
+
+        out = []
+        for kind, sql in sources.items():
+            # Best value per (run, subject) first, then walk the runs in the
+            # order they were played.
+            best = {}
+            for run_id, subject, v, o in self.db.execute(sql):
+                if run_id not in order or o is None:
+                    continue
+                cur = best.get((run_id, subject))
+                if cur is None or o > cur[1]:
+                    best[(run_id, subject)] = (v, o)
+            high = {}
+            for (run_id, subject), (v, o) in sorted(
+                    best.items(), key=lambda kv: order[kv[0][0]]):
+                if subject not in high or o > high[subject]:
+                    high[subject] = o
+                    out.append((run_id, kind, subject, str(v), o))
+        if out:
+            self.db.executemany(
+                "INSERT OR REPLACE INTO run_records VALUES (?,?,?,?,?)", out)
+
     def derive_counters(self):
         """Supernova, Throwback and Fortune Teller read GAME counters, not
         their own ability fields, so their value cannot come from a joker
@@ -800,6 +853,7 @@ def main():
         total += n
         changed += 1 if did else 0
     ing.derive_counters()
+    ing.derive_records()
     db.commit()
 
     print(f"{len(files)} logs, {changed} re-derived, {total} events -> {a.db}")

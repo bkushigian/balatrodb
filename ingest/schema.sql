@@ -296,6 +296,25 @@ CREATE INDEX IF NOT EXISTS cards_key ON cards(key, role, endless);
 -- `balance` is a running sum from the baseline. `before` is retained but is
 -- NOT reliable: consecutive queued ease_dollars calls all report the same
 -- pre-value, so before+delta invents peaks that never occurred.
+-- Records as they stood AT THE TIME. A row means: when this run was played,
+-- this value beat every earlier run's. That is not the same question as
+-- "is it the record now" -- a run keeps the moment it held it, even after
+-- something later beats it.
+--
+-- Derived over the whole corpus in run order, so it is rebuilt wholesale
+-- rather than per run: adding an OLD log would shift what came after it.
+-- Computed over all play, endless included, since a stored fact cannot be
+-- sliced by a filter chosen later.
+CREATE TABLE IF NOT EXISTS run_records (
+  run_id    TEXT NOT NULL,
+  kind      TEXT NOT NULL,   -- joker | hand_score | hand_level | hand_played
+  subject   TEXT NOT NULL,   -- joker key, or poker hand
+  value_txt TEXT,
+  value_ord REAL,
+  PRIMARY KEY (run_id, kind, subject)
+);
+CREATE INDEX IF NOT EXISTS run_records_run ON run_records(run_id);
+
 CREATE TABLE IF NOT EXISTS money (
   run_id  TEXT    NOT NULL,
   seg     INTEGER NOT NULL,

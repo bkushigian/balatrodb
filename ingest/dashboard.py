@@ -96,6 +96,7 @@ def sync(db, logs):
                 print(f"  sync: {os.path.basename(path)}: {ex}")  # not stop the rest
         if changed:
             ing.derive_counters()
+            ing.derive_records()
             db.commit()
             generation += 1
             print(f"  synced {changed} run(s) -> generation {generation}")
@@ -314,7 +315,7 @@ def api_runs(db, q):
         sub = args + args + sub          # both appear before the outer WHERE
         sort = "metric_ord IS NULL, metric_ord DESC"
 
-    return rows(db, f"""
+    out = rows(db, f"""
         SELECT {metric_txt} metric_txt, {metric_ord} metric_ord,
                r.run_id, r.log_file, r.started_ts, r.deck_name, r.deck_key,
                r.stake_key, r.seed, r.seeded, r.won, r.result, r.terminal,
@@ -337,6 +338,31 @@ def api_runs(db, q):
                  rounds_won,
                (SELECT COUNT(*) FROM run_defects d WHERE d.run_id = r.run_id) defects
           FROM runs r WHERE 1=1{w} ORDER BY {sort} LIMIT 300""", sub + p + tail)
+    attach_records(db, out)
+    return out
+
+
+# What to lead with when a run set several records. Ordering across kinds
+# cannot use the values -- a hand level of 32 and a score's log-scale ord are
+# not comparable -- so it is a fixed priority, biggest-first within each.
+RECORD_ORDER = {"joker": 0, "hand_score": 1, "hand_level": 2, "hand_played": 3}
+
+
+def attach_records(db, runs):
+    """Give each run what it was the first to achieve, at the time it ran."""
+    for r in runs:
+        r["records"] = []
+    by_id = {r["run_id"]: r for r in runs}
+    if not by_id:
+        return
+    marks = ",".join("?" * len(by_id))
+    for rec in rows(db, f"""
+            SELECT run_id, kind, subject, value_txt, value_ord
+              FROM run_records WHERE run_id IN ({marks})""", list(by_id)):
+        by_id[rec["run_id"]]["records"].append(rec)
+    for r in runs:
+        r["records"].sort(
+            key=lambda x: (RECORD_ORDER.get(x["kind"], 9), -(x["value_ord"] or 0)))
 
 
 def api_all_jokers(db, q):

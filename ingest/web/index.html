@@ -410,6 +410,11 @@ tr.detail > td { padding: 0; border-top: 0; }
 .sc-mult  { color: var(--mult); }
 .sc-money { color: var(--money); }
 .sc-hand  { color: var(--ink-dim); }
+.sc-level { color: var(--green); }
+.recs { display: flex; align-items: flex-start; gap: 9px; }
+.recscell { white-space: nowrap; }
+.more { color: var(--ink-mute); font-size: 13px; cursor: help;
+        align-self: center; }
 .sc-other { color: var(--ink-dim); }
 .bjn { font-size: 13px; color: var(--ink-dim); max-width: 74px; text-align: center;
        line-height: 1.15; margin-top: 2px; overflow-wrap: anywhere; }
@@ -610,6 +615,42 @@ const scaleTag = sc => {
   const [cls, pre, post] = SCALE[sc.field] || ["sc-other", "+", ""];
   return `<span class="sc ${cls}" title="${esc(sc.field)}"
     >${pre}${fmt(sc.value)}${post}</span>`;
+};
+
+// What a run was the FIRST to achieve, at the time it was played -- not
+// what still stands. Jokers wear their own art, hands their Planet card;
+// since the three hand statistics share that art, the value carries the
+// distinction, and the colour says which: score blue, level green, plays
+// gold, joker peaks in mult red.
+const RECORD_KIND = {
+  joker:       ["sc-mult",  k => nameOf(k),           "peak"],
+  hand_score:  ["sc-chips", h => h,                   "best score"],
+  hand_level:  ["sc-level", h => h,                   "level"],
+  hand_played: ["sc-money", h => h,                   "played"],
+};
+const recordArt = rec => rec.kind === "joker"
+  ? sprite(rec.subject, "j", 34)
+  : sprite((SPR && SPR.hand_planets && SPR.hand_planets[rec.subject]) || "", "j", 34);
+const recordText = rec => {
+  const [, name, what] = RECORD_KIND[rec.kind] || ["", x => x, ""];
+  return `${name(rec.subject)} ${what} ${fmt(rec.value_txt)}`;
+};
+const RECORDS_SHOWN = 2;
+
+const recordsCell = r => {
+  const recs = r.records || [];
+  if (!recs.length) return `<span class="muted">—</span>`;
+  const head = recs.slice(0, RECORDS_SHOWN).map(rec => {
+    const [cls] = RECORD_KIND[rec.kind] || ["sc-other"];
+    return `<span class="bj" title="${esc(recordText(rec))}">` +
+      (recordArt(rec) || `<span class="jv">${esc(rec.subject)}</span>`) +
+      `<span class="sc ${cls}">${fmt(rec.value_txt)}</span></span>`;
+  }).join("");
+  const rest = recs.slice(RECORDS_SHOWN);
+  const more = rest.length
+    ? `<span class="more" title="${esc(rest.map(recordText).join("\n"))}"
+        >+${rest.length} more</span>` : "";
+  return `<span class="recs">${head}${more}</span>`;
 };
 
 const handCell = h => `<span class="namecell">${
@@ -844,6 +885,9 @@ const RUNS_COLS = () => [
     cell: r => resultChip(r) + (r.went_endless
       ? ' <span class="chip pixel-pill sm endless">ENDLESS</span>' : ""),
     sort: r => r.result || "" },
+  { label: "Records", cls: "recscell",
+    title: "What this run was the first to achieve, at the time it was played.",
+    cell: recordsCell, sort: r => (r.records || []).length },
   { label: "Ante", num: true, cell: r => r.ante ?? "—", sort: r => r.ante },
   { label: "Rounds won", num: true, cls: "muted",
     title: "Blinds cleared. A round is only cashed out when its blind was beaten.",
@@ -861,7 +905,8 @@ const RUNS_COLS = () => [
 ];
 
 // Where the metric column is inserted, and what it is called.
-const METRIC_AT = 4;
+// After Result, which itself follows Records.
+const METRIC_AT = 5;
 const metricLabel = spec => {
   const [kind, subject] = (spec || "").split(":");
   const name = kind === "joker" ? nameOf(subject) : subject;

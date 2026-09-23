@@ -157,6 +157,8 @@ defineRunsTable();
 metricProbe.colsWith = TBL.runs.cols.map(c => c.label);
 metricProbe.sortsOnMetric = TBL.runs.sort.i === METRIC_AT;
 metricProbe.label = TBL.runs.cols[METRIC_AT].label;
+metricProbe.at = METRIC_AT;
+metricProbe.before = TBL.runs.cols[METRIC_AT - 1].label;
 // Clicking the metric's own column only flips direction.
 metricProbe.ownHeaderKeeps = TBL.runs.onHeaderSort(METRIC_AT) === false
                              && state.metric === "joker:j_wee";
@@ -304,8 +306,11 @@ print("\na metric sort and a column sort are alternatives")
 mp = res["metricProbe"]
 check("no metric column when none is picked",
       "Wee Joker peak" not in mp["colsWithout"], mp["colsWithout"])
-check("picking one inserts its column after Result",
-      mp["colsWith"][4] == "Wee Joker peak", mp["colsWith"])
+check("picking one inserts its column at the metric slot",
+      mp["colsWith"][mp["at"]] == "Wee Joker peak", mp["colsWith"])
+check("which sits just after Records", mp["before"] == "Records", mp["colsWith"])
+check("and appears exactly once",
+      mp["colsWith"].count("Wee Joker peak") == 1, mp["colsWith"])
 check("and it takes the sort", mp["sortsOnMetric"])
 check("clicking its own header only flips direction", mp["ownHeaderKeeps"])
 check("clicking another header drops the metric", mp["otherHeaderClears"])
