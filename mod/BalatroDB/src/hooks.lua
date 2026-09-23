@@ -690,27 +690,33 @@ util.hook_around(G.FUNCS, 'use_card', function(args)
         -- itself distinguishes them by area (button_callbacks.lua:2214).
         from_pack = (G.pack_cards and card.area == G.pack_cards) or nil,
         targets = util.cards(G.hand and G.hand.highlighted),
-        -- Whether the use succeeded is read from this lock; see below.
-        was_locked = G.CONTROLLER and G.CONTROLLER.locks
-            and G.CONTROLLER.locks.use or false,
+        -- Whether the use succeeded is read from this; see below.
+        area = card.area,
     }
-end, function(_, _, pre)
+end, function(args, _, pre)
     if not pre then return end
+    local e = args[1]
+    local card = e and e.config and e.config.ref_table
+    if not card then return end
     -- use_card NEVER returns true. The rejection branch bare-returns
     -- (button_callbacks.lua:2168) and the success path falls off the end at
     -- :2316; the `return true`s in between all belong to queued Event
-    -- closures. Gating on a truthy return therefore dropped every
-    -- consumable.use, pack.open, pack.pick and voucher.redeem in 0.4.0.
+    -- closures. Gating on a truthy return dropped every consumable.use,
+    -- pack.open, pack.pick and voucher.redeem in 0.4.0.
     --
-    -- G.CONTROLLER.locks.use is the discriminator: set true at :2187, which
-    -- is past the only early return, and cleared again only from inside
-    -- queued events (:2255, :2265) that cannot have run yet. It is also
-    -- agnostic to how a mod overrides Card:check_use, since any rejection
-    -- still returns before :2187. Calling check_use() here instead would
-    -- re-fire its alert_no_space side effect (card.lua:1584).
-    local locked = G.CONTROLLER and G.CONTROLLER.locks
-        and G.CONTROLLER.locks.use or false
-    if pre.was_locked or not locked then return end
+    -- G.CONTROLLER.locks.use looked like the discriminator, and it is for
+    -- three of the four: set at :2187, cleared from a queued event at :2265.
+    -- But a Booster clears it SYNCHRONOUSLY at :2255, before this hook runs,
+    -- so pack.open stayed at zero while the rest came back.
+    --
+    -- The card leaving its area is the signal that holds for all of them.
+    -- :2209 removes it before any branch and past the only early return, and
+    -- Card:remove_from_area nils `area` (card.lua:4098); the branches then
+    -- re-home it to G.deck, G.jokers or G.play. A refusal returns at :2168
+    -- with the card untouched. Checking the change rather than nil covers
+    -- both. Calling check_use() here instead would re-fire its
+    -- alert_no_space side effect (card.lua:1584).
+    if not pre.area or card.area == pre.area then return end
     local set = pre.set
     local etype = pre.from_pack and 'pack.pick'
         or (set == 'Booster' and 'pack.open')
