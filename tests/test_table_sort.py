@@ -100,7 +100,7 @@ function order(id, i, dir) {
 
 // Hand strength must not be alphabetical. Feed the real ranking in, since
 // the stubbed fetch leaves SPR null.
-SPR = { names: {}, hand_order: ["Flush Five", "Flush House", "Five of a Kind",
+SPR = { names: { j_wee: "Wee Joker" }, hand_order: ["Flush Five", "Flush House", "Five of a Kind",
   "Straight Flush", "Four of a Kind", "Full House", "Flush", "Straight",
   "Three of a Kind", "Two Pair", "Pair", "High Card"] };
 const HANDS = [
@@ -126,7 +126,29 @@ const FMT = [
   [null, "peak"], ["<img src=x onerror=1>", "peak"],
 ];
 
+// Column sorting and metric sorting are alternatives. Picking a metric adds
+// its column and takes the sort; clicking any OTHER header drops the metric.
+const metricProbe = {};
+state.metric = "";
+defineRunsTable();
+metricProbe.colsWithout = TBL.runs.cols.map(c => c.label);
+
+state.metric = "joker:j_wee";
+defineRunsTable();
+metricProbe.colsWith = TBL.runs.cols.map(c => c.label);
+metricProbe.sortsOnMetric = TBL.runs.sort.i === METRIC_AT;
+metricProbe.label = TBL.runs.cols[METRIC_AT].label;
+// Clicking the metric's own column only flips direction.
+metricProbe.ownHeaderKeeps = TBL.runs.onHeaderSort(METRIC_AT) === false
+                             && state.metric === "joker:j_wee";
+// Clicking another column drops the metric.
+metricProbe.otherHeaderClears = TBL.runs.onHeaderSort(0) === true
+                                && state.metric === "";
+defineRunsTable();
+metricProbe.colsAfterClear = TBL.runs.cols.map(c => c.label);
+
 console.log(JSON.stringify({
+  metricProbe,
   fmt: FMT.map(([v, k]) => (k === "score" ? fmtScore(v) : fmt(v))),
   handsSorted,
   panels:    Object.keys(TBL),
@@ -235,6 +257,18 @@ check("and its quarter", got["1.25"] == "1.25", got["1.25"])
 check("a big peak still groups", got["2080"] == "2,080", got["2080"])
 check("nothing renders as an em dash", got["null"] == "—", got["null"])
 check("a non-numeric string is escaped", "&lt;img" in got["xss"], got["xss"])
+
+print("\na metric sort and a column sort are alternatives")
+mp = res["metricProbe"]
+check("no metric column when none is picked",
+      "Wee Joker peak" not in mp["colsWithout"], mp["colsWithout"])
+check("picking one inserts its column after Result",
+      mp["colsWith"][4] == "Wee Joker peak", mp["colsWith"])
+check("and it takes the sort", mp["sortsOnMetric"])
+check("clicking its own header only flips direction", mp["ownHeaderKeeps"])
+check("clicking another header drops the metric", mp["otherHeaderClears"])
+check("and the column goes with it",
+      mp["colsAfterClear"] == mp["colsWithout"], mp["colsAfterClear"])
 
 print("\nevery panel opens on a sensible column")
 check("all panels have a default sort",

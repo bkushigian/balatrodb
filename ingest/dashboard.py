@@ -224,6 +224,53 @@ def api_summary(db, q):
     }
 
 
+# Sorting the run list by something that is not one of its columns: a
+# joker's peak in that run, or one of a hand's statistics. Each entry is the
+# subquery that produces the value and the one that produces its ordering
+# key -- kept apart because scores exceed a double and only the ordering key
+# is safe to sort on.
+METRICS = {
+    "joker": (
+        "(SELECT to_txt FROM joker_scale js WHERE js.run_id = r.run_id"
+        "   AND js.key = ? AND js.is_reset = 0{el} ORDER BY js.to_ord DESC LIMIT 1)",
+        "(SELECT MAX(js.to_ord) FROM joker_scale js WHERE js.run_id = r.run_id"
+        "   AND js.key = ? AND js.is_reset = 0{el})",
+        " AND js.endless = ?"),
+    "hand_score": (
+        "(SELECT score_txt FROM hands h WHERE h.run_id = r.run_id"
+        "   AND h.hand = ?{el} ORDER BY h.score_ord DESC LIMIT 1)",
+        "(SELECT MAX(h.score_ord) FROM hands h WHERE h.run_id = r.run_id"
+        "   AND h.hand = ?{el})",
+        " AND h.endless = ?"),
+    "hand_level": (
+        "(SELECT MAX(hl.lvl_to) FROM hand_levels hl WHERE hl.run_id = r.run_id"
+        "   AND hl.hand = ?{el})",
+        "(SELECT MAX(hl.lvl_to) FROM hand_levels hl WHERE hl.run_id = r.run_id"
+        "   AND hl.hand = ?{el})",
+        " AND hl.endless = ?"),
+    "hand_played": (
+        "(SELECT COUNT(*) FROM hands h WHERE h.run_id = r.run_id"
+        "   AND h.hand = ?{el})",
+        "(SELECT COUNT(*) FROM hands h WHERE h.run_id = r.run_id"
+        "   AND h.hand = ?{el})",
+        " AND h.endless = ?"),
+}
+
+
+def api_metrics(db, q):
+    """What the run list can be sorted by beyond its own columns."""
+    w, p = where(q)
+    jokers = rows(db, f"""
+        SELECT DISTINCT js.key k FROM joker_scale js JOIN runs r USING (run_id)
+         WHERE js.is_reset = 0
+           AND js.key NOT IN ('j_turtle_bean', 'j_popcorn', 'j_ice_cream', 'j_ramen')
+           {w} ORDER BY k""", p)
+    hands = rows(db, f"""
+        SELECT DISTINCT h.hand k FROM hands h JOIN runs r USING (run_id)
+         WHERE h.hand IS NOT NULL{w} ORDER BY k""", p)
+    return {"jokers": [j["k"] for j in jokers], "hands": [h["k"] for h in hands]}
+
+
 def api_runs(db, q):
     w, p = where(q)
     sort = {
@@ -254,8 +301,22 @@ def api_runs(db, q):
             sort = ("(SELECT MAX(score_ord) FROM hands h "
                     f"WHERE h.run_id = r.run_id{hw}) DESC")
             tail = [el]
+    # A metric sort replaces the column sort entirely -- the two are
+    # alternatives, never combined.
+    metric_txt = metric_ord = "NULL"
+    metric = (q.get("metric") or "").split(":", 1)
+    if len(metric) == 2 and metric[0] in METRICS:
+        val_sql, ord_sql, el_clause = METRICS[metric[0]]
+        el = el_clause if q.get("endless") in ("0", "1") else ""
+        metric_txt = val_sql.format(el=el)
+        metric_ord = ord_sql.format(el=el)
+        args = [metric[1]] + ([int(q["endless"])] if el else [])
+        sub = args + args + sub          # both appear before the outer WHERE
+        sort = "metric_ord IS NULL, metric_ord DESC"
+
     return rows(db, f"""
-        SELECT r.run_id, r.log_file, r.started_ts, r.deck_name, r.deck_key,
+        SELECT {metric_txt} metric_txt, {metric_ord} metric_ord,
+               r.run_id, r.log_file, r.started_ts, r.deck_name, r.deck_key,
                r.stake_key, r.seed, r.seeded, r.won, r.result, r.terminal,
                r.went_endless, r.hands_played, r.final_dollars, r.deck_size,
                COALESCE(r.furthest_ante, r.ended_ante) ante,
@@ -648,6 +709,7 @@ ROUTES = {
     "/api/hands": api_hands,
     "/api/hand_levels": api_hand_levels,
     "/api/hand_counts": api_hand_counts,
+    "/api/metrics": api_metrics,
     "/api/antes": api_antes,
     "/api/run": api_run,
 }
