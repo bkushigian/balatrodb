@@ -1,10 +1,7 @@
---- A BalatroDB button on the main menu that starts the dashboard.
+--- A BalatroDB entry in the Options menu that starts the dashboard.
 ---
---- Steamodded has no API for adding a main-menu button; it adds its own by
---- wrapping the global that builds them (smods/src/ui.lua:2025), so this does
---- the same. The node path into the button column is undocumented and
---- load-bearing, hence the guards -- a layout change upstream should cost the
---- button, not the mod.
+--- Steamodded has no API for adding one, so this wraps the global that builds
+--- the menu, the way Steamodded adds its own buttons (smods/src/ui.lua:2025).
 ---
 --- The launcher is written by `python ingest/install.py`. The mod cannot work
 --- out where the repo is: it sees itself through a junction at
@@ -63,29 +60,43 @@ G.FUNCS.bdb_open_dashboard = function(e)
     end
 end
 
---- Add the button by wrapping the menu builder, the way Steamodded does.
+--- Put the button in the Options menu rather than on the main menu.
+---
+--- The main menu column is shared with Steamodded's own Mods button and
+--- whatever else is installed, and every addition squeezes the rest sideways.
+--- Options has room, is reachable from both the main menu and a run, and is
+--- where a player looks for a tool rather than for something to play.
+---
+--- create_UIBox_options (UI_definitions.lua:2208) hands its buttons to
+--- create_UIBox_generic_options, which nests them at
+---     ROOT > R > C > R.nodes
+--- with the Back button as a sibling of that R, so appending here lands the
+--- button above Back and below the game's own entries. The path is
+--- undocumented, hence the guard: a layout change upstream should cost the
+--- button, not the mod.
 function menu.install()
-    if type(create_UIBox_main_menu_buttons) ~= 'function' then
-        sendWarnMessage('main menu builder missing; no dashboard button', 'BalatroDB')
+    if type(create_UIBox_options) ~= 'function' then
+        sendWarnMessage('options builder missing; no dashboard button', 'BalatroDB')
         return false
     end
-    local ref = create_UIBox_main_menu_buttons
-    create_UIBox_main_menu_buttons = function(...)
-        local m = ref(...)
+    local ref = create_UIBox_options
+    create_UIBox_options = function(...)
+        local ui = ref(...)
         util.try(function()
-            -- smods/src/ui.lua:2034 inserts into this same column.
-            local col = m and m.nodes and m.nodes[1] and m.nodes[1].nodes
-                and m.nodes[1].nodes[1] and m.nodes[1].nodes[1].nodes
-            if not col then return end
-            col[#col + 1] = UIBox_button({
+            local row = ui and ui.nodes and ui.nodes[1] and ui.nodes[1].nodes
+                and ui.nodes[1].nodes[1] and ui.nodes[1].nodes[1].nodes
+                and ui.nodes[1].nodes[1].nodes[1]
+            local list = row and row.nodes
+            if not list then return end
+            list[#list + 1] = UIBox_button({
                 id = 'bdb_button',
                 button = 'bdb_open_dashboard',
                 label = { 'BalatroDB' },
-                colour = SMODS.Gradients and G.C.BOOSTER or G.C.BOOSTER,
-                minh = 1.55, minw = 1.85, col = true, scale = 0.45 * 1.2,
+                -- minw 5 is what every other row in this menu uses.
+                minw = 5,
             })
         end)
-        return m
+        return ui
     end
     return true
 end
