@@ -387,12 +387,17 @@ tr.detail > td { padding: 0; border-top: 0; }
 /* The board: state going into the round, not an action. Jokers are only
    sampled when a hand is played, so the values shown are those after the
    round's first scored hand -- the lineup is the point. */
-.board { display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+.board { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap;
          background: var(--sunken); border-radius: .3rem;
          padding: 6px 10px; margin: 2px 0 6px; }
 .board .lbl { color: var(--ink-mute); font-size: 14px; letter-spacing: .06em;
               text-transform: uppercase; margin-right: 2px; }
 .bj { display: inline-flex; flex-direction: column; align-items: center; }
+/* The board is sprites, and a sprite can be wrong: Balatro stores Wee Joker
+   at the same atlas cell as Joker, so without a name it looks like a joker
+   you do not have and the one you do have looks absent. */
+.bjn { font-size: 13px; color: var(--ink-dim); max-width: 74px; text-align: center;
+       line-height: 1.15; margin-top: 2px; overflow-wrap: anywhere; }
 .moved { display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
          width: 100%; margin-top: 2px; opacity: .85; }
 .moved .bj { flex-direction: row; gap: 2px; }
@@ -928,8 +933,13 @@ async function toggleRound(runId, tr) {
     ? `<div class="board"><span class="lbl">Jokers</span>` +
       d.board.map(j => {
         const v = j.chips ?? j.mult ?? j.x_mult ?? j.extra;
-        return `<span class="bj">` + (sprite(j.key, "j", 52)
-            || `<span class="jv">${esc(j.key || "?")}</span>`) +
+        // Named, not just drawn. Balatro's own data puts j_wee at the same
+        // atlas cell as j_joker (game.lua:499, pos={x=0,y=0}), so Wee Joker
+        // renders as a plain Joker and reads as missing from the board. The
+        // name settles it for that and for any sprite we cannot resolve.
+        return `<span class="bj" title="${esc(nameOf(j.key))}">` +
+          (sprite(j.key, "j", 52) || "") +
+          `<span class="bjn">${esc(nameOf(j.key))}</span>` +
           (v !== null && v !== undefined ? `<span class="jv">${fmt(v)}</span>` : "") +
           `</span>`;
       }).join("") + `</div>`
@@ -941,9 +951,10 @@ async function toggleRound(runId, tr) {
     // reprinting the whole board on every row.
     const moved = (s.joker_delta || []).length
       ? `<div class="moved">` + s.joker_delta.map(m =>
-          `<span class="bj" title="${esc(m.key + " " + m.field)}">` +
-          (sprite(m.key, "j", 32) || `<span class="jv">${esc(m.key)}</span>`) +
-          `<span class="jv">${fmt(m.from)}→${fmt(m.to)}</span></span>`).join("") +
+          `<span class="bj" title="${esc(nameOf(m.key) + " " + m.field)}">` +
+          (sprite(m.key, "j", 32) || "") +
+          `<span class="jv">${esc(nameOf(m.key))} ${fmt(m.from)}→${fmt(m.to)}</span>`
+          + `</span>`).join("") +
         `</div>`
       : "";
     const cash = s.money ? `<span class="cash">+$${fmt(s.money)}</span>` : "";
