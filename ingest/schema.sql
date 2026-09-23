@@ -356,6 +356,19 @@ CREATE TABLE IF NOT EXISTS joker_counter_peaks (
   endless     INTEGER NOT NULL,
   contributed REAL,
   ambient     REAL,
+  -- The same two peaks in the unit the joker actually contributes -- Bull's
+  -- 189 dollars as the 378 chips it added. The counter is what the game
+  -- keeps; this is what it was worth, and it is stored rather than derived
+  -- per request because three separate call sites were each doing the
+  -- arithmetic and they render beside one another.
+  field       TEXT,
+  contributed_value REAL,
+  ambient_value     REAL,
+  -- Every value in this schema carries its ordering key beside it, and this
+  -- one is no exception: a reader that sorts or plots these against any
+  -- other value needs the same log key, not the raw number.
+  contributed_ord   REAL,
+  ambient_ord       REAL,
   PRIMARY KEY (run_id, metric, endless)
 );
 

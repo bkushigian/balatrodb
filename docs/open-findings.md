@@ -193,7 +193,89 @@ Unreconstructable later, so if you want them they have to go in now.
 
 ---
 
+## 7. Consistency: the same quantity derived twice
+
+From a review aimed specifically at duplicated work. The ones that produced
+wrong output are fixed; these are what is left.
+
+### `held` is a page-wide filter that one panel honours
+`ingest/dashboard.py:128` (`where`), `:369` (`attach_records`)
+
+The "Joker records: Held / Not held" toggle reaches `api_derived` and
+nothing else. `run_records.held` carries exactly the same distinction, so
+the record badges on the Runs table — 183 of them — ignore the toggle while
+the Jokers panel correctly moves between 14 and 16 rows. The run dialog
+ignoring it is deliberate and documented; the Runs column is not.
+
+### `sort=` is dead server-side, and crashes when combined with a metric
+`ingest/dashboard.py:281-320`
+
+Five sort modes exist; `state` has no `sort` key, so the page never sends
+one and the Runs table sorts client-side over whatever 300 rows came back.
+Harmless at 24 runs, wrong at 400. And `?sort=score&metric=hand_score:Pair&
+endless=0` raises `ProgrammingError: Incorrect number of bindings` — `tail`
+is appended and then the metric branch overwrites `sort`, orphaning it.
+Only reachable by hand-crafted URL.
+
+### "Pick the maximum" has two tiebreak rules
+Four queries break an `ord` tie on `CAST(txt AS REAL)`
+(`dashboard.py:199`, `:450`, `:533`, `ingest.py:942`); five comparable ones
+do not (`dashboard.py:240`, `:246`, `:335`, `:613`, `ingest.py:729`/`:786`).
+So the summary tile and the Runs row can print different text for the same
+maximum. **0 collisions in the current corpus** — it starts the first time
+two hands in one run land on the same ordering key.
+
+### Snapshots carry the game's own per-hand play counts, and ingest ignores them
+`hooks.lua:862-876` logs `G.GAME.hands` as `{played, level}` per hand.
+Nothing reads `played`. Supernova's counter is instead reconstructed as
+`COUNT(*) OVER (PARTITION BY run_id, hand)` (`ingest.py:826`), which
+duplicate log lines inflate. `derive()` already cross-checks `hands_played`
+and `skips` against `run.end` to raise `count_mismatch`; the same check per
+hand type is sitting unused in every snapshot.
+
+### `/api/antes` is dead
+In `ROUTES` with `.bars`/`.bar` CSS to render it, no caller. It is also the
+one endpoint that takes no `endless_col`, so wiring it up as-is would add a
+panel that ignores the phase toggle.
+
+### Naming drift
+- **`COUNTER_JOKERS` is two different constants** — `ingest.py` is
+  `metric → (key, field, rate)`, `dashboard.py` is
+  `metric → (key, name, what, field, rate)`. Same name, different arity, and
+  the dashboard indexes the other one positionally. Correct today; reads as
+  a typo in six months.
+- **`joker_derived.held` is a dead column** carrying a six-line comment
+  explaining the Fortune Teller problem it was meant to solve. Never
+  written, never read; the feature moved to `joker_counter_peaks`. A reader
+  will trust the comment.
+- **Jokers are stored twice** — `CARD_ARRAYS` includes `"jokers"`, so every
+  snapshot writes them into `cards` (10,568 rows) *and* `joker_state`
+  (6,473). `db-schema.md:565` still documents the `cards` path that
+  `joker_state` exists to replace.
+- **`kind` means two things** (`run_records.kind` vs a round step's kind),
+  and **`metric`** means three (the counter name, the ability field's
+  sibling, and the run-list sort key `kind:subject`).
+- **`db-schema.md` has drifted**: its win-rate query uses the old
+  `terminal = 1 AND seeded = 0` population, and "Max round score" is
+  documented but implemented nowhere.
+
+### The "Largest deck" tile and the "Deck size" column are different questions
+`MAX(rounds.deck_size)` = 67 against `MAX(runs.deck_size)` = 68. Both are
+sanctioned by the schema doc; they just wear similar names.
+
+---
+
 ## Already fixed
+
+From the consistency review: the "furthest ante" tile deriving
+`MAX(rounds.ante)` when every other surface uses `runs.furthest_ante` (they
+disagreed on 8 of 24 runs, and the tile read 8 above a column reaching 9);
+`rounds_won` computed in SQL and again in page JS with different filters (24
+in the table, 39 in the dialog); the counter→contribution formula written in
+three places, now converted once at derive time and stored; `ord_of` as a
+third implementation of the ordering key; the decaying-joker exclusion list
+in four places, one of which (`--report`) had already drifted; and the
+dashboard's 495-line `<style>` block, now `web/balatro.css`.
 
 Kept so a future reader does not re-report them: the `use_card` gate; the
 `state.begin` latch wipe; `G.GAME.won` reporting a death on the win-ante boss

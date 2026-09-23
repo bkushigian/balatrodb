@@ -4,507 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>BalatroDB</title>
-<style>
-/* Balatro's own typeface, lifted out of the game archive by
-   ingest/extract_assets.py. The stylesheet had always asked for "m6x11"
-   first and nothing ever served it, so every page fell back to Courier. */
-@font-face {
-  font-family: "m6x11";
-  src: url("assets/m6x11plus.ttf") format("truetype");
-  font-display: swap;
-}
-/* Balatro's own palette, lifted from G.C in globals.lua:
-   MULT/RED FE5F55 · MONEY f3b958 · GOLD eac058 · FILTER ff9a00
-   PURPLE 8867a5 · JOKER_GREY bfc7d5 · MAIN/DARK 374244 · BLIND_SIZE ad5353 */
-:root {
-  --bg:        #1b2223;
-  --surface:   #374244;   /* G.C.MAIN */
-  --raised:    #455254;
-  --sunken:    #222b2c;
-  --ink:       #ffffff;
-  --ink-dim:   #bfc7d5;   /* G.C.JOKER_GREY */
-  --ink-mute:  #8b969b;
-  --mult:      #fe5f55;   /* G.C.MULT */
-  --chips:     #009dff;
-  --money:     #f3b958;   /* G.C.MONEY */
-  --gold:      #eac058;   /* G.C.GOLD */
-  --filter:    #ff9a00;   /* G.C.FILTER */
-  --purple:    #8867a5;   /* G.C.PURPLE */
-  --green:     #4bc292;
-  --blind:     #ad5353;   /* G.C.BLIND_SIZE */
-  --r: 0.45rem;
-}
-* { box-sizing: border-box; }
-body {
-  margin: 0; padding: 0 16px 64px;
-  background: var(--bg); color: var(--ink);
-  font: 20px/1.5 "m6x11", "Courier New", ui-monospace, monospace;
-  /* A pixel font wants no antialiasing -- smoothing rounds the corners off
-     every glyph and the whole page reads soft. */
-  -webkit-font-smoothing: none;
-  font-smooth: never;
-  /* m6x11 ships one weight. Without this the browser fakes bold by smearing
-     each glyph sideways, which at 14px welded the letters of "DIED" into a
-     solid block. Every font-weight:700 below now just draws the real face. */
-  font-synthesis: none;
-  font-synthesis-weight: none;
-}
-h1, h2, h3 { margin: 0; font-weight: 700; letter-spacing: .02em; }
-/* Panel titles wear the game's outlined lettering. */
-h2 { --stroke: #1b2325; color: #fff;
-     text-shadow: var(--sh-x, 2px) var(--sh-y, 2px) 0 var(--stroke); }
-a { color: var(--chips); }
-
-/* Balatro's chunky embossed panel: a lip of darker colour under each block */
-.panel {
-  background: var(--surface); border-radius: var(--r);
-  box-shadow: 0 4px 0 #222b2c, 0 5px 10px rgba(0,0,0,.35);
-  padding: 14px 16px;
-}
-header {
-  max-width: 1560px; margin: 0 auto; padding: 22px 0 14px;
-  display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
-}
-header h1 { font-size: 38px; }
-header h1 span { color: var(--mult); }
-header .sub { color: var(--ink-mute); font-size: 15px; }
-/* brief pulse when new runs arrive, so an update is noticed without a banner
-   that shifts the layout */
-@keyframes flash { from { color: var(--gold); } to { color: var(--ink-mute); } }
-header .sub.fresh { animation: flash 1.6s ease-out; }
-@media (prefers-reduced-motion: reduce) { header .sub.fresh { animation: none; } }
-main { max-width: 1560px; margin: 0 auto; display: grid; gap: 16px; }
-/* A grid item's min-width defaults to `auto`, so a panel would not shrink
-   below the intrinsic width of the table inside it -- it pushed the grid
-   wider than the viewport and put a horizontal scrollbar on the whole page
-   instead of on the one table that needed it. The tables already scroll
-   themselves via .scroll. */
-main > *, .cols > * { min-width: 0; }
-
-/* ── filters: one row above everything, per the interaction spec ───────── */
-.filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-.filters label { color: var(--ink-dim); font-size: 15px; margin-right: 4px; }
-/* The lettering carries a hard offset shadow rather than an outline all
-   the way round -- measured off balatrowiki.org, where every brown pixel is
-   the white glyph shifted +3,+4 and nothing sits above or to the left. At
-   our smaller type that scales to 2px; the chips use 1px. */
-
-/* ── Balatro's button ──────────────────────────────────────────────────
-   Taken off balatrowiki.org, whose buttons are a solid pill with a 1px
-   lighter band at the top, a ~4px darker lip at the bottom, and white text
-   carrying a heavy dark outline. Measured from a vertical slice through one
-   of theirs: #fcac3d highlight, #ff9500 fill, #ad7442 lip, #784600 text
-   outline. Rebuilt here in the game's dark palette rather than the wiki's
-   light one, so it still reads as the same family. */
-/* The stair-stepped silhouette, traced off a balatrowiki.org button: the
-   fill is inset 12px, 6px then 3px over the first 12px of height, mirrored
-   on all four corners. clip-path would cut off a box-shadow, so the
-   highlight and the lip are bands in a background gradient and the drop
-   shadow is a filter, which follows the clipped outline instead of the box. */
-/* ── the pixel pill ───────────────────────────────────────────────────
-   The lip is a SECOND COPY of the silhouette sitting behind and a few
-   pixels lower, the way the game draws it -- not a dark band inside the
-   shape. As a band it cut the fill off with a flat horizontal line and
-   then painted the bottom curve in the lip colour, which is backwards:
-   the fill should keep its stepped curve, and the lip should peek out
-   below it. Two pseudo-elements, because clip-path on the element itself
-   would clip them both to the body's outline. */
-.pixel-pill {
-  --lip-h: 4px;
-  --hi: rgba(255, 255, 255, .14);
-  --lip: rgba(0, 0, 0, .45);                          /* fallback */
-  --lip: color-mix(in srgb, var(--fill) 58%, #000);   /* a darker own colour */
-  --shape: polygon(
-    12px 0, calc(100% - 12px) 0,
-    calc(100% - 12px) 3px, calc(100% - 6px) 3px,
-    calc(100% - 6px) 6px, calc(100% - 3px) 6px,
-    calc(100% - 3px) 12px, 100% 12px,
-    100% calc(100% - 12px), calc(100% - 3px) calc(100% - 12px),
-    calc(100% - 3px) calc(100% - 6px), calc(100% - 6px) calc(100% - 6px),
-    calc(100% - 6px) calc(100% - 3px), calc(100% - 12px) calc(100% - 3px),
-    calc(100% - 12px) 100%, 12px 100%,
-    12px calc(100% - 3px), 6px calc(100% - 3px),
-    6px calc(100% - 6px), 3px calc(100% - 6px),
-    3px calc(100% - 12px), 0 calc(100% - 12px),
-    0 12px, 3px 12px, 3px 6px, 6px 6px, 6px 3px, 12px 3px);
-  position: relative;
-  isolation: isolate;
-  background: none;
-  border-radius: 0;
-}
-.pixel-pill::before, .pixel-pill::after {
-  content: ""; position: absolute; inset: 0;
-  clip-path: var(--shape);
-}
-.pixel-pill::before {          /* the lip, the same shape sitting lower */
-  background: var(--lip);
-  transform: translateY(var(--lip-h));
-  z-index: -2;
-}
-.pixel-pill::after {           /* the body */
-  background: linear-gradient(to bottom, var(--hi) 0 2px, var(--fill) 2px 100%);
-  z-index: -1;
-}
-/* Chips and seeds round all the way to a pill instead of stopping a few
-   pixels in. The steps approximate a quarter circle of radius = half the
-   height, so the bands are given as percentages and keep their shape
-   whatever the element's height:
-       y   0%  11%  22%  39%  50%
-     inset 12   5    2    1    0  (px)
-   which is the staircase a pixel artist would draw for that curve. */
-.pixel-pill.sm { --lip-h: 3px; --shape: polygon(
-    12px 0, calc(100% - 12px) 0,
-    calc(100% - 12px) 11%, calc(100% - 5px) 11%,
-    calc(100% - 5px) 22%, calc(100% - 2px) 22%,
-    calc(100% - 2px) 39%, 100% 39%,
-    100% 61%, calc(100% - 2px) 61%,
-    calc(100% - 2px) 78%, calc(100% - 5px) 78%,
-    calc(100% - 5px) 89%, calc(100% - 12px) 89%,
-    calc(100% - 12px) 100%, 12px 100%,
-    12px 89%, 5px 89%,
-    5px 78%, 2px 78%,
-    2px 61%, 0 61%,
-    0 39%, 2px 39%,
-    2px 22%, 5px 22%,
-    5px 11%, 12px 11%); }
-
-button.seg, .pick > button {
-  --stroke: #10171a;
-  --fill: var(--sunken);
-  border: 0; cursor: pointer;
-  padding: 13px 20px; font: inherit; font-size: 17px;
-  font-weight: 700; letter-spacing: .02em;
-  color: #fff;
-  text-shadow: var(--sh-x, 2px) var(--sh-y, 2px) 0 var(--stroke);
-  transition: transform .06s;
-}
-/* Pressing pushes the button down onto its own lip, which all but vanishes. */
-button.seg:active, .pick > button:active {
-  transform: translateY(3px);
-  --lip-h: 1px;
-}
-button:focus-visible { outline: 2px solid var(--filter); outline-offset: 2px; }
-.seggroup { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
-/* Deck and stake are picked by their own art rather than by name -- the
-   sprite is what you recognise, and five decks of buttons take less room
-   than a dropdown you have to open to read. */
-/* A dropdown that shows the card art. A native <select> cannot, and laying
-   every deck out as a button would not survive the full set of them. */
-.pick { position: relative; display: inline-block; vertical-align: middle; }
-.pick > button { display: inline-flex; align-items: center; gap: 7px; }
-.pick .caret { color: var(--ink-mute); font-size: 14px; }
-.pick .menu {
-  position: absolute; z-index: 40; top: calc(100% + 5px); left: 0; display: none;
-  background: var(--surface); border: 1px solid #4a585c; border-radius: .4rem;
-  padding: 4px; min-width: 100%; max-height: 340px; overflow-y: auto;
-  box-shadow: 0 8px 22px rgba(0,0,0,.5);
-}
-.pick.open .menu { display: grid; gap: 2px; }
-.pick .menu button {
-  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
-  background: transparent; border: 0; box-shadow: none; color: var(--ink);
-  font: inherit; font-size: 17px; padding: 7px 11px; border-radius: .3rem;
-  cursor: pointer; white-space: nowrap;
-}
-.pick .menu button:hover, .pick .menu button:focus-visible { background: var(--sunken); }
-.pick .menu button[aria-selected="true"] {
-  --stroke: #7a241e; --sh-x: 1px; --sh-y: 1px;
-  background: var(--mult); color: #fff; font-weight: 700;
-  text-shadow: var(--sh-x, 2px) var(--sh-y, 2px) 0 var(--stroke);
-}
-button.seg[aria-pressed="true"] {
-  --stroke: #7a241e;
-  --fill: var(--mult);
-  --hi: rgba(255, 255, 255, .26);
-}
-
-/* ── stat tiles: hero numbers, no chart ───────────────────────────────── */
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
-.tile { background: var(--surface); border-radius: var(--r); padding: 12px 14px;
-        box-shadow: 0 4px 0 #222b2c; }
-.tile .k { color: var(--ink-mute); font-size: 15px; text-transform: uppercase; letter-spacing: .08em; }
-.tile .v { font-size: 38px; font-weight: 700; line-height: 1.15; margin-top: 4px;
-           overflow-wrap: anywhere; }
-.tile .n { color: var(--ink-dim); font-size: 14px; margin-top: 2px; }
-.v.mult { color: var(--mult); } .v.money { color: var(--money); }
-.v.chips { color: var(--chips); } .v.gold { color: var(--gold); }
-.v.purple { color: var(--purple); } .v.green { color: var(--green); }
-
-/* ── tables ───────────────────────────────────────────────────────────── */
-/* Exactly two columns once there is room, rather than as many as fit: with
-   auto-fit a wide window gave three, which left the fourth panel alone on a
-   row with a hole beside it. */
-.cols { display: grid; gap: 16px; grid-template-columns: 1fr; align-items: start; }
-@media (min-width: 900px) { .cols { grid-template-columns: 1fr 1fr; } }
-/* A column of panels inside one `cols` cell, so the tall Jokers board can
-   sit beside two shorter tables rather than leaving a gap under a short one. */
-.stack { display: grid; gap: 16px; align-content: start; }
-.runsort { display: flex; align-items: center; gap: 14px; margin: 2px 0 12px;
-           flex-wrap: wrap; }
-.runsort > label { color: var(--ink-dim); font-size: 15px; }
-.mpick { display: flex; align-items: center; gap: 7px; }
-.mlab { color: var(--ink-mute); font-size: 13px; letter-spacing: .05em;
-        text-transform: uppercase; }
-.pick .menu .grp { padding: 7px 9px 3px; color: var(--ink-mute); font-size: 13px;
-                   letter-spacing: .06em; text-transform: uppercase; }
-/* One row pitch everywhere. Rows are as tall as their tallest sprite, so
-   without this a table with card art sat at a different rhythm from one
-   without -- which is what made two panels of ten rows end at different
-   heights. */
-tbody td { height: 82px; }
-.scroll { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; font-size: 19px; }
-th {
-  text-align: left; color: var(--ink-mute); font-size: 15px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: .06em; padding: 4px 8px 8px;
-  white-space: nowrap; position: sticky; top: 0; background: var(--surface);
-}
-td { padding: 6px 8px; border-top: 1px solid #2b3536; white-space: nowrap; }
-tbody tr:hover { background: #404d4f; }
-td.num, th.num { text-align: right; }
-th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
-th.sortable:hover { color: var(--ink); }
-th.sortable .ind { display: inline-block; width: .8em; color: var(--gold); }
-
-/* The seed, as something you press. It is the one cell people want to take
-   somewhere else, so it copies on click rather than needing a careful drag. */
-.seed { font: inherit; font-size: 15px; letter-spacing: .06em; cursor: pointer;
-        color: var(--ink-dim); border: 0; font-weight: 700;
-        padding: 7px 16px; --fill: var(--sunken);
-        transition: color .12s, transform .06s; }
-.seed:active { transform: translateY(2px); --lip-h: 1px; }
-.seed:hover { --fill: #40525a; color: var(--ink); }
-.seed.seeded { color: var(--gold); }
-.seed.copied { --fill: var(--green); color: #14211f; }
-td.num { font-variant-numeric: tabular-nums; }
-.chip {
-  display: inline-block; padding: 4px 13px;
-  font-size: 14px; font-weight: 700; letter-spacing: .06em; color: #1b2223;
-  /* text-shadow inherits, and the run dialog's chips sit inside its <h2>,
-     which carries the outlined lettering. A dark outline around dark text
-     on a gold chip filled the letters in solid. */
-  text-shadow: none;
-  /* Fill only; .pixel-pill darkens it for the lip, so a new chip colour
-     needs nothing but its own --fill. */
-  --fill: #4a585c;
-  --hi: rgba(255, 255, 255, .20);
-}
-.chip.win { --fill: var(--gold); }
-.chip.died { --fill: var(--blind); color: #fff; }
-.chip.endless { --fill: var(--purple); color: #fff; }
-.chip.susp { --fill: #566264; color: var(--ink-dim); }
-.chip.live { --fill: var(--green); }
-.chip.other { --fill: #4a585c; color: var(--ink-dim); }
-.muted { color: var(--ink-mute); }
-/* Sprites are cells of the game's own atlases, positioned with
-   background-position. Scaled by background-size so one rule covers any
-   display size. */
-.spr { display: inline-block; vertical-align: middle; background-repeat: no-repeat;
-       image-rendering: pixelated; flex: none; }
-.spr.j { width: 30px; height: 40px; }
-.spr.b { width: 26px; height: 35px; }
-.spr.s { width: 20px; height: 20px; }
-.namecell { display: flex; align-items: center; gap: 8px; }
-.sub2 { color: var(--ink-mute); font-size: 14px; }
-.deckcell { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-.clickable { cursor: pointer; }
-
-/* ── single-series bar chart: ante distribution ───────────────────────── */
-.bars { display: grid; gap: 5px; }
-.bar { display: grid; grid-template-columns: 54px 1fr 34px; align-items: center; gap: 8px; }
-.bar .track { background: var(--sunken); border-radius: 3px; height: 15px;
-               display: block; overflow: hidden; }
-.bar .fill { background: var(--chips); height: 100%; border-radius: 0 3px 3px 0;
-             min-width: 3px; display: block; }
-.bar .lab, .bar .cnt { color: var(--ink-dim); font-size: 12px; }
-.bar .cnt { text-align: right; font-variant-numeric: tabular-nums; }
-
-/* ── run detail drawer ────────────────────────────────────────────────── */
-dialog {
-  background: var(--surface); color: var(--ink); border: 0; border-radius: var(--r);
-  max-width: min(960px, 94vw); width: 100%; padding: 0;
-  box-shadow: 0 10px 0 #222b2c, 0 20px 50px rgba(0,0,0,.6);
-}
-dialog::backdrop { background: rgba(10,14,15,.72); }
-dialog .head { display: flex; justify-content: space-between; align-items: center;
-               padding: 14px 18px; border-bottom: 1px solid #2b3536; gap: 12px; }
-dialog .body { padding: 16px 18px; max-height: 72vh; overflow: auto; }
-dialog h3 { font-size: 16px; color: var(--ink-mute); text-transform: uppercase;
-            letter-spacing: .07em; margin: 16px 0 6px; }
-dialog h3:first-child { margin-top: 0; }
-/* Same pill as the filter buttons, so the dialog matches the page. */
-button.x { --stroke: #10171a; --fill: var(--sunken);
-           color: #fff; border: 0; font: inherit;
-           padding: 13px 20px; cursor: pointer;
-           font-weight: 700;
-           text-shadow: var(--sh-x, 2px) var(--sh-y, 2px) 0 var(--stroke);
-           transition: transform .06s; }
-button.x:active { transform: translateY(3px); --lip-h: 1px; }
-.empty { color: var(--ink-mute); padding: 14px 4px; }
-
-/* expandable round timeline */
-tr.roundrow td:first-child::before {
-  content: ""; display: inline-block; width: 0; height: 0; margin-right: 6px;
-  border: 4px solid transparent; border-left-color: var(--ink-mute);
-  transition: transform .12s; transform-origin: 2px 50%;
-}
-tr.roundrow.open td:first-child::before { transform: rotate(90deg); }
-tr.detail > td { padding: 0; border-top: 0; }
-.steps { background: var(--sunken); border-radius: .3rem; margin: 2px 0 8px;
-         padding: 8px 10px; display: grid; gap: 6px; }
-/* 74px could not hold "Five of a Kind" plus its level, and an overflowing
-   grid track is not clipped -- the name ran out under the cards. Wider, and
-   the name wraps with the level on its own line. */
-.step { display: grid; grid-template-columns: 104px 1fr auto; gap: 10px;
-        align-items: center; padding: 5px 6px; border-radius: .25rem; }
-.step.play { background: #2c393b; }
-.step .what { font-size: 18px; font-weight: 700; line-height: 1.25;
-              overflow-wrap: anywhere; }
-.step .what .jv { display: block; font-weight: 400; }
-.step.play .what { color: var(--chips); }
-.step.discard .what { color: var(--ink-mute); }
-.hand { display: flex; gap: 3px; align-items: center; flex-wrap: wrap;
-        min-width: 0; }
-
-/* ── playing cards ────────────────────────────────────────────────────────
-   A card is two atlas cells stacked: the base (plain white c_base, or an
-   enhancement like m_lucky) with the 8BitDeck rank/suit face on top. */
-.pcard { position: relative; display: inline-block; line-height: 0;
-         vertical-align: middle; border-radius: 3px; }
-.pcard .face { position: absolute; left: 0; top: 0; }
-/* Editions are shaders in-game with no atlas cell, so these are CSS
-   approximations -- enough to tell a foil from a polychrome at a glance.
-   The card's title attribute names the real one. */
-.pcard.ed::after { content: ""; position: absolute; inset: 0; border-radius: 3px;
-                   pointer-events: none; mix-blend-mode: screen; opacity: .55; }
-.pcard.ed-foil::after   { background: linear-gradient(120deg, #2b6cff, #8fd8ff 60%, #2b6cff); }
-.pcard.ed-holo::after   { background: linear-gradient(120deg, #ff4fd8, #7a4bff 60%, #ff4fd8); }
-.pcard.ed-polychrome::after { background: linear-gradient(120deg,
-        #ff5c5c, #ffd84f 25%, #63ff8f 50%, #4fd8ff 75%, #c06cff); }
-.pcard.ed-negative::after { background: #2a2350; mix-blend-mode: exclusion; opacity: .85; }
-/* Seals have no `pos` in the game's data, so there is no cell to blit --
-   a corner pip in the seal's colour stands in for it. */
-.pcard .seal { position: absolute; left: 1px; top: 50%; margin-top: -3px;
-               width: 5px; height: 5px;
-               border-radius: 50%; box-shadow: 0 0 0 1px rgba(0,0,0,.55); }
-.seal.gold { background: #e8c547; } .seal.red { background: #fe5f55; }
-.seal.blue { background: #009dff; } .seal.purple { background: #8867a6; }
-.step .score { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.step .score b { color: var(--mult); }
-.step .score span { color: var(--ink-mute); font-size: 16px; }
-/* The board: state going into the round, not an action. Jokers are only
-   sampled when a hand is played, so the values shown are those after the
-   round's first scored hand -- the lineup is the point. */
-.board { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap;
-         background: var(--sunken); border-radius: .3rem;
-         padding: 6px 10px; margin: 2px 0 6px; }
-.board .lbl { color: var(--ink-mute); font-size: 14px; letter-spacing: .06em;
-              text-transform: uppercase; margin-right: 2px; }
-.bj { display: inline-flex; flex-direction: column; align-items: center; }
-/* The board is sprites, and a sprite can be wrong: Balatro stores Wee Joker
-   at the same atlas cell as Joker, so without a name it looks like a joker
-   you do not have and the one you do have looks absent. */
-/* The game's own colour language: chips blue, mult red, money gold. */
-.sc { font-size: 15px; font-weight: 700; margin-top: 1px; white-space: nowrap; }
-.sc-chips { color: var(--chips); }
-.sc-mult  { color: var(--mult); }
-/* Balatro writes an X-mult as white on a red block, not as red text, which
-   is what makes it read as a multiplier at a glance rather than an
-   addition. {X:mult,C:white} in the game's own markup. */
-.sc-xmult { background: var(--mult); color: #fff; border-radius: .3rem;
-            padding: 1px 8px 3px; text-shadow: none; }
-.sc-money { color: var(--money); }
-.sc-hand  { color: var(--ink-dim); }
-.sc-level { color: var(--green); }
-/* The hand says whether a counter joker's record was set while anyone
-   actually held it. Cut out of Four Fingers by the extractor. */
-/* The seal sits on the joker it describes, like a sticker on the card. */
-.jart { position: relative; display: inline-flex; flex: none; }
-.hand { position: absolute; right: -7px; bottom: -5px;
-        width: 30px; height: 30px; image-rendering: pixelated; }
-.recs .hand, .rec .hand, #tip .hand { width: 22px; height: 22px;
-        right: -5px; bottom: -4px; }
-.recs { display: flex; align-items: flex-start; gap: 9px; }
-.recscell { white-space: nowrap; }
-.more { color: var(--ink-mute); font-size: 13px; cursor: help;
-        align-self: center; }
-/* An endless record sits under a purple bar -- the same colour the ENDLESS
-   chip uses, so the two read as the same idea. */
-/* A record's own panel. The native title attribute cannot be styled, and
-   a record has more to say than one line: what it was, which contest, and
-   what it displaced. */
-#tip {
-  position: fixed; z-index: 90; pointer-events: none;
-  max-width: 340px; padding: 12px 14px;
-  background: var(--surface); color: var(--ink);
-  border-radius: .4rem;
-  box-shadow: 0 6px 0 #1b2325, 0 10px 26px rgba(0, 0, 0, .55);
-}
-/* The run header: the same stat tiles the page uses, at dialog scale --
-   it was a grey run-on sentence. */
-.runmeta { display: grid; gap: 8px; margin: 4px 0 10px;
-           grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); }
-.mt { background: var(--sunken); border-radius: .35rem; padding: 8px 11px 13px; }
-.mtv .seed { font-size: 15px; }
-.mtk { color: var(--ink-mute); font-size: 13px; letter-spacing: .07em;
-       text-transform: uppercase; }
-.mtv { font-size: 23px; font-weight: 700; margin-top: 2px; }
-.mtv.gold { color: var(--gold); } .mtv.green { color: var(--green); }
-.mtv.chips { color: var(--chips); } .mtv.money { color: var(--money); }
-.logline { font-size: 13px; }
-.dtdeck { display: inline-flex; align-items: center; gap: 8px; }
-
-#tip .row { display: flex; gap: 12px; align-items: flex-start; }
-#tip .ttl { font-size: 19px; font-weight: 700; line-height: 1.2; }
-#tip .sub { color: var(--ink-mute); font-size: 14px; letter-spacing: .05em;
-            text-transform: uppercase; margin-top: 3px; }
-#tip .big { font-size: 26px; font-weight: 700; margin-top: 5px; }
-#tip .beat { margin-top: 10px; padding-top: 9px; border-top: 2px solid #2b3638;
-             color: var(--ink-dim); font-size: 15px; }
-#tip .beat b { color: var(--ink); font-weight: 700; }
-#tip .none { margin-top: 10px; padding-top: 9px; border-top: 2px solid #2b3638;
-             color: var(--ink-mute); font-size: 15px; }
-
-/* The run dialog's record list: one card each, so they can be read rather
-   than counted. */
-.recgrid { display: grid; gap: 8px;
-           grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); }
-.rec { display: grid; grid-template-columns: auto 1fr auto; gap: 10px 12px;
-       align-items: center; background: var(--sunken); border-radius: .35rem;
-       padding: 9px 12px; }
-.recmain { min-width: 0; }
-.recttl { font-size: 17px; font-weight: 700; }
-.recsub { color: var(--ink-mute); font-size: 13px; letter-spacing: .05em;
-          text-transform: uppercase; }
-.recval { font-size: 22px; font-weight: 700; white-space: nowrap; }
-.recbeat { grid-column: 1 / -1; color: var(--ink-dim); font-size: 14px;
-           border-top: 2px solid #2b3638; padding-top: 7px; }
-.recbeat b { color: var(--ink); }
-.rec.rec-endless { box-shadow: inset 3px 0 0 var(--purple); }
-.rec.rec-endless::after { content: none; }
-
-.rec-endless { position: relative; }
-.rec-endless::after {
-  content: ""; position: absolute; left: 2px; right: 2px; bottom: -3px;
-  height: 3px; background: var(--purple);
-}
-.sc-other { color: var(--ink-dim); }
-.bjn { font-size: 13px; color: var(--ink-dim); max-width: 74px; text-align: center;
-       line-height: 1.15; margin-top: 2px; overflow-wrap: anywhere; }
-.moved { display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
-         width: 100%; margin-top: 2px; opacity: .85; }
-.moved .bj { flex-direction: row; gap: 5px; align-items: center; }
-.moved .sc { margin-top: 0; }
-.cash { display: block; color: var(--money); font-size: 15px; font-weight: 700; }
-.jv { color: var(--ink-dim); font-size: 15px; }
-.warn { color: var(--filter); font-size: 15px; }
-@media (max-width: 560px) { header h1 { font-size: 24px; } .tile .v { font-size: 25px; } }
-</style>
+<link rel="stylesheet" href="balatro.css">
 </head>
 <body>
 <header>
   <h1>Balatro<span>DB</span></h1>
   <div class="sub" id="sub">loading…</div>
+  <nav class="nav">
+    <a class="pixel-pill" href="/" aria-current="page">Dashboard</a>
+    <a class="pixel-pill" href="/stats.html">Stats</a>
+  </nav>
 </header>
 
 <main>
@@ -581,132 +90,11 @@ tr.detail > td { padding: 0; border-top: 0; }
   <button class="x pixel-pill" onclick="detail.close()">Close</button></div>
   <div class="body" id="dbody"></div></dialog>
 
+<script src="balatro.js"></script>
 <script>
-const $ = s => document.querySelector(s);
 
-// Everything rendered here came out of a log file, and a log can carry a
-// modded deck or joker name verbatim. These strings go into innerHTML, so they
-// are escaped at the point of interpolation rather than trusted.
-const esc = v => String(v ?? "").replace(/[&<>"']/g,
-  c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-// Two independent toggles rather than three exclusive options. Both on (or
-// both off) means no phase filter at all -- which is what "all runs" should
-// mean, and is not expressible with mutually exclusive buttons.
-const phase = { "0": true, "1": true };
-const state = { deck: "", stake: "", endless: "", noplasma: "", metric: "",
-                seeded: "", held: "" };
 
-function syncPhase() {
-  const on = Object.keys(phase).filter(k => phase[k]);
-  // exactly one selected -> filter to it; otherwise include everything
-  state.endless = on.length === 1 ? on[0] : "";
-}
 
-// Big numbers arrive as exact decimal text and can exceed Number range, so
-// format from the string rather than parseFloat where possible.
-// Past ten billion the digits stop being readable and only the magnitude
-// means anything, so numbers switch to A.BBe12 there.
-const EXP_AT = 1e10;
-
-// A value the log carries but a double cannot hold. These arrive as exact
-// decimal strings -- either a very long run of digits or already in
-// exponential form -- so the exponent is counted off the string rather than
-// computed, which would have overflowed to Infinity.
-const sciFromString = str => {
-  const m = /^([+-]?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(str);
-  if (!m) return null;
-  const [, sign, int, frac = "", exp] = m;
-  const lead = int.replace(/^0+/, "");
-  const digits = (lead + frac) || "0";
-  const e = Math.max(lead.length - 1, 0) + (exp ? Number(exp) : 0);
-  return `${sign}${digits[0]}.${digits.slice(1, 3).padEnd(2, "0")}e${e}`;
-};
-
-const fmtNum = (v, whole) => {
-  if (v === null || v === undefined || v === "") return "—";
-  const str = String(v).trim();
-  const n = Number(str);
-  if (!isFinite(n)) {
-    // Escaped: fmt is handed TEXT columns straight out of the log
-    // (score_txt, to_txt, required_txt), and a modded joker can put
-    // anything in them. Every caller interpolates into innerHTML.
-    return sciFromString(str) ?? esc(str);
-  }
-  if (Math.abs(n) >= EXP_AT) return n.toExponential(2).replace("e+", "e");
-  // Balatro scores in whole chips, so a .75 is an artefact of the maths
-  // rather than something the player saw. Truncated, not rounded: rounding
-  // up would report more than was actually scored.
-  if (whole) return Math.trunc(n).toLocaleString();
-  return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
-};
-
-const fmt = v => fmtNum(v, false);
-// Scores and chip requirements: whole numbers only.
-const fmtScore = v => fmtNum(v, true);
-const ago = ts => {
-  if (!ts) return "—";
-  const d = new Date(ts * 1000), s = (Date.now() / 1000) - ts;
-  if (s < 86400) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return d.toLocaleDateString([], { month: "short", day: "numeric" });
-};
-
-// Atlas metadata, extracted from the game by ingest/extract_assets.py. Absent
-// if that has not been run, in which case everything falls back to text.
-let SPR = null;
-// Awaited rather than raced: the pickers, the joker names and the hand
-// strength sort all read it, and losing the race left them silently inert.
-const SPR_READY = fetch("assets/sprites.json")
-  .then(r => (r.ok ? r.json() : null))
-  .then(d => { SPR = d; })
-  .catch(() => {});
-
-function sprite(key, kind, px) {
-  if (!SPR || !SPR.sprites || !key || !SPR.sprites[key]) return "";
-  const s = SPR.sprites[key], a = SPR.atlases[s.a];
-  if (!a) return "";
-  const scale = px / a.cw;
-  // The game's name for it, not the asset key: hovering a stake said
-  // "stake_white" and a joker "j_wee". Playing-card layers carry their own
-  // combined title on the wrapper instead.
-  const tip = kind.startsWith("pc") ? "" : ` title="${esc(nameOf(key))}"`;
-  return `<span class="spr ${kind}"${tip} style="
-      width:${px}px; height:${(a.ch * scale).toFixed(1)}px;
-      background-image:url(assets/${s.a});
-      background-size:${(a.w * scale).toFixed(1)}px ${(a.h * scale).toFixed(1)}px;
-      background-position:-${(s.x * a.cw * scale).toFixed(1)}px -${(s.y * a.ch * scale).toFixed(1)}px"></span>`;
-}
-
-// The game's own display names, from localization/en-us.lua. Without them a
-// key has to be un-snake-cased, which gives "ride the bus" and "mail in
-// rebate" -- and mixed casing against the panels that do have real names.
-// Poker hands sort by strength, not alphabetically -- "Flush Five" belongs
-// above "High Card", not next to it. The ranking is the game's own, from
-// evaluate_poker_hand; anything unrecognised sorts last.
-const handRank = hand => {
-  const o = (SPR && SPR.hand_order) || [];
-  const i = o.indexOf(hand);
-  return i < 0 ? null : o.length - i;
-};
-
-// The Planet card that levels a hand, from the game's own centre data. It
-// gives the hand panels real art, and with it their rows match the joker
-// rows' height instead of sitting at a different rhythm.
-// A scaling value, written the way the game writes it: chips blue and
-// additive, mult red and additive, X-mult red with the X. Only jokers that
-// are actually accumulating get one -- a static `extra` is not a score.
-const SCALE = {
-  chips:       ["sc-chips", "+", ""],
-  mult:        ["sc-mult",  "+", ""],
-  x_mult:      ["sc-xmult", "X", ""],
-  h_size:      ["sc-hand",  "+", " hand"],
-  extra_value: ["sc-money", "+$", ""],
-};
-const scaleTag = sc => {
-  if (!sc || sc.value === null || sc.value === undefined) return "";
-  const [cls, pre, post] = SCALE[sc.field] || ["sc-other", "+", ""];
-  return `<span class="sc ${cls}" title="${esc(sc.field)}"
-    >${pre}${fmt(sc.value)}${post}</span>`;
-};
 
 // What a run was the FIRST to achieve, at the time it was played -- not
 // what still stands. Jokers wear their own art, hands their Planet card;
@@ -716,82 +104,6 @@ const scaleTag = sc => {
 // A hand score is whole chips like every other score; a joker peak is not
 // -- Lucky Cat really does sit at x5.5 -- so the formatter goes with the
 // kind rather than being chosen once for the whole panel.
-const RECORD_KIND = {
-  joker:       ["sc-mult",  k => nameOf(k), "peak",       fmt],
-  hand_score:  ["sc-chips", h => h,         "best score", fmtScore],
-  hand_level:  ["sc-level", h => h,         "level",      fmt],
-  hand_played: ["sc-money", h => h,         "played",     fmt],
-};
-const recFmt = rec => (RECORD_KIND[rec.kind] || [, , , fmt])[3];
-// A joker record is whatever that joker scales -- chips, mult or X-mult --
-// so it is coloured by its field rather than by being a joker.
-const FIELD_CLS = { chips: "sc-chips", mult: "sc-mult", x_mult: "sc-xmult" };
-const recCls = rec => FIELD_CLS[rec.field]
-  || (RECORD_KIND[rec.kind] || ["sc-other"])[0];
-const recPre = rec => rec.field === "x_mult" ? "X" : "";
-// A counter joker's record carries the same seal the board uses, so which
-// of its two records this is reads the same way in both places.
-const recordArt = (rec, px) => {
-  const art = rec.kind === "joker"
-    ? sprite(rec.subject, "j", px || 34)
-    : sprite((SPR && SPR.hand_planets && SPR.hand_planets[rec.subject]) || "",
-             "j", px || 34);
-  if (!art) return "";
-  return rec.held === null || rec.held === undefined ? art
-    : `<span class="jart">${art}${handIcon(rec)}</span>`;
-};
-const recordText = rec => {
-  const [, name, what] = RECORD_KIND[rec.kind] || ["", x => x, ""];
-  return `${name(rec.subject)} ${what} ${recFmt(rec)(rec.value_txt)}`
-    + (rec.endless ? " (endless)" : "");
-};
-const RECORDS_SHOWN = 2;
-
-// Records get a real panel rather than a title attribute: a title cannot be
-// styled, and there is more to say than fits on one line. The records
-// themselves are held here and referenced by index, so nothing has to be
-// serialised into an attribute and escaped back out.
-let TIPS = [];
-
-function tipHTML(rec) {
-  const [, name, what] = RECORD_KIND[rec.kind] || ["sc-other", x => x, ""];
-  const cls = recCls(rec), f = recFmt(rec);
-  const beat = rec.prev_txt === null || rec.prev_txt === undefined
-    ? `<div class="none">First of its kind — nothing to beat.</div>`
-    : `<div class="beat">Beat <b>${f(rec.prev_txt)}</b>` +
-      (rec.prev_deck ? ` · ${esc(rec.prev_deck)}` : "") +
-      (rec.prev_ts ? ` · ${ago(rec.prev_ts)}` : "") + `</div>`;
-  return `<div class="row">${recordArt(rec, 44)}<div>
-      <div class="ttl">${esc(name(rec.subject))}</div>
-      <div class="sub">${esc(what)}${rec.endless ? " · endless" : ""}</div>
-      <div class="big ${cls}">${recPre(rec)}${f(rec.value_txt)}</div>
-    </div></div>${beat}`;
-}
-
-function showTip(el, html) {
-  const tip = $("#tip");
-  tip.innerHTML = html;
-  tip.hidden = false;
-  // Placed under the thing it describes, nudged back inside the viewport
-  // rather than allowed to run off the right or bottom edge.
-  const r = el.getBoundingClientRect(), t = tip.getBoundingClientRect();
-  let x = r.left, y = r.bottom + 8;
-  if (x + t.width > innerWidth - 8) x = innerWidth - t.width - 8;
-  if (y + t.height > innerHeight - 8) y = r.top - t.height - 8;
-  tip.style.left = Math.max(8, x) + "px";
-  tip.style.top = Math.max(8, y) + "px";
-}
-
-document.addEventListener("mouseover", e => {
-  const el = e.target.closest("[data-tip]");
-  if (!el) return;
-  const rec = TIPS[+el.dataset.tip];
-  if (rec) showTip(el, tipHTML(rec));
-});
-document.addEventListener("mouseout", e => {
-  if (e.target.closest("[data-tip]")) $("#tip").hidden = true;
-});
-document.addEventListener("scroll", () => { $("#tip").hidden = true; }, true);
 
 // One small tile of the run's metadata. `raw` skips formatting for a value
 // that is already markup, like the seed's copy button.
@@ -819,12 +131,9 @@ const recordsCell = r => {
 };
 
 const handCell = h => `<span class="namecell">${
-  sprite((SPR && SPR.hand_planets && SPR.hand_planets[h]) || "", "j", 56)
+  sprite(planetOf(h), "j", 56)
   }<span>${esc(h)}</span></span>`;
 
-const nameOf = (key, fallback) =>
-  (SPR && SPR.names && SPR.names[key]) || fallback ||
-  (key || "").replace(/^(j|b|m|c)_/, "").replace(/_/g, " ");
 
 // Deck and stake are shown as their sprite alone; the name is a hover. The
 // icon is the thing you actually recognise, and the text was repeated down
@@ -953,20 +262,6 @@ const seedCell = r => r.seed
   : `<span class="muted">—</span>`;
 const shortRun = r => (r || "").split("-")[1] || r;
 
-const qs = () => {
-  const p = new URLSearchParams();
-  for (const [k, v] of Object.entries(state)) if (v !== "") p.set(k, v);
-  return p.toString();
-};
-const get = path => fetch(path + "?" + qs()).then(r => {
-  if (!r.ok) throw new Error(`${path} -> ${r.status}`);
-  return r.json();
-}).then(d => {
-  // The server answers errors with a 200 and {"error": ...}; without this
-  // the object flowed on and rendered as "undefined runs".
-  if (d && d.error) throw new Error(`${path}: ${d.error}`);
-  return d;
-});
 
 function resultChip(r) {
   // No run.end yet: either still being played, or the game crashed. The log
@@ -1003,13 +298,6 @@ const openRunJS = true;
 // joker. The second is a real record about the run -- a Fortune Teller best
 // set without ever owning one -- so it is its own row, marked, rather than
 // being folded into the first.
-// Which of the two a counter joker's record is, said with a hand rather
-// than with the words "IF HELD": the hand cut out of Four Fingers for one
-// it actually held, and the same hand crossed out for the counter reached
-// with nobody holding it.
-const handIcon = r => r.held === undefined || r.held === null ? "" :
-  `<img class="hand" src="assets/hand_${r.held ? "held" : "unheld"}.png"
-     alt="${r.held ? "set while held" : "set with nobody holding it"}">`;
 
 const jokerTip = r => !r.counter ? "" :
   ` title="${esc(r.counter + (r.held
@@ -1202,7 +490,11 @@ async function openRun(id) {
     </div>`;
   }).join("");
 
-  const cleared = d.rounds.filter(x => x.cashout_total !== null).length;
+  // From the server, which owns the rule that a round is won iff it
+  // reached a cash-out. Recomputing it here meant two implementations under
+  // one label -- and this one ignored the phase filter, so a run could read
+  // 24 in the table and 39 in the dialog.
+  const cleared = d.rounds_won;
 
   const jok = d.jokers.map(j => `<tr><td>${esc(nameOf(j.key))}</td><td class="muted">${esc(j.field)}</td>
     <td class="num" style="color:var(--mult)">${fmt(j.peak)}</td></tr>`).join("");
@@ -1328,68 +620,6 @@ async function toggleRound(runId, tr) {
 }
 
 // ── wiring ───────────────────────────────────────────────────────────────
-// A dropdown that shows each option's own art. Options are real buttons so
-// Tab and Enter work; a native <select> cannot carry an image, and a row of
-// buttons per deck stops fitting once every deck is in play.
-function buildPicker(id, key, items, kind, px, allLabel, onPick) {
-  const root = $("#" + id);
-  const opts = [{ k: "", n: allLabel }].concat(items);
-  // An item may carry its own art (the metric list mixes jokers and
-  // planets), and a group entry is a heading rather than a choice.
-  const face = it => (it.art !== undefined ? it.art
-    : (it.k ? sprite(it.k, kind, px) || "" : "")) + `<span>${esc(it.n)}</span>`;
-
-  function render() {
-    const cur = opts.find(o => o.k === state[key]) || opts[0];
-    root.innerHTML =
-      `<button class="seg pixel-pill" aria-haspopup="listbox" aria-expanded="false"
-        >${face(cur)}<span class="caret">▾</span></button>` +
-      `<div class="menu" role="listbox">` +
-      opts.map((o, i) => o.group
-        ? `<div class="grp">${esc(o.n)}</div>`
-        : `<button role="option" data-i="${i}"
-        aria-selected="${o.k === state[key]}">${face(o)}</button>`).join("") +
-      `</div>`;
-
-    const btn = root.firstElementChild;
-    const close = () => {
-      root.classList.remove("open");
-      btn.setAttribute("aria-expanded", "false");
-    };
-    btn.onclick = ev => {
-      ev.stopPropagation();
-      const open = !root.classList.contains("open");
-      // Only one menu open at a time.
-      document.querySelectorAll(".pick.open").forEach(o => {
-        o.classList.remove("open");
-        o.firstElementChild.setAttribute("aria-expanded", "false");
-      });
-      root.classList.toggle("open", open);
-      btn.setAttribute("aria-expanded", open);
-    };
-    root.querySelector(".menu").onclick = ev => {
-      const b = ev.target.closest("button[role=option]");
-      if (!b) return;
-      ev.stopPropagation();
-      state[key] = opts[+b.dataset.i].k;
-      close();
-      render();
-      // Sibling pickers share this key, so they have to redraw: choosing a
-      // joker has to clear whatever the hand pickers were showing.
-      if (onPick) onPick();
-      refresh();
-    };
-    root.onkeydown = ev => { if (ev.key === "Escape") { close(); btn.focus(); } };
-  }
-  render();
-}
-
-document.addEventListener("click", () => {
-  document.querySelectorAll(".pick.open").forEach(o => {
-    o.classList.remove("open");
-    o.firstElementChild.setAttribute("aria-expanded", "false");
-  });
-});
 
 // Sprites must be loaded first or every option falls back to text.
 Promise.all([
@@ -1419,8 +649,21 @@ function buildMetricPickers() {
     const subjects = kind === "joker" ? METRICS.jokers : METRICS.hands;
     const art = kind === "joker"
       ? k => sprite(k, "j", 30)
-      : h => sprite((SPR && SPR.hand_planets && SPR.hand_planets[h]) || "", "j", 30);
-    const opts = subjects.map(k => ({ k: `${kind}:${k}`, n: label(k), art: art(k) }));
+      : h => sprite(planetOf(h), "j", 30);
+    let opts = subjects.map(k => ({ k: `${kind}:${k}`, n: label(k), art: art(k) }));
+    // A counter joker has no joker_scale rows, so it never appeared here
+    // and the run list could not be sorted by one. It offers both of its
+    // records, wearing the same seals the panels use to tell them apart.
+    if (kind === "joker") {
+      opts = opts.concat((METRICS.counters || []).flatMap(c => [
+        { k: `counter:${c.metric}`, n: nameOf(c.key),
+          art: `<span class="jart">${sprite(c.key, "j", 30)}${
+            handIcon({ held: 1 })}</span>` },
+        { k: `counter_ambient:${c.metric}`, n: nameOf(c.key),
+          art: `<span class="jart">${sprite(c.key, "j", 30)}${
+            handIcon({ held: 0 })}</span>` },
+      ])).sort((a, b) => a.n.localeCompare(b.n));
+    }
     buildPicker(id, "metric", opts, "j", 30, placeholder, buildMetricPickers);
   }
 }

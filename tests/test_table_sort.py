@@ -24,8 +24,20 @@ if not shutil.which("node"):
     print("SKIP: node not on PATH")
     raise SystemExit(0)
 
-blocks = re.findall(r"<script>(.*?)</script>", page.read_text(encoding="utf-8"), re.S)
-if not blocks:
+# The page loads balatro.js first and its own inline script second, and the
+# two share one global lexical scope in the browser. Concatenated here in
+# that order so the test evaluates what the browser actually evaluates --
+# checking the inline block alone would fail on every helper that moved.
+SHARED = ROOT / "ingest/web/balatro.js"
+
+
+def page_js(html):
+    blocks = re.findall(r"<script>(.*?)</script>", html, re.S)
+    return [SHARED.read_text(encoding="utf-8")] + blocks
+
+
+blocks = page_js(page.read_text(encoding="utf-8"))
+if len(blocks) < 2:
     print("FAIL: no <script> block in index.html")
     raise SystemExit(1)
 
@@ -133,14 +145,19 @@ const built = [];
 const realBuildPicker = buildPicker;
 buildPicker = (id, key, items, kind, px, label, onPick) =>
   built.push({ id, key, specs: items.map(i => i.k), hasHook: !!onPick });
-METRICS = { jokers: ["j_wee"], hands: ["Pair", "Flush"] };
+// A counter joker carries a metric name rather than a joker key, and
+// offers TWO records -- so the joker picker must emit both kinds.
+METRICS = { jokers: ["j_wee"], hands: ["Pair", "Flush"],
+            counters: [{ metric: "dollars", key: "j_bull", field: "chips" }] };
 buildMetricPickers();
 buildPicker = realBuildPicker;
 const pickerProbe = {
   count: built.length,
   keys: [...new Set(built.map(b => b.key))],
   ids: built.map(b => b.id),
-  kinds: built.map(b => b.specs[0].split(":")[0]),
+  // Every option's kind, not just the first: one picker offers several
+  // now, and reading only specs[0] hid the ones that came after it.
+  kinds: built.flatMap(b => b.specs.map(x => x.split(":")[0])),
   allHaveHook: built.every(b => b.hasHook),
   wellFormed: built.every(b => b.specs.every(x => /^[a-z_]+:.+$/.test(x))),
 };
@@ -195,7 +212,7 @@ table_ids = re.findall(r'<table id="([^"]+)"', page.read_text(encoding="utf-8"))
 PRELUDE = f"const TABLE_IDS = {json.dumps(table_ids)};\n"
 
 tmp = os.path.join(tempfile.gettempdir(), "balatrodb_sort.js")
-pathlib.Path(tmp).write_text(PRELUDE + STUB + blocks[0] + HARNESS, encoding="utf-8")
+pathlib.Path(tmp).write_text(PRELUDE + STUB + chr(10).join(blocks) + HARNESS, encoding="utf-8")
 r = subprocess.run(["node", tmp], capture_output=True, text=True,
                    encoding="utf-8")   # node emits UTF-8; the Windows
                                        # locale would mangle an em dash

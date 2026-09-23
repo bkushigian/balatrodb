@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BalatroDB · Stats</title>
+<link rel="stylesheet" href="balatro.css">
+</head>
+<body>
+<header>
+  <h1>Balatro<span>DB</span></h1>
+  <div class="sub" id="sub">loading…</div>
+  <nav class="nav">
+    <a class="pixel-pill" href="/">Dashboard</a>
+    <a class="pixel-pill" href="/stats.html" aria-current="page">Stats</a>
+  </nav>
+</header>
+
+<main>
+  <section class="panel filters" aria-label="Filters">
+    <span><label>Deck</label><span class="pick" id="deck"></span>
+      <button class="seg pixel-pill" id="noplasma" aria-pressed="false"
+        title="Plasma balances chips and mult before scoring, so its numbers are not comparable with other decks">No Plasma</button></span>
+    <span><label>Stake</label><span class="pick" id="stake"></span></span>
+    <span><label>Seed</label>
+      <span class="seggroup" id="seeded" role="group" aria-label="Seeded runs">
+        <button class="seg pixel-pill" data-v="0" aria-pressed="true"
+          title="Runs whose seed the game chose">Random</button>
+        <button class="seg pixel-pill" data-v="1" aria-pressed="true"
+          title="Runs you entered a seed for -- practice, not records">Seeded</button>
+      </span></span>
+    <span><label>Include</label>
+      <span class="seggroup" id="phase" role="group" aria-label="Which phases to include">
+        <button class="seg pixel-pill" data-v="0" aria-pressed="true"
+          title="Everything up to the point a run continued past the win ante">Non-endless</button>
+        <button class="seg pixel-pill" data-v="1" aria-pressed="true"
+          title="Only what happened after continuing past the win ante">Endless</button>
+      </span></span>
+  </section>
+
+  <!-- Poker hands: three questions about the same twelve rows, so they
+       share an order (the game's own, strongest first) and differ only in
+       what the bar measures. -->
+  <section class="panel">
+    <h2>Poker hands</h2>
+    <div class="note" style="color:var(--ink-mute);font-size:15px;margin:2px 0 12px">
+      Your best, per hand type, across every run in the slice.
+      The <a href="/">dashboard</a> lists the same figures as sortable tables.
+    </div>
+    <div class="chartgrid">
+      <div class="chart" id="c_level"></div>
+      <div class="chart" id="c_score"></div>
+      <div class="chart" id="c_played"></div>
+    </div>
+  </section>
+
+  <!-- One joker, run by run. The picker writes state.metric, exactly as the
+       dashboard's does, so the server answers with the same subquery. -->
+  <section class="panel">
+    <h2>A joker, run by run</h2>
+    <div class="runsort">
+      <label>Joker</label><span class="pick" id="m_joker"></span>
+      <span class="muted" id="jokernote"></span>
+    </div>
+    <div class="chart" id="c_joker"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Every run</h2>
+    <div class="note" style="color:var(--ink-mute);font-size:15px;margin:2px 0 12px">
+      Three separate charts, never two scales on one axis — the numbers
+      have nothing to do with each other.
+    </div>
+    <div class="chartgrid">
+      <div class="chart" id="c_ante"></div>
+      <div class="chart" id="c_best"></div>
+      <div class="chart" id="c_money"></div>
+    </div>
+  </section>
+</main>
+
+<div id="tip" role="tooltip" hidden></div>
+
+<script src="balatro.js"></script>
+<script>
+// ── the stepped disc ─────────────────────────────────────────────────────
+// A point the same way the buttons are drawn: rasterised onto a coarse grid
+// and kept there, rather than a smooth circle that happens to be small. The
+// outline is a single staircase polygon -- the rows of a raster disc are
+// symmetric and monotonic, so the right edge walked down and the left edge
+// walked back up closes exactly.
+function discPath(cells) {
+  const rows = [];
+  for (let i = 0; i < 2 * cells; i++) {
+    const dy = i - cells + 0.5;
+    const half = Math.sqrt(Math.max(0, cells * cells - dy * dy));
+    const x0 = Math.round(-half), x1 = Math.round(half);
+    if (x1 > x0) rows.push([x0, x1, i - cells]);
+  }
+  const pts = [];
+  for (const [, x1, y] of rows) pts.push([x1, y], [x1, y + 1]);
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const [x0, , y] = rows[i];
+    pts.push([x0, y + 1], [x0, y]);
+  }
+  return "M" + pts.map(p => p.join(",")).join("L") + "Z";
+}
+// Three cells of radius: coarse enough that the steps read as deliberate,
+// fine enough to still be a circle. Scaled to size at each use.
+const DISC = discPath(3);
+const dot = (x, y, r, cls, extra) =>
+  `<path class="${cls}" transform="translate(${x.toFixed(1)},${y.toFixed(1)}) ` +
+  `scale(${(r / 3).toFixed(3)})" d="${DISC}"${extra || ""}/>`;
+
+// ── scales ───────────────────────────────────────────────────────────────
+// Scores run from 300 to past what a double holds, so they are plotted on
+// the ordering key the ingester already writes -- log10(1+v) -- which is a
+// log axis that keeps working when the value itself cannot be parsed.
+const niceTicks = (lo, hi, n) => {
+  if (!(hi > lo)) return [lo];
+  const raw = (hi - lo) / n;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].find(m => m * mag >= raw) * mag;
+  const out = [];
+  for (let t = Math.ceil(lo / step) * step; t <= hi + step * 1e-9; t += step) out.push(t);
+  return out.length > 1 ? out : [lo, hi];
+};
+// On a log axis the tick is an exponent; label it as the power of ten it is.
+const logTick = o => {
+  const e = Math.round(o);
+  return e <= 0 ? "1" : e < 4 ? Math.pow(10, e).toLocaleString() : "1e" + e;
+};
+
+// ── bar rows ─────────────────────────────────────────────────────────────
+// `rows` are {key, label, art, v, ord, txt, sub}. The bar's LENGTH uses ord
+// when the chart is log-scaled, so a 269-billion High Card does not make
+// every other hand a hairline; the number printed is always the real one.
+function barChart(host, title, note, rows, opts) {
+  const o = opts || {};
+  const max = Math.max(...rows.map(r => r.v || 0), 0);
+  const body = rows.map(r => {
+    const len = max > 0 ? Math.max(3, 100 * (r.v || 0) / max) : 0;
+    return `<div class="pbar">
+      <span class="lab">${r.art || ""}</span>
+      <span class="nm">${esc(r.label)}</span>
+      <span class="track" style="--c:${o.color}"
+            title="${esc(r.label)} — ${esc(String(r.txt))}">
+        <span class="lip" style="width:${len.toFixed(1)}%"></span>
+        <span class="fill" style="width:${len.toFixed(1)}%"></span></span>
+      <span class="v" style="color:${o.color}">${r.txt}${
+        r.sub ? `<small> ${esc(r.sub)}</small>` : ""}</span>
+    </div>`;
+  }).join("");
+  host.innerHTML = head(title, note) +
+    (rows.length ? `<div class="pbars">${body}</div>` : EMPTY);
+}
+
+// The same rows on a log axis. Position, not length: the dot sits where the
+// value is, the gridlines are whole powers of ten, and nothing pretends a
+// bar length is meaningful when its units are exponents.
+function dotRows(host, title, note, rows, opts) {
+  const o = opts || {};
+  const ords = rows.map(r => r.ord).filter(v => v !== null && v !== undefined);
+  if (!ords.length) { host.innerHTML = head(title, note) + EMPTY; return; }
+  const lo = Math.floor(Math.min(...ords)) - 0.35;
+  const hi = Math.ceil(Math.max(...ords)) + 0.35;
+  const at = v => 100 * (v - lo) / (hi - lo);
+
+  // Thinned when the range is wide: nine labels in a 200px track is one
+  // long smear of digits.
+  const step = Math.max(1, Math.ceil((hi - lo) / 5));
+  const ticks = [];
+  for (let e = Math.ceil(lo); e <= hi; e += step) ticks.push(e);
+  const gl = ticks.map(e => `<span class="gl" style="left:${at(e).toFixed(2)}%"></span>`).join("");
+
+  const body = rows.map(r => `<div class="pbar dots">
+      <span class="lab">${r.art || ""}</span>
+      <span class="nm">${esc(r.label)}</span>
+      <span class="track" title="${esc(r.label)} — ${esc(String(r.txt))}">
+        <span class="rule"></span>${gl}
+        <svg class="disc" viewBox="-4 -4 8 8" style="left:${at(r.ord).toFixed(2)}%">
+          <path d="${DISC}" fill="${o.color}"
+                stroke="var(--surface)" stroke-width="0.8"/></svg>
+      </span>
+      <span class="v" style="color:${o.color}">${r.txt}${
+        r.sub ? `<small> ${esc(r.sub)}</small>` : ""}</span>
+    </div>`).join("");
+
+  // One axis, under the rows it belongs to.
+  const axis = `<div class="axisrow"><span></span><span></span><span class="sc">${
+    ticks.map(e => `<span class="t" style="left:${at(e).toFixed(2)}%">${
+      logTick(e)}</span>`).join("")}</span><span></span></div>`;
+
+  host.innerHTML = head(title, note) + `<div class="pbars">${body}</div>` + axis;
+}
+
+const head = (title, note) => `<h3>${esc(title)}</h3><div class="note">${note}</div>`;
+const EMPTY = `<div class="empty">Nothing recorded yet.</div>`;
+
+// ── an SVG series, run by run ────────────────────────────────────────────
+// x is the run's position in time order rather than its timestamp: runs
+// arrive in clusters, and on a real time axis an evening's play collapses
+// into one unreadable smear. The dates still label the ends.
+const CH = { w: 520, h: 230, l: 54, r: 16, t: 14, b: 30 };
+// `ago` switches format inside a day, which put "Sep 20" at one end of an
+// axis and "04:43 PM" at the other. An axis wants one format.
+const axisDate = ts => new Date(ts * 1000)
+  .toLocaleDateString([], { month: "short", day: "numeric" });
+
+// `series` is a list of {pts, color, label, icon, dim}. Most charts pass one;
+// a counter joker passes two, because it holds two different records and
+// neither is a footnote to the other -- what it contributed while someone
+// held it, and what the counter reached whether or not anyone did.
+function seriesChart(host, title, note, series, opts) {
+  const o = opts || {};
+  const live = series.filter(s => s.pts.length);
+  if (!live.length) {
+    host.innerHTML = head(title, note) +
+      `<div class="empty">No runs in this slice have one.</div>`;
+    return;
+  }
+  const { w, h, l, r, t, b } = CH;
+  const iw = w - l - r, ih = h - t - b;
+  const all = live.flatMap(s => s.pts.map(p => p.y));
+  let lo = Math.min(...all), hi = Math.max(...all);
+  if (o.zero) lo = Math.min(0, lo);
+  if (hi === lo) { hi = lo + 1; lo = Math.max(o.zero ? 0 : lo - 1, lo - 1); }
+  if (o.log) {
+    // Snap to whole exponents. A tick on this axis IS a power of ten, and
+    // labelling a fractional one by rounding it printed "100" twice.
+    lo = Math.floor(lo) - (Math.ceil(hi) - Math.floor(lo) < 2 ? 1 : 0);
+    hi = Math.ceil(hi);
+  } else {
+    const pad = (hi - lo) * 0.08;
+    lo -= pad; hi += pad;
+    if (o.zero && lo < 0) lo = 0;
+  }
+
+  // x is the run's place in time order, not its timestamp: runs arrive in
+  // clusters, and on a real time axis an evening's play is one smear. The
+  // scale spans every series so the two share an x.
+  const stamps = [...new Set(live.flatMap(s => s.pts.map(p => p.ts)))].sort((a, c) => a - c);
+  const X = ts => l + (stamps.length < 2 ? iw / 2
+    : iw * stamps.indexOf(ts) / (stamps.length - 1));
+  const Y = v => t + ih - ih * (v - lo) / (hi - lo);
+
+  // On a log axis a tick is an exponent, so whole powers of ten are the
+  // only labels worth printing -- unless the range is too narrow to hold
+  // two of them, where the ordinary spacing beats one lonely line.
+  let ticks;
+  if (o.log) {
+    // Every whole exponent, thinned when there are more than about six so
+    // the labels do not collide.
+    const step = Math.max(1, Math.ceil((hi - lo) / 6));
+    ticks = [];
+    for (let e = Math.ceil(lo); e <= hi; e += step) ticks.push(e);
+  } else {
+    ticks = niceTicks(lo, hi, 4);
+  }
+  const grid = ticks.map(v =>
+    `<line class="grid" x1="${l}" y1="${Y(v).toFixed(1)}" x2="${w - r}" y2="${Y(v).toFixed(1)}"/>
+     <text x="${l - 8}" y="${(Y(v) + 4).toFixed(1)}" text-anchor="end">${
+       o.log ? logTick(v) : fmt(v)}</text>`).join("");
+
+  const pts = [];                      // flat, so a hover can find its point
+  let body = "";
+  for (const sr of live) {
+    // The running best: what the record actually was after each run. A
+    // staircase, because that is how a record moves -- it holds, then jumps.
+    let run = -Infinity;
+    const stair = [];
+    sr.pts.forEach(p => {
+      p.rec = p.y > run;               // strictly greater: equalling is not beating
+      if (p.rec) {
+        if (stair.length) stair.push([X(p.ts), Y(run)]);
+        run = p.y;
+        stair.push([X(p.ts), Y(run)]);
+      }
+    });
+    if (stair.length) {
+      stair.push([X(stamps[stamps.length - 1]), Y(run)]);
+      body += `<path class="best" d="M${stair.map(q =>
+        q.map(n => n.toFixed(1)).join(",")).join("L")}"${
+        sr.dim ? ' style="opacity:.4"' : ""}/>`;
+    }
+    for (const p of sr.pts) {
+      const i = pts.push(p) - 1;
+      const x = X(p.ts), y = Y(p.y);
+      body += dot(x, y, sr.dim ? 4.5 : 5.5,
+        "dot" + (sr.dim ? " amb" : p.rec ? " rec" : ""),
+        ` fill="${sr.dim ? "none" : sr.color}" data-pt="${i}"`) +
+        // A hit target bigger than the mark, per the interaction spec.
+        `<circle class="hit" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="13"
+          data-pt="${i}"/>`;
+    }
+  }
+
+  host.innerHTML = head(title, note) + `<div class="svgwrap"><svg
+      viewBox="0 0 ${w} ${h}" role="img"
+      aria-label="${esc(title)}, ${pts.length} points">
+      ${grid}
+      <line class="axis" x1="${l}" y1="${t}" x2="${l}" y2="${t + ih}"/>
+      <line class="axis" x1="${l}" y1="${t + ih}" x2="${w - r}" y2="${t + ih}"/>
+      ${body}
+      <text x="${l}" y="${h - 8}">${esc(axisDate(stamps[0]))}</text>
+      <text x="${w - r}" y="${h - 8}" text-anchor="end">${
+        esc(axisDate(stamps[stamps.length - 1]))}</text>
+    </svg></div>
+    <div class="legend">${live.map(sr =>
+      `<span>${sr.icon || `<i style="background:${sr.color}"></i>`}${
+        esc(sr.label)}</span>`).join("")}
+      <span><i style="background:var(--ink-dim)"></i>the record, as it stood</span>
+    </div>`;
+  PTS[host.id] = pts;
+}
+
+// Points are held per chart and referenced by index, so nothing is
+// serialised into an attribute and escaped back out.
+const PTS = {};
+document.addEventListener("mouseover", e => {
+  const el = e.target.closest("[data-pt]");
+  if (!el) return;
+  const host = el.closest(".chart");
+  const p = (PTS[host && host.id] || [])[+el.dataset.pt];
+  if (!p) return;
+  showTip(el, `<div class="pt">
+    <div class="ttl">${esc(p.title)}</div>
+    <div class="big" style="color:${p.color}">${p.txt}</div>
+    <div class="when">${esc(p.sub || "")}</div>
+    ${p.rec ? `<div class="when" style="color:var(--gold)">a record when it was set</div>` : ""}
+  </div>`);
+});
+document.addEventListener("mouseout", e => {
+  if (e.target.closest("[data-pt]")) $("#tip").hidden = true;
+});
+
+// ── the hand charts ──────────────────────────────────────────────────────
+// One order for all three, the game's own: a hand's row sits in the same
+// place whichever chart you are reading.
+const byStrength = (a, b) => (handRank(b.hand) || 0) - (handRank(a.hand) || 0);
+const handArt = h => sprite(planetOf(h), "j", 30) ||
+  `<span class="muted" style="font-size:12px">${esc(h.slice(0, 3))}</span>`;
+// The name is a hover on the row rather than a column: at three charts
+// across, a name column costs more width than the chart has to give.
+
+function drawHands(levels, counts, best) {
+  const mk = h => ({ key: h.hand, label: h.hand, art: handArt(h.hand) });
+
+  barChart($("#c_level"), "Level", "Highest each hand has been levelled to.",
+    levels.slice().sort(byStrength).map(h =>
+      Object.assign(mk(h), { v: h.level, txt: fmt(h.level) })),
+    { color: "var(--green)" });
+
+  dotRows($("#c_score"), "Best score",
+    "Log scale, so the dot marks the value rather than the bar's length — " +
+    "these span nine orders of magnitude.",
+    best.slice().sort(byStrength).map(h =>
+      Object.assign(mk(h), { v: Number(h.value), ord: h.ord, txt: fmtScore(h.value),
+                             sub: "lvl " + h.level })),
+    { color: "var(--chips)" });
+
+  barChart($("#c_played"), "Hands played", "How often you actually play it.",
+    counts.slice().sort(byStrength).map(h =>
+      Object.assign(mk(h), { v: h.played, txt: fmt(h.played) })),
+    { color: "var(--money)" });
+}
+
+// ── the joker chart ──────────────────────────────────────────────────────
+// A scaling joker's peak is its own number; a counter joker's is what it
+// contributed, in the unit it contributes -- the ingester converts, so both
+// arrive here already comparable between runs.
+// A scaling joker's peak is its own number; a counter joker's is what it
+// contributed, in the unit it contributes -- the ingester converts, so both
+// arrive here already comparable between runs.
+//
+// A counter joker gets TWO series, because it holds two records and neither
+// is a footnote to the other: what it added while someone actually held it,
+// and what the counter reached whether or not anyone did. For most runs
+// only the second exists, which is the point -- a Fortune Teller world
+// record set without ever owning one is that line, not this one.
+async function drawJoker() {
+  const host = $("#c_joker");
+  const spec = (state.metric || "").split(":");
+  if (spec.length !== 2 || (spec[0] !== "joker" && spec[0] !== "counter")) {
+    host.innerHTML = `<div class="empty">Pick a joker to see how its best
+      run compares with every run before it.</div>`;
+    $("#jokernote").textContent = "";
+    return;
+  }
+  const counter = spec[0] === "counter";
+  const key = counter ? (COUNTER_KEY[spec[1]] || "") : spec[1];
+  const field = counter ? (COUNTER_FIELD[spec[1]] || "chips") : null;
+  const color = field === "mult" || field === "x_mult"
+    ? "var(--mult)" : "var(--chips)";
+
+  const mk = (runs, c) => runs
+    .filter(r => r.metric_txt !== null && r.metric_txt !== undefined)
+    .sort((a, b) => a.started_ts - b.started_ts)
+    .map(r => ({
+      ts: r.started_ts, y: r.metric_ord, txt: fmt(r.metric_txt), color: c,
+      title: nameOf(key),
+      sub: `${r.deck_name || ""} · ${ago(r.started_ts)}`,
+    }));
+
+  // The same seals the board and the record panels use, so which record a
+  // point belongs to reads the same way everywhere on the site.
+  const seal = held => handIcon({ held })
+    .replace('class="hand"', 'class="hand" style="position:static;width:19px;height:19px"');
+
+  let series, note;
+  if (counter) {
+    const [held, amb] = await Promise.all([
+      get("/api/runs"), fetchMetric("counter_ambient:" + spec[1]),
+    ]);
+    series = [
+      { pts: mk(amb, "var(--ink-mute)"), color: "var(--ink-mute)", dim: true,
+        label: "if you had held it", icon: seal(false) },
+      { pts: mk(held, color), color, label: "while you held it", icon: seal(true) },
+    ];
+    note = "Both of its records. Log scale, in the unit it contributes.";
+  } else {
+    series = [{ pts: mk(await get("/api/runs"), color), color, label: "peak" }];
+    note = "Its highest value in each run. Log scale.";
+  }
+
+  const n = series.reduce((a, sr) => a + sr.pts.length, 0);
+  $("#jokernote").innerHTML = n
+    ? `${sprite(key, "j", 30)} ${esc(nameOf(key))}` : "";
+  seriesChart(host, nameOf(key) || "Joker", note, series, { log: true });
+}
+
+// One metric other than the one the filters are carrying. Same endpoint,
+// same slice -- only the metric differs.
+const fetchMetric = m => {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(state)) if (v !== "" && k !== "metric") p.set(k, v);
+  p.set("metric", m);
+  return fetch("/api/runs?" + p).then(r => r.json())
+    .then(d => (d && d.error ? Promise.reject(new Error(d.error)) : d));
+};
+
+// ── every run ────────────────────────────────────────────────────────────
+function drawRuns(runs) {
+  const asc = runs.slice().sort((a, b) => a.started_ts - b.started_ts);
+  const mk = (get, fmtv, color, title) => asc
+    .filter(r => get(r) !== null && get(r) !== undefined)
+    .map(r => ({
+      ts: r.started_ts, y: Number(get(r)), txt: fmtv(get(r)), color, title,
+      sub: `${r.deck_name || ""} · ${ago(r.started_ts)}`,
+    }));
+  const one = (pts, color, label) => [{ pts, color, label }];
+
+  seriesChart($("#c_ante"), "Ante reached",
+    "How far the run got before it ended.",
+    one(mk(r => r.ante, fmt, "var(--green)", "Ante"), "var(--green)", "ante"),
+    { zero: true });
+
+  // Plotted on the ordering key, which IS log10 -- and unlike the score
+  // itself it survives values a double cannot hold.
+  seriesChart($("#c_best"), "Best hand", "The run's biggest score. Log scale.",
+    one(asc.filter(r => r.bh_ord !== null && r.bh_ord !== undefined).map(r => ({
+      ts: r.started_ts, y: r.bh_ord, txt: fmtScore(r.best_hand),
+      color: "var(--chips)", title: "Best hand",
+      sub: `${r.deck_name || ""} · ${ago(r.started_ts)}`,
+    })), "var(--chips)", "chips"),
+    { log: true });
+
+  seriesChart($("#c_money"), "Peak money", "The most you held at once.",
+    one(mk(r => r.peak_money, v => "$" + fmt(v), "var(--money)", "Peak money"),
+        "var(--money)", "dollars"),
+    { zero: true });
+}
+
+// ── wiring ───────────────────────────────────────────────────────────────
+let METRICS = null;
+const COUNTER_KEY = {};      // metric -> joker key, for art and names
+const COUNTER_FIELD = {};    // metric -> what it contributes
+
+function buildJokerPicker() {
+  if (!METRICS) return;
+  const opts = METRICS.jokers.map(k => ({
+    k: "joker:" + k, n: nameOf(k), art: sprite(k, "j", 30),
+  })).concat((METRICS.counters || []).map(c => ({
+    k: "counter:" + c.metric, n: nameOf(c.key), art: sprite(c.key, "j", 30),
+  }))).sort((a, b) => a.n.localeCompare(b.n));
+  buildPicker("m_joker", "metric", opts, "j", 30, "Pick a joker", syncHash);
+}
+
+// The chosen joker is the one thing here worth linking to, so it lives in
+// the URL -- and a reload keeps its place instead of emptying the panel.
+function syncHash() {
+  const h = state.metric ? "#" + state.metric : "";
+  if (h !== location.hash) history.replaceState(null, "", location.pathname + h);
+}
+function readHash() {
+  const h = decodeURIComponent(location.hash.replace(/^#/, ""));
+  if (/^(joker|counter):/.test(h)) state.metric = h;
+}
+
+async function refresh() {
+  try {
+    const [levels, counts, hands, runs] = await Promise.all([
+      get("/api/hand_levels"), get("/api/hand_counts"),
+      get("/api/hands"), get("/api/runs"),
+    ]);
+    drawHands(levels, counts, hands.best || []);
+    drawRuns(runs);
+    await drawJoker();
+    $("#sub").textContent = `${runs.length} run${runs.length === 1 ? "" : "s"}`;
+  } catch (ex) {
+    $("#sub").textContent = "error: " + ex.message;
+  }
+}
+
+// Two independent toggles, like the dashboard's: both on (or both off)
+// means no filter at all.
+const seeded = { "0": true, "1": true };
+function syncSeeded() {
+  const on = Object.keys(seeded).filter(k => seeded[k]);
+  state.seeded = on.length === 1 ? on[0] : "";
+  paint("#seeded", seeded);
+}
+const paint = (sel, map) => {
+  for (const b of $(sel).querySelectorAll("button[data-v]")) {
+    b.setAttribute("aria-pressed", !!map[b.dataset.v]);
+  }
+};
+
+$("#seeded").onclick = e => {
+  const b = e.target.closest("button[data-v]");
+  if (!b) return;
+  seeded[b.dataset.v] = !seeded[b.dataset.v];
+  syncSeeded();
+  refresh();
+};
+$("#phase").onclick = e => {
+  const b = e.target.closest("button[data-v]");
+  if (!b) return;
+  phase[b.dataset.v] = !phase[b.dataset.v];
+  syncPhase();
+  paint("#phase", phase);
+  refresh();
+};
+$("#noplasma").onclick = () => {
+  state.noplasma = state.noplasma === "1" ? "" : "1";
+  $("#noplasma").setAttribute("aria-pressed", state.noplasma === "1");
+  refresh();
+};
+
+// Sprites first, or every option and label falls back to text.
+Promise.all([
+  fetch("/api/meta").then(r => r.json()),
+  fetch("/api/metrics").then(r => r.json()),
+  SPR_READY,
+]).then(([meta, m]) => {
+  METRICS = m;
+  for (const c of m.counters || []) {
+    COUNTER_KEY[c.metric] = c.key;
+    COUNTER_FIELD[c.metric] = c.field;
+  }
+  buildPicker("deck", "deck", meta.decks, "b", 48, "All decks");
+  buildPicker("stake", "stake",
+    meta.stakes.map(x => ({ k: x.k, n: nameOf(x.k) })), "s", 36, "All stakes");
+  readHash();
+  buildJokerPicker();
+  refresh();
+});
+</script>
+</body>
+</html>

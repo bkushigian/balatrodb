@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import glob
 import json
-import math
 import os
 import zlib
 import sqlite3
@@ -207,9 +206,15 @@ def api_summary(db, q):
     deck = db.execute(
         f"""SELECT MAX(ro.deck_size) v FROM rounds ro JOIN runs r USING (run_id)
             WHERE 1=1{dw}""", dp).fetchone()
+    # Per-RUN, not per-round: `rounds.ante` goes backwards when Hieroglyph
+    # or Petroglyph calls ease_ante(-n), so its maximum is not the furthest
+    # ante reached. `runs.furthest_ante` is the game's own high-water mark,
+    # and is what the Runs column and the run dialog already show -- this
+    # tile was the one surface deriving it differently, and with the
+    # non-endless filter on it printed 8 above a column reaching 9.
     ante = db.execute(
-        f"""SELECT MAX(ro.ante) v FROM rounds ro JOIN runs r USING (run_id)
-            WHERE 1=1{dw}""", dp).fetchone()
+        f"""SELECT MAX(COALESCE(r.furthest_ante, r.ended_ante)) v
+              FROM runs r WHERE 1=1{w}""", p).fetchone()
     cash = db.execute(
         f"""SELECT MAX(ro.cashout_total) v FROM rounds ro JOIN runs r USING (run_id)
             WHERE 1=1{dw}""", dp).fetchone()
@@ -259,6 +264,25 @@ METRICS = {
         "(SELECT COUNT(*) FROM hands h WHERE h.run_id = r.run_id"
         "   AND h.hand = ?{el})",
         " AND h.endless = ?"),
+    # A counter joker has no joker_scale rows at all -- its value is a
+    # function of game state -- so it could not be picked here, and Bull was
+    # missing from every per-joker view. The contribution is what is
+    # comparable between runs, and ingest has already converted it.
+    "counter": (
+        "(SELECT MAX(cp.contributed_value) FROM joker_counter_peaks cp"
+        "   WHERE cp.run_id = r.run_id AND cp.metric = ?{el})",
+        "(SELECT MAX(cp.contributed_ord) FROM joker_counter_peaks cp"
+        "   WHERE cp.run_id = r.run_id AND cp.metric = ?{el})",
+        " AND cp.endless = ?"),
+    # The other half of the same joker: what the counter reached whether or
+    # not anyone held it. A Fortune Teller record set without ever owning
+    # one is this, and for most runs it is the only one that exists.
+    "counter_ambient": (
+        "(SELECT MAX(cp.ambient_value) FROM joker_counter_peaks cp"
+        "   WHERE cp.run_id = r.run_id AND cp.metric = ?{el})",
+        "(SELECT MAX(cp.ambient_ord) FROM joker_counter_peaks cp"
+        "   WHERE cp.run_id = r.run_id AND cp.metric = ?{el})",
+        " AND cp.endless = ?"),
 }
 
 
@@ -268,12 +292,24 @@ def api_metrics(db, q):
     jokers = rows(db, f"""
         SELECT DISTINCT js.key k FROM joker_scale js JOIN runs r USING (run_id)
          WHERE js.is_reset = 0
-           AND js.key NOT IN ('j_turtle_bean', 'j_popcorn', 'j_ice_cream', 'j_ramen')
+           AND js.key NOT IN {ingester.DECAYING_SQL}
            {w} ORDER BY k""", p)
     hands = rows(db, f"""
         SELECT DISTINCT h.hand k FROM hands h JOIN runs r USING (run_id)
          WHERE h.hand IS NOT NULL{w} ORDER BY k""", p)
-    return {"jokers": [j["k"] for j in jokers], "hands": [h["k"] for h in hands]}
+    # Counter jokers live in their own table and carry a metric name rather
+    # than a joker key, so they are listed apart with the key to draw.
+    counters = rows(db, f"""
+        SELECT DISTINCT cp.metric m FROM joker_counter_peaks cp
+          JOIN runs r USING (run_id)
+         WHERE cp.contributed_value IS NOT NULL{w} ORDER BY m""", p)
+    return {"jokers": [j["k"] for j in jokers], "hands": [h["k"] for h in hands],
+            "counters": [{"metric": c["m"],
+                          "key": ingester.COUNTER_JOKERS[c["m"]][0],
+                          # What it contributes, so a reader can colour it
+                          # the way the game does -- blue chips, red mult.
+                          "field": ingester.COUNTER_JOKERS[c["m"]][1]}
+                         for c in counters if c["m"] in ingester.COUNTER_JOKERS]}
 
 
 def api_runs(db, q):
@@ -415,12 +451,14 @@ def api_all_jokers(db, q):
 
 
 def ord_of(v):
-    """Same ordering key the ingester writes, so merged rows sort together."""
-    try:
-        x = float(v)
-    except (TypeError, ValueError):
-        return None
-    return math.copysign(math.log10(1 + abs(x)), x)
+    """The ingester's ordering key, not a second copy of it.
+
+    These rows get sorted against `to_ord`/`score_ord` values written by the
+    ingester, so the two must agree exactly -- which a reimplementation here
+    cannot promise. It also differs on input handling: this returned a key
+    for the string "123" where ord_num declines it.
+    """
+    return ingester.ord_num(v)[0]
 
 
 def api_jokers(db, q):
@@ -442,8 +480,7 @@ def api_jokers(db, q):
              -- observations is the highest value seen after decay began, not
              -- a peak. Ranking them beside Wee Joker's earned 2,080 is
              -- meaningless, so they are left off the board entirely.
-             AND js.key NOT IN ('j_turtle_bean', 'j_popcorn',
-                                'j_ice_cream', 'j_ramen'){w}),
+             AND js.key NOT IN {ingester.DECAYING_SQL}{w}),
         ranked AS (
           SELECT *, ROW_NUMBER() OVER (
                       PARTITION BY key, field
@@ -502,8 +539,8 @@ def api_derived(db, q):
             continue
         for r in rows(db, f"""
                 WITH ranked AS (
-                  SELECT cp.metric, cp.{col} value, r.run_id, r.deck_name,
-                         r.deck_key, r.stake_key,
+                  SELECT cp.metric, cp.{col} value, cp.{col}_value contribution,
+                         r.run_id, r.deck_name, r.deck_key, r.stake_key,
                          ROW_NUMBER() OVER (PARTITION BY cp.metric
                                             ORDER BY cp.{col} DESC) rn
                     FROM joker_counter_peaks cp JOIN runs r USING (run_id)
@@ -512,8 +549,9 @@ def api_derived(db, q):
             key, name, what, field, rate = COUNTER_JOKERS.get(
                 r["metric"], (None, r["metric"], "", "chips", 1))
             counter = r["value"]
-            # Throwback multiplies rather than adds: X1 + 0.25 per skip.
-            value = (1 + rate * counter) if field == "x_mult" else rate * counter
+            # Converted once, in the ingester. Three call sites used to do
+            # this arithmetic and two of them render side by side.
+            value = r["contribution"]
             out.append({"joker_key": key, "joker": name, "what": what,
                         "field": field, "counter": counter,
                         "held": held, "value": value, "run_id": r["run_id"],
@@ -626,6 +664,14 @@ def api_run(db, q):
             key=lambda x: (RECORD_ORDER.get(x["kind"], 9), x["endless"],
                            -(x["value_ord"] or 0))),
         "defects": rows(db, "SELECT defect, detail FROM run_defects WHERE run_id=?", (rid,)),
+        # The whole run, like everything else in this dialog -- the Runs
+        # column applies the phase filter, so the two can legitimately
+        # differ for a run that went endless. What they must not do is
+        # disagree about what "won" means, which is why the rule lives
+        # here rather than being reimplemented over the rounds array.
+        "rounds_won": db.execute(
+            "SELECT COUNT(*) FROM rounds WHERE run_id=? AND cashout_total IS NOT NULL",
+            (rid,)).fetchone()[0],
     }
 
 
@@ -763,7 +809,7 @@ def attach_scaling(db, rid, jokers):
                 metric, field, rate = by_key[j["key"]]
                 c = cnt.get(metric)
                 if c is not None:
-                    v = (1 + rate * c) if field == "x_mult" else rate * c
+                    field, v = ingester.counter_value(metric, c)
                     scale = {"field": field, "value": v, "ord": ord_of(v)}
             j["scale"] = scale
 

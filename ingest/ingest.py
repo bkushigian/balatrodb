@@ -185,6 +185,15 @@ COUNTER_JOKERS = {
 }
 
 
+# Jokers that COUNT DOWN. Their `to` value falls every round, so the maximum
+# of it is just their starting value -- "Ice Cream peaked at 100 chips" says
+# nothing about the run. Every surface that ranks jokers by peak excludes
+# them; the list lived in four places and `--report` had already been missed.
+DECAYING = ("j_turtle_bean", "j_popcorn", "j_ice_cream", "j_ramen")
+# These are module constants, never user input.
+DECAYING_SQL = "(" + ", ".join("'" + k + "'" for k in DECAYING) + ")"
+
+
 def counter_value(metric, counter):
     """What the joker contributes for a given counter reading."""
     spec = COUNTER_JOKERS.get(metric)
@@ -725,10 +734,10 @@ class Ingester:
         # field comes from the scale row -- it is the difference between
         # +3,200 Chips and X1.5 Mult, which must not render alike.
         sources = {
-            "joker": """
+            "joker": f"""
                 SELECT run_id, key subject, to_txt v, to_ord o, field FROM joker_scale
                  WHERE is_reset = 0 AND to_ord IS NOT NULL AND endless = ?
-                   AND key NOT IN ('j_turtle_bean','j_popcorn','j_ice_cream','j_ramen')""",
+                   AND key NOT IN {DECAYING_SQL}""",
             "hand_score": """
                 SELECT run_id, hand subject, score_txt v, score_ord o, 'score' FROM hands
                  WHERE hand IS NOT NULL AND score_ord IS NOT NULL AND endless = ?""",
@@ -919,11 +928,21 @@ class Ingester:
                             contributed[pel] = cur
 
             for el in set(ambient) | set(contributed):
-                out.append((run_id, metric, el, contributed.get(el), ambient.get(el)))
+                c, a = contributed.get(el), ambient.get(el)
+                # Converted here, once. A counter is not comparable across
+                # jokers -- 189 dollars and 189 skips are worth wildly
+                # different things -- so the value in the joker's own unit
+                # is what every reader actually wants.
+                field, cv = counter_value(metric, c) if c is not None else (None, None)
+                field2, av = counter_value(metric, a) if a is not None else (None, None)
+                out.append((run_id, metric, el, c, a,
+                            field or field2, cv, av,
+                            ord_num(cv)[0], ord_num(av)[0]))
 
         if out:
             self.db.executemany(
-                "INSERT OR REPLACE INTO joker_counter_peaks VALUES (?,?,?,?,?)", out)
+                "INSERT OR REPLACE INTO joker_counter_peaks "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)", out)
 
 
 # ─── reporting ────────────────────────────────────────────────────────────
@@ -935,13 +954,14 @@ def report(db):
         print("   %-26s %-16s %-12s won=%s %-11s el=%s deck=%s" % r)
 
     print("\n-- per-joker maxima, non-endless (one consistently filtered relation) --")
-    for r in q("""
+    for r in q(f"""
         WITH ranked AS (
           SELECT js.key, js.field, js.to_txt, js.to_ord, js.run_id,
                  ROW_NUMBER() OVER (PARTITION BY js.key, js.field
                                     ORDER BY js.to_ord DESC, CAST(js.to_txt AS REAL) DESC) rn
             FROM joker_scale js JOIN runs r USING (run_id)
-           WHERE js.endless = 0 AND js.is_reset = 0)
+           WHERE js.endless = 0 AND js.is_reset = 0
+             AND js.key NOT IN {DECAYING_SQL})
         SELECT key, field, to_txt, substr(run_id,1,20) FROM ranked
          WHERE rn = 1 ORDER BY to_ord DESC LIMIT 8"""):
         print("   %-20s %-13s %-10s %s" % r)
