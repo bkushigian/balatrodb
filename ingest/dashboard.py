@@ -580,6 +580,18 @@ def api_run(db, q):
                                        ORDER BY x.to_ord DESC LIMIT 1) peak
                                 FROM joker_scale j WHERE run_id=? AND is_reset=0
                                GROUP BY key, field ORDER BY o DESC""", (rid,)),
+        # Every record this run set, both contests, whatever the page is
+        # currently filtered to -- the dialog is about this run, not about
+        # the slice you arrived from.
+        "records": sorted(
+            rows(db, """SELECT rr.kind, rr.subject, rr.endless, rr.value_txt,
+                               rr.value_ord, rr.prev_txt,
+                               pr.started_ts prev_ts, pr.deck_name prev_deck
+                          FROM run_records rr
+                          LEFT JOIN runs pr ON pr.run_id = rr.prev_run
+                         WHERE rr.run_id = ?""", (rid,)),
+            key=lambda x: (RECORD_ORDER.get(x["kind"], 9), x["endless"],
+                           -(x["value_ord"] or 0))),
         "defects": rows(db, "SELECT defect, detail FROM run_defects WHERE run_id=?", (rid,)),
     }
 

@@ -427,6 +427,20 @@ tr.detail > td { padding: 0; border-top: 0; }
   border-radius: .4rem;
   box-shadow: 0 6px 0 #1b2325, 0 10px 26px rgba(0, 0, 0, .55);
 }
+/* The run header: the same stat tiles the page uses, at dialog scale --
+   it was a grey run-on sentence. */
+.runmeta { display: grid; gap: 8px; margin: 4px 0 10px;
+           grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); }
+.mt { background: var(--sunken); border-radius: .35rem; padding: 8px 11px 13px; }
+.mtv .seed { font-size: 15px; }
+.mtk { color: var(--ink-mute); font-size: 13px; letter-spacing: .07em;
+       text-transform: uppercase; }
+.mtv { font-size: 23px; font-weight: 700; margin-top: 2px; }
+.mtv.gold { color: var(--gold); } .mtv.green { color: var(--green); }
+.mtv.chips { color: var(--chips); } .mtv.money { color: var(--money); }
+.logline { font-size: 13px; }
+.dtdeck { display: inline-flex; align-items: center; gap: 8px; }
+
 #tip .row { display: flex; gap: 12px; align-items: flex-start; }
 #tip .ttl { font-size: 19px; font-weight: 700; line-height: 1.2; }
 #tip .sub { color: var(--ink-mute); font-size: 14px; letter-spacing: .05em;
@@ -437,6 +451,24 @@ tr.detail > td { padding: 0; border-top: 0; }
 #tip .beat b { color: var(--ink); font-weight: 700; }
 #tip .none { margin-top: 10px; padding-top: 9px; border-top: 2px solid #2b3638;
              color: var(--ink-mute); font-size: 15px; }
+
+/* The run dialog's record list: one card each, so they can be read rather
+   than counted. */
+.recgrid { display: grid; gap: 8px;
+           grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); }
+.rec { display: grid; grid-template-columns: auto 1fr auto; gap: 10px 12px;
+       align-items: center; background: var(--sunken); border-radius: .35rem;
+       padding: 9px 12px; }
+.recmain { min-width: 0; }
+.recttl { font-size: 17px; font-weight: 700; }
+.recsub { color: var(--ink-mute); font-size: 13px; letter-spacing: .05em;
+          text-transform: uppercase; }
+.recval { font-size: 22px; font-weight: 700; white-space: nowrap; }
+.recbeat { grid-column: 1 / -1; color: var(--ink-dim); font-size: 14px;
+           border-top: 2px solid #2b3638; padding-top: 7px; }
+.recbeat b { color: var(--ink); }
+.rec.rec-endless { box-shadow: inset 3px 0 0 var(--purple); }
+.rec.rec-endless::after { content: none; }
 
 .rec-endless { position: relative; }
 .rec-endless::after {
@@ -727,6 +759,12 @@ document.addEventListener("mouseout", e => {
 });
 document.addEventListener("scroll", () => { $("#tip").hidden = true; }, true);
 
+// One small tile of the run's metadata. `raw` skips formatting for a value
+// that is already markup, like the seed's copy button.
+const mt = (label, value, tone, raw) =>
+  `<div class="mt"><div class="mtk">${esc(label)}</div>
+    <div class="mtv ${tone || ""}">${raw ? value : value}</div></div>`;
+
 const recordsCell = r => {
   const recs = r.records || [];
   if (!recs.length) return `<span class="muted">—</span>`;
@@ -741,7 +779,7 @@ const recordsCell = r => {
   }).join("");
   const rest = recs.slice(RECORDS_SHOWN);
   const more = rest.length
-    ? `<span class="more" title="${esc(rest.map(recordText).join("\n"))}"
+    ? `<span class="more" title="${esc(rest.map(recordText).join("\n"))}&#10;Open the run to see them all."
         >+${rest.length} more</span>` : "";
   return `<span class="recs">${head}${more}</span>`;
 };
@@ -1072,8 +1110,10 @@ async function openRun(id) {
   const d = await fetch("/api/run?id=" + encodeURIComponent(id)).then(r => r.json());
   if (!d.run) return;
   const r = d.run;
-  $("#dtitle").innerHTML = `${esc(r.deck_name) || "?"} · ${esc((r.stake_key || "").replace("stake_", ""))}
-    ${resultChip(r)} ${r.went_endless ? '<span class="chip pixel-pill sm endless">ENDLESS</span>' : ""}`;
+  $("#dtitle").innerHTML =
+    `<span class="dtdeck">${sprite(r.deck_key, "b", 38)}${esc(r.deck_name) || "?"}</span>
+     <span class="dtdeck">${sprite(r.stake_key, "s", 30)}${esc(nameOf(r.stake_key))}</span>
+     ${resultChip(r)} ${r.went_endless ? '<span class="chip pixel-pill sm endless">ENDLESS</span>' : ""}`;
   const rounds = d.rounds.map(x => `
     <tr class="roundrow clickable" data-round="${x.round_seq}">
       <td class="num">${x.round_seq}</td>
@@ -1083,17 +1123,49 @@ async function openRun(id) {
       <td class="num muted">${x.deck_size ?? "—"}</td>
       <td>${x.endless ? '<span class="chip pixel-pill sm endless">ENDLESS</span>' : ""}</td></tr>
     <tr class="detail" data-for="${x.round_seq}" hidden><td colspan="8"></td></tr>`).join("");
+  // Every record the run set, laid out rather than hidden behind "+N more".
+  const recs = (d.records || []).map(rec => {
+    const [cls, name, what] = RECORD_KIND[rec.kind] || ["sc-other", x => x, ""];
+    const f = recFmt(rec);
+    const beat = rec.prev_txt === null || rec.prev_txt === undefined
+      ? `<span class="muted">first of its kind</span>`
+      : `beat <b>${f(rec.prev_txt)}</b>` +
+        (rec.prev_deck ? ` <span class="muted">· ${esc(rec.prev_deck)}</span>` : "");
+    return `<div class="rec${rec.endless ? " rec-endless" : ""}">
+      ${recordArt(rec) || ""}
+      <div class="recmain">
+        <div class="recttl">${esc(name(rec.subject))}</div>
+        <div class="recsub">${esc(what)}${rec.endless ? " · endless" : ""}</div>
+      </div>
+      <div class="recval ${cls}">${f(rec.value_txt)}</div>
+      <div class="recbeat">${beat}</div>
+    </div>`;
+  }).join("");
+
+  const cleared = d.rounds.filter(x => x.cashout_total !== null).length;
+
   const jok = d.jokers.map(j => `<tr><td>${esc(nameOf(j.key))}</td><td class="muted">${esc(j.field)}</td>
     <td class="num" style="color:var(--mult)">${fmt(j.peak)}</td></tr>`).join("");
   $("#dbody").innerHTML = `
     <h3>Run</h3>
-    <div class="muted">seed ${esc(r.seed) || "?"} · ${r.hands_played ?? "?"} hands ·
-      ended ante ${r.ended_ante ?? "?"} · $${r.final_dollars ?? "?"} ·
-      ${d.segments.length} session${d.segments.length === 1 ? "" : "s"} ·
-      log <code>${esc(r.log_file)}</code></div>
+    <div class="runmeta">
+      ${mt("Ante", fmt(r.furthest_ante ?? r.ended_ante), "gold")}
+      ${mt("Rounds won", fmt(cleared), "green")}
+      ${mt("Hands", fmt(r.hands_played), "")}
+      ${mt("Best hand", fmtScore(r.best_hand_txt), "chips")}
+      ${mt("Final", r.final_dollars === null ? "—" : "$" + fmt(r.final_dollars), "money")}
+      ${mt("Deck size", fmt(r.deck_size), "")}
+      ${mt("Sessions", fmt(d.segments.length), "")}
+      ${mt("Seed", seedCell(r), "", true)}
+    </div>
+    <div class="muted logline">${ago(r.started_ts)} · log
+      <code>${esc(r.log_file)}</code></div>
     ${d.defects.length ? `<div class="warn" style="margin-top:8px">⚠ capture defects:
       ${d.defects.map(x => esc(x.defect)).join(", ")} — figures from this run may not be
       comparable with newer ones.</div>` : ""}
+    <h3>Records set</h3>
+    ${recs ? `<div class="recgrid">${recs}</div>`
+           : `<div class="empty">This run set no records.</div>`}
     <h3>Rounds</h3>
     <div class="scroll"><table><thead><tr><th>#</th><th>Ante</th><th>Blind</th>
       <th class="num">Needed</th><th class="num">Scored</th><th class="num">Cash</th>
