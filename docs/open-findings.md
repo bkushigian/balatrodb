@@ -87,14 +87,18 @@ items and total. Any `SUM(total)` is inflated. The player is paid once.
 
 ## 2. Verify in-game before trusting
 
-**The consumable fix is unverified live.** `use_card` was gated on a truthy
-return that never comes, so 0.4.0 logged **zero** `consumable.use`,
-`pack.open`, `pack.pick` and `voucher.redeem` where 0.3.0 logged 76/31/2. It
-now gates on `G.CONTROLLER.locks.use`. One round that uses a tarot, opens a
-pack and takes a joker out of a Buffoon pack would confirm all four paths.
+~~The consumable fix is unverified live.~~ **Verified in play**, all four
+paths, in `1790147343-3SK973V5-e297.jsonl`:
 
-**`pack.pick` has never appeared in any log**, including builds where
-`consumable.use` was firing. Worth the same test.
+    n=20  pack.open   set=Booster  p_buffoon_normal_1
+    n=23  pack.pick   set=Joker    j_ancient
+
+plus `consumable.use` and `voucher.redeem` across four earlier runs. The
+first gate (`G.CONTROLLER.locks.use`) had restored three of the four and
+left `pack.open` at zero, because a Booster clears that lock synchronously
+at `button_callbacks.lua:2255` while every other path clears it from a
+queued event. It now gates on the card leaving its area, which holds for
+all four. `pack.pick` had never appeared in any log before this.
 
 **The save/resume latch fix is unverified live.** `state.begin` was wiping
 `won`/`endless` on the resume path and persisting the blanks. Covered by
