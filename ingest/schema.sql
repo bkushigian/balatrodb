@@ -303,15 +303,18 @@ CREATE INDEX IF NOT EXISTS cards_key ON cards(key, role, endless);
 --
 -- Derived over the whole corpus in run order, so it is rebuilt wholesale
 -- rather than per run: adding an OLD log would shift what came after it.
--- Computed over all play, endless included, since a stored fact cannot be
--- sliced by a filter chosen later.
+-- Endless and non-endless records are separate contests, so the two are
+-- derived independently and stored side by side: a run can hold the
+-- non-endless best for a hand and a different, higher endless best for the
+-- same hand, and both are true. Nothing here is computed at query time.
 CREATE TABLE IF NOT EXISTS run_records (
   run_id    TEXT NOT NULL,
   kind      TEXT NOT NULL,   -- joker | hand_score | hand_level | hand_played
   subject   TEXT NOT NULL,   -- joker key, or poker hand
+  endless   INTEGER NOT NULL,
   value_txt TEXT,
   value_ord REAL,
-  PRIMARY KEY (run_id, kind, subject)
+  PRIMARY KEY (run_id, kind, subject, endless)
 );
 CREATE INDEX IF NOT EXISTS run_records_run ON run_records(run_id);
 

@@ -676,6 +676,11 @@ class Ingester:
     def derive_records(self):
         """Work out what each run held a record for at the time it was played.
 
+        Endless and non-endless are separate contests and are derived
+        independently -- continuing past the win ante changes the scale of
+        everything, so a value reached there is not competing with one
+        reached before it. A run can hold both for the same subject.
+
         Cross-run and order-dependent, so it is recomputed wholesale rather
         than per run: inserting an older log changes what every later run was
         first to achieve.
@@ -691,40 +696,41 @@ class Ingester:
 
         sources = {
             "joker": """
-                SELECT run_id, key subject, to_txt v, to_ord o FROM joker_scale js
-                 WHERE is_reset = 0 AND to_ord IS NOT NULL
+                SELECT run_id, key subject, to_txt v, to_ord o FROM joker_scale
+                 WHERE is_reset = 0 AND to_ord IS NOT NULL AND endless = ?
                    AND key NOT IN ('j_turtle_bean','j_popcorn','j_ice_cream','j_ramen')""",
             "hand_score": """
                 SELECT run_id, hand subject, score_txt v, score_ord o FROM hands
-                 WHERE hand IS NOT NULL AND score_ord IS NOT NULL""",
+                 WHERE hand IS NOT NULL AND score_ord IS NOT NULL AND endless = ?""",
             "hand_level": """
                 SELECT run_id, hand subject, lvl_to v, lvl_to o FROM hand_levels
-                 WHERE hand IS NOT NULL AND lvl_to IS NOT NULL""",
+                 WHERE hand IS NOT NULL AND lvl_to IS NOT NULL AND endless = ?""",
             "hand_played": """
                 SELECT run_id, hand subject, COUNT(*) v, COUNT(*) o FROM hands
-                 WHERE hand IS NOT NULL GROUP BY run_id, hand""",
+                 WHERE hand IS NOT NULL AND endless = ? GROUP BY run_id, hand""",
         }
 
         out = []
-        for kind, sql in sources.items():
-            # Best value per (run, subject) first, then walk the runs in the
-            # order they were played.
-            best = {}
-            for run_id, subject, v, o in self.db.execute(sql):
-                if run_id not in order or o is None:
-                    continue
-                cur = best.get((run_id, subject))
-                if cur is None or o > cur[1]:
-                    best[(run_id, subject)] = (v, o)
-            high = {}
-            for (run_id, subject), (v, o) in sorted(
-                    best.items(), key=lambda kv: order[kv[0][0]]):
-                if subject not in high or o > high[subject]:
-                    high[subject] = o
-                    out.append((run_id, kind, subject, str(v), o))
+        for el in (0, 1):
+            for kind, sql in sources.items():
+                # Best value per (run, subject) first, then walk the runs in
+                # the order they were played.
+                best = {}
+                for run_id, subject, v, o in self.db.execute(sql, (el,)):
+                    if run_id not in order or o is None:
+                        continue
+                    cur = best.get((run_id, subject))
+                    if cur is None or o > cur[1]:
+                        best[(run_id, subject)] = (v, o)
+                high = {}
+                for (run_id, subject), (v, o) in sorted(
+                        best.items(), key=lambda kv: order[kv[0][0]]):
+                    if subject not in high or o > high[subject]:
+                        high[subject] = o
+                        out.append((run_id, kind, subject, el, str(v), o))
         if out:
             self.db.executemany(
-                "INSERT OR REPLACE INTO run_records VALUES (?,?,?,?,?)", out)
+                "INSERT OR REPLACE INTO run_records VALUES (?,?,?,?,?,?)", out)
 
     def derive_counters(self):
         """Supernova, Throwback and Fortune Teller read GAME counters, not

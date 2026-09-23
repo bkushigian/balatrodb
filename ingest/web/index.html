@@ -415,6 +415,13 @@ tr.detail > td { padding: 0; border-top: 0; }
 .recscell { white-space: nowrap; }
 .more { color: var(--ink-mute); font-size: 13px; cursor: help;
         align-self: center; }
+/* An endless record sits under a purple bar -- the same colour the ENDLESS
+   chip uses, so the two read as the same idea. */
+.rec-endless { position: relative; }
+.rec-endless::after {
+  content: ""; position: absolute; left: 2px; right: 2px; bottom: -3px;
+  height: 3px; background: var(--purple);
+}
 .sc-other { color: var(--ink-dim); }
 .bjn { font-size: 13px; color: var(--ink-dim); max-width: 74px; text-align: center;
        line-height: 1.15; margin-top: 2px; overflow-wrap: anywhere; }
@@ -440,6 +447,13 @@ tr.detail > td { padding: 0; border-top: 0; }
       <button class="seg pixel-pill" id="noplasma" aria-pressed="false"
         title="Plasma balances chips and mult before scoring, so its numbers are not comparable with other decks">No Plasma</button></span>
     <span><label>Stake</label><span class="pick" id="stake"></span></span>
+    <span><label>Seed</label>
+      <span class="seggroup" id="seeded" role="group" aria-label="Seeded runs">
+        <button class="seg pixel-pill" data-v="0" aria-pressed="true"
+          title="Runs whose seed the game chose">Random</button>
+        <button class="seg pixel-pill" data-v="1" aria-pressed="true"
+          title="Runs you entered a seed for -- practice, not records">Seeded</button>
+      </span></span>
     <span><label>Include</label>
       <span class="seggroup" id="phase" role="group" aria-label="Which phases to include">
         <button class="seg pixel-pill" data-v="0" aria-pressed="true"
@@ -505,7 +519,8 @@ const esc = v => String(v ?? "").replace(/[&<>"']/g,
 // both off) means no phase filter at all -- which is what "all runs" should
 // mean, and is not expressible with mutually exclusive buttons.
 const phase = { "0": true, "1": true };
-const state = { deck: "", stake: "", endless: "", noplasma: "", metric: "" };
+const state = { deck: "", stake: "", endless: "", noplasma: "", metric: "",
+                seeded: "" };
 
 function syncPhase() {
   const on = Object.keys(phase).filter(k => phase[k]);
@@ -633,7 +648,8 @@ const recordArt = rec => rec.kind === "joker"
   : sprite((SPR && SPR.hand_planets && SPR.hand_planets[rec.subject]) || "", "j", 34);
 const recordText = rec => {
   const [, name, what] = RECORD_KIND[rec.kind] || ["", x => x, ""];
-  return `${name(rec.subject)} ${what} ${fmt(rec.value_txt)}`;
+  return `${name(rec.subject)} ${what} ${fmt(rec.value_txt)}`
+    + (rec.endless ? " (endless)" : "");
 };
 const RECORDS_SHOWN = 2;
 
@@ -642,7 +658,10 @@ const recordsCell = r => {
   if (!recs.length) return `<span class="muted">—</span>`;
   const head = recs.slice(0, RECORDS_SHOWN).map(rec => {
     const [cls] = RECORD_KIND[rec.kind] || ["sc-other"];
-    return `<span class="bj" title="${esc(recordText(rec))}">` +
+    // Endless records are a separate contest, so they are marked -- with no
+    // phase filter on, a row can carry one of each for the same subject.
+    return `<span class="bj${rec.endless ? " rec-endless" : ""}"
+        title="${esc(recordText(rec))}">` +
       (recordArt(rec) || `<span class="jv">${esc(rec.subject)}</span>`) +
       `<span class="sc ${cls}">${fmt(rec.value_txt)}</span></span>`;
   }).join("");
@@ -1201,6 +1220,21 @@ function buildMetricPickers() {
 
 Promise.all([fetch("/api/metrics").then(r => r.json()), SPR_READY])
   .then(([m]) => { METRICS = m; buildMetricPickers(); });
+
+// Two independent toggles, like the phase filter: both on (or both off)
+// means no filter, which is what "all runs" should mean and is not
+// expressible with mutually exclusive buttons.
+const seeded = { "0": true, "1": true };
+function syncSeeded() {
+  const on = Object.keys(seeded).filter(k => seeded[k]);
+  state.seeded = on.length === 1 ? on[0] : "";
+}
+$("#seeded").onclick = e => {
+  const b = e.target.closest("button.seg"); if (!b) return;
+  seeded[b.dataset.v] = !seeded[b.dataset.v];
+  b.setAttribute("aria-pressed", seeded[b.dataset.v]);
+  syncSeeded(); refresh();
+};
 
 $("#noplasma").onclick = e => {
   const on = e.currentTarget.getAttribute("aria-pressed") !== "true";

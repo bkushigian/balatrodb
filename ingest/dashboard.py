@@ -136,8 +136,12 @@ def where(q, prefix="r.", endless_col=None):
     if q.get("endless") in ("0", "1") and endless_col:
         clauses.append(f"{endless_col} = ?")
         params.append(int(q["endless"]))
-    if q.get("seeded") == "0":
-        clauses.append(f"{prefix}seeded = 0")
+    # Seeded runs are practice, not records -- you chose the seed. Kept as
+    # its own filter rather than folded into the deck/stake ones, since
+    # excluding them is a different question from picking what to look at.
+    if q.get("seeded") in ("0", "1"):
+        clauses.append(f"{prefix}seeded = ?")
+        params.append(int(q["seeded"]))
     # Plasma balances chips and mult before scoring, so its numbers are not
     # comparable with any other deck's -- one Plasma run owns most of the
     # score records. Excluding it is a different question from picking a
@@ -338,7 +342,7 @@ def api_runs(db, q):
                  rounds_won,
                (SELECT COUNT(*) FROM run_defects d WHERE d.run_id = r.run_id) defects
           FROM runs r WHERE 1=1{w} ORDER BY {sort} LIMIT 300""", sub + p + tail)
-    attach_records(db, out)
+    attach_records(db, out, q)
     return out
 
 
@@ -348,21 +352,33 @@ def api_runs(db, q):
 RECORD_ORDER = {"joker": 0, "hand_score": 1, "hand_level": 2, "hand_played": 3}
 
 
-def attach_records(db, runs):
-    """Give each run what it was the first to achieve, at the time it ran."""
+def attach_records(db, runs, q=None):
+    """Give each run what it was the first to achieve, at the time it ran.
+
+    Endless and non-endless records are separate contests, so the phase
+    toggle picks between them; with no phase filter both are returned, and a
+    run may hold one of each for the same subject.
+    """
     for r in runs:
         r["records"] = []
     by_id = {r["run_id"]: r for r in runs}
     if not by_id:
         return
     marks = ",".join("?" * len(by_id))
+    params = list(by_id)
+    ew = ""
+    if (q or {}).get("endless") in ("0", "1"):
+        ew = " AND endless = ?"
+        params.append(int(q["endless"]))
     for rec in rows(db, f"""
-            SELECT run_id, kind, subject, value_txt, value_ord
-              FROM run_records WHERE run_id IN ({marks})""", list(by_id)):
+            SELECT run_id, kind, subject, endless, value_txt, value_ord
+              FROM run_records WHERE run_id IN ({marks}){ew}""", params):
         by_id[rec["run_id"]]["records"].append(rec)
     for r in runs:
-        r["records"].sort(
-            key=lambda x: (RECORD_ORDER.get(x["kind"], 9), -(x["value_ord"] or 0)))
+        # Endless records after non-endless ones of the same kind: the
+        # ordering keys are not comparable across the two contests.
+        r["records"].sort(key=lambda x: (RECORD_ORDER.get(x["kind"], 9),
+                                         x["endless"], -(x["value_ord"] or 0)))
 
 
 def api_all_jokers(db, q):
