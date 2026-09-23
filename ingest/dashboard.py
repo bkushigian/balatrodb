@@ -491,8 +491,14 @@ def api_derived(db, q):
     Both are derived in ingest (joker_counter_peaks); nothing here counts.
     """
     w, p = where(q, endless_col="cp.endless")
+    # The toggle picks between a counter joker's two records. It applies only
+    # here: a scaling joker has no such distinction and is never filtered out
+    # by it.
+    want = q.get("held")
     out = []
     for col, held in (("contributed", True), ("ambient", False)):
+        if want in ("0", "1") and bool(int(want)) is not held:
+            continue
         for r in rows(db, f"""
                 WITH ranked AS (
                   SELECT cp.metric, cp.{col} value, r.run_id, r.deck_name,

@@ -413,8 +413,10 @@ tr.detail > td { padding: 0; border-top: 0; }
 .sc-level { color: var(--green); }
 /* The hand says whether a counter joker's record was set while anyone
    actually held it. Cut out of Four Fingers by the extractor. */
-.hand { height: 30px; width: auto; image-rendering: pixelated;
-        margin-left: 8px; flex: none; }
+/* The seal sits on the joker it describes, like a sticker on the card. */
+.jart { position: relative; display: inline-flex; flex: none; }
+.hand { position: absolute; right: -7px; bottom: -5px;
+        width: 30px; height: 30px; image-rendering: pixelated; }
 .recs { display: flex; align-items: flex-start; gap: 9px; }
 .recscell { white-space: nowrap; }
 .more { color: var(--ink-mute); font-size: 13px; cursor: help;
@@ -504,6 +506,13 @@ tr.detail > td { padding: 0; border-top: 0; }
       <button class="seg pixel-pill" id="noplasma" aria-pressed="false"
         title="Plasma balances chips and mult before scoring, so its numbers are not comparable with other decks">No Plasma</button></span>
     <span><label>Stake</label><span class="pick" id="stake"></span></span>
+    <span><label>Joker records</label>
+      <span class="seggroup" id="heldg" role="group" aria-label="Counter joker records">
+        <button class="seg pixel-pill" data-v="1" aria-pressed="true"
+          title="Counter jokers whose record was set while someone held them">Held</button>
+        <button class="seg pixel-pill" data-v="0" aria-pressed="true"
+          title="Counters that reached a high with nobody holding the joker">Not held</button>
+      </span></span>
     <span><label>Seed</label>
       <span class="seggroup" id="seeded" role="group" aria-label="Seeded runs">
         <button class="seg pixel-pill" data-v="0" aria-pressed="true"
@@ -578,7 +587,7 @@ const esc = v => String(v ?? "").replace(/[&<>"']/g,
 // mean, and is not expressible with mutually exclusive buttons.
 const phase = { "0": true, "1": true };
 const state = { deck: "", stake: "", endless: "", noplasma: "", metric: "",
-                seeded: "" };
+                seeded: "", held: "" };
 
 function syncPhase() {
   const on = Object.keys(phase).filter(k => phase[k]);
@@ -979,16 +988,17 @@ const openRunJS = true;
 // with nobody holding it.
 const handIcon = r => r.held === undefined || r.held === null ? "" :
   `<img class="hand" src="assets/hand_${r.held ? "held" : "unheld"}.png"
-     alt="${r.held ? "held" : "not held"}">`;
+     alt="${r.held ? "set while held" : "set with nobody holding it"}">`;
 
 const jokerTip = r => !r.counter ? "" :
   ` title="${esc(r.counter + (r.held
       ? " · while the joker was in hand"
       : " · the counter reached this, but nobody held the joker for it"))}"`;
 
-const jokerCell = r => `<span class="namecell"${jokerTip(r)}>${sprite(r.key, "j", 56)}
+const jokerCell = r => `<span class="namecell"${jokerTip(r)}
+  ><span class="jart">${sprite(r.key, "j", 56)}${handIcon(r)}</span>
   <span>${esc(nameOf(r.key))}${r.what
-    ? `<br><span class="sub2">${esc(r.what)}</span>` : ""}</span>${handIcon(r)}</span>`;
+    ? `<br><span class="sub2">${esc(r.what)}</span>` : ""}</span></span>`;
 
 defineTable("jokers", [
   { label: "Joker", cell: jokerCell, sort: r => nameOf(r.key) },
@@ -1405,6 +1415,20 @@ function syncSeeded() {
   const on = Object.keys(seeded).filter(k => seeded[k]);
   state.seeded = on.length === 1 ? on[0] : "";
 }
+// Which of a counter joker's two records to include. Both on (or both
+// off) means no filter, like the phase and seed pairs.
+const heldSel = { "1": true, "0": true };
+function syncHeld() {
+  const on = Object.keys(heldSel).filter(k => heldSel[k]);
+  state.held = on.length === 1 ? on[0] : "";
+}
+$("#heldg").onclick = e => {
+  const b = e.target.closest("button.seg"); if (!b) return;
+  heldSel[b.dataset.v] = !heldSel[b.dataset.v];
+  b.setAttribute("aria-pressed", heldSel[b.dataset.v]);
+  syncHeld(); refresh();
+};
+
 $("#seeded").onclick = e => {
   const b = e.target.closest("button.seg"); if (!b) return;
   seeded[b.dataset.v] = !seeded[b.dataset.v];

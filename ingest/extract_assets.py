@@ -21,6 +21,11 @@ import re
 import struct
 import zipfile
 
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "web", "assets")
 
@@ -131,13 +136,14 @@ def parse_hand_planets(src: str) -> dict:
 
 
 def make_hand_icons(sprites: dict) -> list:
-    """Cut the hand out of Four Fingers and make a held / not-held pair.
+    """Cut the hand out of Four Fingers and make a held / not-held seal.
 
     Counter jokers hold two records -- the counter while the joker was
-    actually in hand, and the counter regardless -- and a small hand says
-    which far better than the words "IF HELD". The game has no hand icon, but
-    Four Fingers is a hand, so it is borrowed: the art is greyscale where the
-    card behind it is a saturated purple, which separates them cleanly.
+    actually in hand, and the counter regardless -- and a small seal over
+    the joker says which far better than the words "IF HELD". The game has
+    no hand icon, but Four Fingers is one, so it is borrowed: the art is
+    greyscale where the card behind it is a saturated purple, which
+    separates them cleanly.
 
     Needs Pillow. Skipped rather than fatal if it is missing, since every
     other asset is useful without it.
@@ -166,29 +172,75 @@ def make_hand_icons(sprites: dict) -> list:
             r, g, b, a = src[x, y]
             if a and max(r, g, b) - min(r, g, b) < 45:
                 dst[x, y] = (r, g, b, a)
-    hand = cut.crop(cut.getbbox())
+    hand = _largest_blob(cut)
 
+    size = 96
     written = []
-    hand.save(os.path.join(OUT, "hand_held.png"))
-    written.append("hand_held.png")
+    for name, ring, fill, slash in (
+            ("hand_held",   (234, 192, 88, 255), (32, 40, 42, 235), False),
+            ("hand_unheld", (254, 95, 85, 255),  (32, 40, 42, 235), True)):
+        seal = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        d = ImageDraw.Draw(seal)
+        d.ellipse((1, 1, size - 2, size - 2), fill=(18, 23, 26, 255))
+        d.ellipse((4, 4, size - 5, size - 5), fill=fill, outline=ring, width=7)
 
-    # Not held: the same hand, dimmed, under a hard red slash.
-    dim = Image.new("RGBA", hand.size, (0, 0, 0, 0))
-    hp, dp = hand.load(), dim.load()
-    for y in range(hand.height):
-        for x in range(hand.width):
-            r, g, b, a = hp[x, y]
-            if a:
-                v = (r + g + b) // 3
-                dp[x, y] = (v, v, v, int(a * 0.55))
-    d = ImageDraw.Draw(dim)
-    w, h = hand.size
-    d.line([(4, h - 5), (w - 5, 4)], fill=(26, 20, 20, 255), width=13)
-    d.line([(4, h - 5), (w - 5, 4)], fill=(254, 95, 85, 255), width=8)
-    dim.save(os.path.join(OUT, "hand_unheld.png"))
-    written.append("hand_unheld.png")
-    print(f"  hand icons      {hand.size[0]}x{hand.size[1]}  held + unheld")
+        art = hand.copy()
+        art.thumbnail((size - 30, size - 30), Image.NEAREST)
+        if slash:
+            grey = Image.new("RGBA", art.size, (0, 0, 0, 0))
+            ap, gp = art.load(), grey.load()
+            for y in range(art.height):
+                for x in range(art.width):
+                    r, g, b, a = ap[x, y]
+                    if a:
+                        v = (r + g + b) // 3
+                        gp[x, y] = (v, v, v, int(a * 0.65))
+            art = grey
+        seal.alpha_composite(art, ((size - art.width) // 2,
+                                   (size - art.height) // 2))
+        if slash:
+            # The bar of a prohibition sign, inside the ring.
+            d2 = ImageDraw.Draw(seal)
+            d2.line([(22, size - 23), (size - 23, 22)],
+                    fill=(18, 23, 26, 255), width=20)
+            d2.line([(22, size - 23), (size - 23, 22)], fill=ring, width=13)
+        seal.save(os.path.join(OUT, name + ".png"))
+        written.append(name + ".png")
+    print(f"  hand seals      {size}x{size}  held + unheld")
     return written
+
+
+def _largest_blob(img):
+    """The biggest connected run of opaque pixels, cropped.
+
+    The colour cut also catches a few stray greyscale specks in the card's
+    background -- two of them showed as dots beside the hand.
+    """
+    w, h = img.size
+    px = img.load()
+    seen = [[False] * w for _ in range(h)]
+    best = []
+    for sy in range(h):
+        for sx in range(w):
+            if seen[sy][sx] or px[sx, sy][3] == 0:
+                continue
+            blob, stack = [], [(sx, sy)]
+            seen[sy][sx] = True
+            while stack:
+                x, y = stack.pop()
+                blob.append((x, y))
+                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    nx, ny = x + dx, y + dy
+                    if 0 <= nx < w and 0 <= ny < h and not seen[ny][nx]                             and px[nx, ny][3]:
+                        seen[ny][nx] = True
+                        stack.append((nx, ny))
+            if len(blob) > len(best):
+                best = blob
+    out = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    op = out.load()
+    for x, y in best:
+        op[x, y] = px[x, y]
+    return out.crop(out.getbbox())
 
 
 def atlas_for(key: str) -> tuple[str, int, int] | None:
