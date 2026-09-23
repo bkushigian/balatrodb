@@ -103,6 +103,19 @@ confirm it against the real save.
 
 ---
 
+### Live testing is confounded by buffering
+`mod/BalatroDB/src/log.lua:30`
+
+Flushes happen at 16 KB, 128 events, or after `hand.play` / `round.end` /
+`snapshot` / quit. Snapshots are skipped during booster states, so a shop
+visit with a pack open can sit entirely in the buffer with nothing on disk
+for minutes. That is correct for play — flushes are deliberately rare — but
+it makes "did that event fire?" unanswerable without playing on until
+something forces a write.
+
+Worth a debug flush: a key, a console command, or a flush on `blind.select`.
+Cheap, and it makes every future live test faster.
+
 ## 3. Data that exists and is thrown away
 
 All present in the logs today; each needs only an ingest branch.
