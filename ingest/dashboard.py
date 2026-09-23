@@ -371,7 +371,7 @@ def attach_records(db, runs, q=None):
         ew = " AND rr.endless = ?"
         params.append(int(q["endless"]))
     for rec in rows(db, f"""
-            SELECT rr.run_id, rr.kind, rr.subject, rr.endless,
+            SELECT rr.run_id, rr.kind, rr.subject, rr.endless, rr.field,
                    rr.value_txt, rr.value_ord, rr.prev_txt,
                    pr.started_ts prev_ts, pr.deck_name prev_deck
               FROM run_records rr
@@ -616,8 +616,8 @@ def api_run(db, q):
         # currently filtered to -- the dialog is about this run, not about
         # the slice you arrived from.
         "records": sorted(
-            rows(db, """SELECT rr.kind, rr.subject, rr.endless, rr.value_txt,
-                               rr.value_ord, rr.prev_txt,
+            rows(db, """SELECT rr.kind, rr.subject, rr.endless, rr.field,
+                               rr.value_txt, rr.value_ord, rr.prev_txt,
                                pr.started_ts prev_ts, pr.deck_name prev_deck
                           FROM run_records rr
                           LEFT JOIN runs pr ON pr.run_id = rr.prev_run

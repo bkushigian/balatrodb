@@ -694,19 +694,22 @@ class Ingester:
         order = {r[0]: i for i, r in enumerate(self.db.execute(
             "SELECT run_id FROM runs ORDER BY started_ts, run_id"))}
 
+        # Each source yields (run, subject, value, ord, field). A joker's
+        # field comes from the scale row -- it is the difference between
+        # +3,200 Chips and X1.5 Mult, which must not render alike.
         sources = {
             "joker": """
-                SELECT run_id, key subject, to_txt v, to_ord o FROM joker_scale
+                SELECT run_id, key subject, to_txt v, to_ord o, field FROM joker_scale
                  WHERE is_reset = 0 AND to_ord IS NOT NULL AND endless = ?
                    AND key NOT IN ('j_turtle_bean','j_popcorn','j_ice_cream','j_ramen')""",
             "hand_score": """
-                SELECT run_id, hand subject, score_txt v, score_ord o FROM hands
+                SELECT run_id, hand subject, score_txt v, score_ord o, 'score' FROM hands
                  WHERE hand IS NOT NULL AND score_ord IS NOT NULL AND endless = ?""",
             "hand_level": """
-                SELECT run_id, hand subject, lvl_to v, lvl_to o FROM hand_levels
+                SELECT run_id, hand subject, lvl_to v, lvl_to o, 'level' FROM hand_levels
                  WHERE hand IS NOT NULL AND lvl_to IS NOT NULL AND endless = ?""",
             "hand_played": """
-                SELECT run_id, hand subject, COUNT(*) v, COUNT(*) o FROM hands
+                SELECT run_id, hand subject, COUNT(*) v, COUNT(*) o, 'played' FROM hands
                  WHERE hand IS NOT NULL AND endless = ? GROUP BY run_id, hand""",
         }
 
@@ -716,14 +719,14 @@ class Ingester:
                 # Best value per (run, subject) first, then walk the runs in
                 # the order they were played.
                 best = {}
-                for run_id, subject, v, o in self.db.execute(sql, (el,)):
+                for run_id, subject, v, o, field in self.db.execute(sql, (el,)):
                     if run_id not in order or o is None:
                         continue
                     cur = best.get((run_id, subject))
                     if cur is None or o > cur[1]:
-                        best[(run_id, subject)] = (v, o)
+                        best[(run_id, subject)] = (v, o, field)
                 high = {}
-                for (run_id, subject), (v, o) in sorted(
+                for (run_id, subject), (v, o, field) in sorted(
                         best.items(), key=lambda kv: order[kv[0][0]]):
                     held = high.get(subject)
                     if held is None or o > held[0]:
@@ -732,12 +735,12 @@ class Ingester:
                         # without redoing this whole walk.
                         prev_txt, prev_run = (None, None) if held is None                             else (held[1], held[2])
                         high[subject] = (o, str(v), run_id)
-                        out.append((run_id, kind, subject, el, str(v), o,
+                        out.append((run_id, kind, subject, el, field, str(v), o,
                                     prev_txt, prev_run))
         if out:
             self.db.executemany(
                 "INSERT OR REPLACE INTO run_records VALUES (" +
-                ",".join("?" * 8) + ")", out)
+                ",".join("?" * 9) + ")", out)
 
     # Jokers whose value is a function of game state rather than of anything
     # they store: the counter they read, and the key that reads it.

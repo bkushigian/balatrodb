@@ -429,6 +429,10 @@ CREATE TABLE IF NOT EXISTS run_records (
   kind      TEXT NOT NULL,   -- joker | hand_score | hand_level | hand_played
   subject   TEXT NOT NULL,   -- joker key, or poker hand
   endless   INTEGER NOT NULL,
+  -- What the value IS: chips, mult or x_mult for a joker, and for a hand
+  -- whichever of score/level/played it is. Without it a record cannot be
+  -- shown in its own unit and every one rendered as Mult, including chips.
+  field     TEXT,
   value_txt TEXT,
   value_ord REAL,
   -- What this beat: the value it displaced and the run that had held it.

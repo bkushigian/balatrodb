@@ -408,6 +408,11 @@ tr.detail > td { padding: 0; border-top: 0; }
 .sc { font-size: 15px; font-weight: 700; margin-top: 1px; white-space: nowrap; }
 .sc-chips { color: var(--chips); }
 .sc-mult  { color: var(--mult); }
+/* Balatro writes an X-mult as white on a red block, not as red text, which
+   is what makes it read as a multiplier at a glance rather than an
+   addition. {X:mult,C:white} in the game's own markup. */
+.sc-xmult { background: var(--mult); color: #fff; border-radius: .3rem;
+            padding: 1px 8px 3px; text-shadow: none; }
 .sc-money { color: var(--money); }
 .sc-hand  { color: var(--ink-dim); }
 .sc-level { color: var(--green); }
@@ -690,7 +695,7 @@ const handRank = hand => {
 const SCALE = {
   chips:       ["sc-chips", "+", ""],
   mult:        ["sc-mult",  "+", ""],
-  x_mult:      ["sc-mult",  "X", ""],
+  x_mult:      ["sc-xmult", "X", ""],
   h_size:      ["sc-hand",  "+", " hand"],
   extra_value: ["sc-money", "+$", ""],
 };
@@ -716,6 +721,12 @@ const RECORD_KIND = {
   hand_played: ["sc-money", h => h,         "played",     fmt],
 };
 const recFmt = rec => (RECORD_KIND[rec.kind] || [, , , fmt])[3];
+// A joker record is whatever that joker scales -- chips, mult or X-mult --
+// so it is coloured by its field rather than by being a joker.
+const FIELD_CLS = { chips: "sc-chips", mult: "sc-mult", x_mult: "sc-xmult" };
+const recCls = rec => FIELD_CLS[rec.field]
+  || (RECORD_KIND[rec.kind] || ["sc-other"])[0];
+const recPre = rec => rec.field === "x_mult" ? "X" : "";
 const recordArt = rec => rec.kind === "joker"
   ? sprite(rec.subject, "j", 34)
   : sprite((SPR && SPR.hand_planets && SPR.hand_planets[rec.subject]) || "", "j", 34);
@@ -733,8 +744,8 @@ const RECORDS_SHOWN = 2;
 let TIPS = [];
 
 function tipHTML(rec) {
-  const [cls, name, what] = RECORD_KIND[rec.kind] || ["sc-other", x => x, ""];
-  const f = recFmt(rec);
+  const [, name, what] = RECORD_KIND[rec.kind] || ["sc-other", x => x, ""];
+  const cls = recCls(rec), f = recFmt(rec);
   const beat = rec.prev_txt === null || rec.prev_txt === undefined
     ? `<div class="none">First of its kind — nothing to beat.</div>`
     : `<div class="beat">Beat <b>${f(rec.prev_txt)}</b>` +
@@ -743,7 +754,7 @@ function tipHTML(rec) {
   return `<div class="row">${recordArt(rec) || ""}<div>
       <div class="ttl">${esc(name(rec.subject))}</div>
       <div class="sub">${esc(what)}${rec.endless ? " · endless" : ""}</div>
-      <div class="big ${cls}">${f(rec.value_txt)}</div>
+      <div class="big ${cls}">${recPre(rec)}${f(rec.value_txt)}</div>
     </div></div>${beat}`;
 }
 
@@ -782,13 +793,13 @@ const recordsCell = r => {
   const recs = r.records || [];
   if (!recs.length) return `<span class="muted">—</span>`;
   const head = recs.slice(0, RECORDS_SHOWN).map(rec => {
-    const [cls] = RECORD_KIND[rec.kind] || ["sc-other"];
+    const cls = recCls(rec);
     // Endless records are a separate contest, so they are marked -- with no
     // phase filter on, a row can carry one of each for the same subject.
     const i = TIPS.push(rec) - 1;
     return `<span class="bj${rec.endless ? " rec-endless" : ""}" data-tip="${i}">` +
       (recordArt(rec) || `<span class="jv">${esc(rec.subject)}</span>`) +
-      `<span class="sc ${cls}">${recFmt(rec)(rec.value_txt)}</span></span>`;
+      `<span class="sc ${cls}">${recPre(rec)}${recFmt(rec)(rec.value_txt)}</span></span>`;
   }).join("");
   const rest = recs.slice(RECORDS_SHOWN);
   const more = rest.length
@@ -1007,7 +1018,7 @@ defineTable("jokers", [
   // the number a player watches it add, not "189 dollars".
   { label: "Peak", num: true,
     cell: r => `<span class="sc ${
-      { chips: "sc-chips", mult: "sc-mult", x_mult: "sc-mult" }[r.field] || "sc-mult"
+      { chips: "sc-chips", mult: "sc-mult", x_mult: "sc-xmult" }[r.field] || "sc-mult"
     }">${r.field === "x_mult" ? "X" : "+"}${fmt(r.value)}</span>`,
     sort: r => r.ord },
   { label: "Deck", cell: deckCell, sort: r => r.deck_name },
@@ -1164,8 +1175,8 @@ async function openRun(id) {
     <tr class="detail" data-for="${x.round_seq}" hidden><td colspan="8"></td></tr>`).join("");
   // Every record the run set, laid out rather than hidden behind "+N more".
   const recs = (d.records || []).map(rec => {
-    const [cls, name, what] = RECORD_KIND[rec.kind] || ["sc-other", x => x, ""];
-    const f = recFmt(rec);
+    const [, name, what] = RECORD_KIND[rec.kind] || ["sc-other", x => x, ""];
+    const cls = recCls(rec), f = recFmt(rec);
     const beat = rec.prev_txt === null || rec.prev_txt === undefined
       ? `<span class="muted">first of its kind</span>`
       : `beat <b>${f(rec.prev_txt)}</b>` +
@@ -1176,7 +1187,7 @@ async function openRun(id) {
         <div class="recttl">${esc(name(rec.subject))}</div>
         <div class="recsub">${esc(what)}${rec.endless ? " · endless" : ""}</div>
       </div>
-      <div class="recval ${cls}">${f(rec.value_txt)}</div>
+      <div class="recval ${cls}">${recPre(rec)}${f(rec.value_txt)}</div>
       <div class="recbeat">${beat}</div>
     </div>`;
   }).join("");
