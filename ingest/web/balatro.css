@@ -250,6 +250,20 @@ button.seg[aria-pressed="true"] {
    heights. */
 tbody td { height: 82px; }
 .scroll { overflow-x: auto; }
+/* A table of four columns stretched across 1560px puts lanes of empty
+   space between them and makes a joker's name look unrelated to its score.
+   Its columns hug their contents instead. */
+.panel.fit table { width: auto; }
+
+/* A narrow panel beside a wide one: the narrow one asks for exactly what
+   its columns need, the wide one takes what is left. Below the breakpoint
+   they stack, and the narrow one stops asking for max-content -- left as a
+   narrow column on a wide empty row it looked like a mistake. */
+.pair { display: grid; gap: 16px; align-items: start; }
+@media (min-width: 1250px) {
+  .pair { grid-template-columns: max-content minmax(0, 1fr); }
+  .pair > .fit { width: max-content; }
+}
 table { width: 100%; border-collapse: collapse; font-size: 19px; }
 th {
   text-align: left; color: var(--ink-mute); font-size: 15px; font-weight: 700;
@@ -262,13 +276,23 @@ td.num, th.num { text-align: right; }
 th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
 /* A banner naming each cluster of columns, so "Deck" and "Stake" appearing
    three times across one row is never ambiguous about which figure they
-   belong to. */
-tr.grouprow th { padding: 2px 8px 5px; color: var(--ink-dim); font-size: 14px;
+   belong to. Centred over the columns it spans -- left-aligned it read as
+   a label for the one column under its first letter. */
+tr.grouprow th { padding: 3px 8px 6px; color: var(--ink-dim); font-size: 14px;
                  letter-spacing: .08em; text-transform: uppercase;
-                 text-align: left; border-bottom: 1px solid #2b3536; }
-tr.grouprow th.grp { border-left: 1px solid #2b3536; padding-left: 12px; }
-td.clusterend { padding-right: 16px; }
+                 text-align: center; border-bottom: 1px solid #2b3536; }
+
+/* One rule draws every cluster edge: on the banner, on the column headers
+   and down the body, so the three lanes are separated top to bottom. */
+tr.grouprow th.grp, th.clstart, td.clstart { border-left: 2px solid #2b3536; }
+th.clstart, td.clstart { padding-left: 14px; }
+th.clend, td.clend { padding-right: 16px; }
+
+/* A cluster is one item: a figure, plus the deck and stake of the run that
+   set it. It highlights as one block rather than as three separate boxes,
+   and the whole block is the click target. */
 td.cellrun { cursor: pointer; }
+td.hot { background: #2c393b; }
 tbody tr:hover td.cellrun:hover { background: #2c393b; }
 th.sortable:hover { color: var(--ink); }
 th.sortable .ind { display: inline-block; width: .8em; color: var(--gold); }

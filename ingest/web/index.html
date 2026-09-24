@@ -47,19 +47,24 @@
 
   <section class="tiles" id="tiles" aria-label="Records"></section>
 
-  <section class="panel">
-    <h2>Jokers</h2>
-    <div class="scroll"><table id="jokers"></table></div>
-  </section>
+  <!-- Jokers takes the width of its four columns and the hands table takes
+       the rest, which is roughly how much each of them needs. Below about
+       1200px the pair wraps and both go full width. -->
+  <section class="pair">
+    <div class="panel fit">
+      <h2>Jokers</h2>
+      <div class="scroll"><table id="jokers"></table></div>
+    </div>
 
-  <!-- Three questions about the same twelve hands, which used to be three
-       panels repeating the same twelve rows of art and names. One row per
-       hand now, three clusters across; each cluster carries the deck, the
-       stake and the click of whichever run set THAT figure, which is
-       usually not the same run. -->
-  <section class="panel">
-    <h2>Poker hands</h2>
-    <div class="scroll"><table id="hands"></table></div>
+    <!-- Three questions about the same twelve hands, which used to be three
+         panels repeating the same twelve rows of art and names. One row per
+         hand now, three clusters across; each cluster carries the deck, the
+         stake and the click of whichever run set THAT figure, which is
+         usually not the same run. -->
+    <div class="panel grow">
+      <h2>Poker hands</h2>
+      <div class="scroll"><table id="hands"></table></div>
+    </div>
   </section>
 
   <section class="panel">
@@ -165,7 +170,7 @@ function drawTable(id) {
   const head = t.cols.map((c, i) => {
     const on = t.sort.i === i;
     const dir = on ? (t.sort.dir < 0 ? "descending" : "ascending") : "none";
-    return `<th class="${c.num ? "num " : ""}sortable" data-i="${i}"
+    return `<th class="${c.num ? "num " : ""}${c.cls ? c.cls + " " : ""}sortable" data-i="${i}"
       aria-sort="${dir}"${c.title ? ` title="${esc(c.title)}"` : ""}
       >${esc(c.label)}<span class="ind">${on ? (t.sort.dir < 0 ? "▾" : "▴") : ""}</span></th>`;
   }).join("");
@@ -204,6 +209,7 @@ function drawTable(id) {
       return `<td class="${[c.num ? "num" : "", c.cls || "",
                            own ? "cellrun" : ""].filter(Boolean).join(" ")}"${
         own ? ` data-run="${esc(own)}"` : ""}${
+        c.cl ? ` data-cl="${esc(c.cl)}"` : ""}${
         c.style ? ` style="${c.style}"` : ""}>${c.cell(r)}</td>`;
     }).join("") + `</tr>`;
   }).join("")
@@ -219,6 +225,21 @@ function drawTable(id) {
   // figure, not whatever the row as a whole points at.
   el.querySelectorAll("tbody td.cellrun").forEach(td => {
     td.onclick = ev => { ev.stopPropagation(); openRun(td.dataset.run); };
+  });
+  // A cluster is one item -- a figure, and the deck and stake of the run
+  // that set it -- so it lights up as one rather than as three boxes.
+  const lit = (tr, cl, on) => {
+    if (!tr || !cl) return;
+    tr.querySelectorAll(`td[data-cl="${cl}"]`)
+      .forEach(x => x.classList.toggle("hot", on));
+  };
+  el.addEventListener("mouseover", ev => {
+    const td = ev.target.closest("td[data-cl]");
+    if (td) lit(td.parentElement, td.dataset.cl, true);
+  });
+  el.addEventListener("mouseout", ev => {
+    const td = ev.target.closest("td[data-cl]");
+    if (td) lit(td.parentElement, td.dataset.cl, false);
   });
   el.querySelectorAll("button.seed").forEach(b => {
     b.onclick = ev => { ev.stopPropagation(); copySeed(b, b.dataset.seed); };
@@ -349,18 +370,17 @@ const handCols = () => {
                   cell: r => handCell(r.hand), sort: r => handRank(r.hand) }];
   for (const [key, label, colour, text, ord, title] of CLUSTER) {
     const at = r => r[key];                      // may be absent for a hand
+    const run = r => (at(r) ? at(r).run_id : null);
     cols.push(
-      { label, title, num: true, style: `color:${colour};font-weight:700`,
+      { label, title, num: true, cl: key, cls: "clstart",
+        style: `color:${colour};font-weight:700`,
         cell: r => (at(r) ? text(at(r)) : `<span class="muted">—</span>`),
-        sort: r => (at(r) ? ord(at(r)) : null),
-        run: r => (at(r) ? at(r).run_id : null) },
-      { label: "Deck", cell: r => (at(r) ? deckCell(at(r)) : ""),
-        sort: r => (at(r) ? at(r).deck_name : null),
-        run: r => (at(r) ? at(r).run_id : null) },
-      { label: "Stake", cls: "clusterend",
+        sort: r => (at(r) ? ord(at(r)) : null), run },
+      { label: "Deck", cl: key, cell: r => (at(r) ? deckCell(at(r)) : ""),
+        sort: r => (at(r) ? at(r).deck_name : null), run },
+      { label: "Stake", cl: key, cls: "clend",
         cell: r => (at(r) ? stakeCell(at(r)) : ""),
-        sort: r => (at(r) ? at(r).stake_key : null),
-        run: r => (at(r) ? at(r).run_id : null) });
+        sort: r => (at(r) ? at(r).stake_key : null), run });
   }
   return cols;
 };
