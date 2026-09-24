@@ -261,8 +261,13 @@ const handIcon = r => r.held === undefined || r.held === null ? "" :
 // A dropdown that shows each option's own art. Options are real buttons so
 // Tab and Enter work; a native <select> cannot carry an image, and a row of
 // buttons per deck stops fitting once every deck is in play.
-function buildPicker(id, key, items, kind, px, allLabel, onPick) {
+// `store` is where the choice is kept, defaulting to the filter state.
+// A page with a selection that is NOT a server filter -- which joker is on
+// screen, say -- passes its own object, so the choice stays out of the
+// query string instead of riding along as a parameter nothing reads.
+function buildPicker(id, key, items, kind, px, allLabel, onPick, store) {
   const root = $("#" + id);
+  const held = store || state;
   const opts = [{ k: "", n: allLabel }].concat(items);
   // An item may carry its own art (the metric list mixes jokers and
   // planets), and a group entry is a heading rather than a choice.
@@ -270,7 +275,7 @@ function buildPicker(id, key, items, kind, px, allLabel, onPick) {
     : (it.k ? sprite(it.k, kind, px) || "" : "")) + `<span>${esc(it.n)}</span>`;
 
   function render() {
-    const cur = opts.find(o => o.k === state[key]) || opts[0];
+    const cur = opts.find(o => o.k === held[key]) || opts[0];
     root.innerHTML =
       `<button class="seg pixel-pill" aria-haspopup="listbox" aria-expanded="false"
         >${face(cur)}<span class="caret">▾</span></button>` +
@@ -278,7 +283,7 @@ function buildPicker(id, key, items, kind, px, allLabel, onPick) {
       opts.map((o, i) => o.group
         ? `<div class="grp">${esc(o.n)}</div>`
         : `<button role="option" data-i="${i}"
-        aria-selected="${o.k === state[key]}">${face(o)}</button>`).join("") +
+        aria-selected="${o.k === held[key]}">${face(o)}</button>`).join("") +
       `</div>`;
 
     const btn = root.firstElementChild;
@@ -301,7 +306,7 @@ function buildPicker(id, key, items, kind, px, allLabel, onPick) {
       const b = ev.target.closest("button[role=option]");
       if (!b) return;
       ev.stopPropagation();
-      state[key] = opts[+b.dataset.i].k;
+      held[key] = opts[+b.dataset.i].k;
       close();
       render();
       // Sibling pickers share this key, so they have to redraw: choosing a

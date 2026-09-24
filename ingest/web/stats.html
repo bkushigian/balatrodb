@@ -65,6 +65,21 @@
     <div class="chart" id="c_joker"></div>
   </section>
 
+  <!-- One hand's three measures. They share an x axis and nothing else, so
+       they are three stacked charts rather than two scales on one. -->
+  <section class="panel">
+    <h2>A hand, run by run</h2>
+    <div class="runsort">
+      <label>Hand</label><span class="pick" id="m_hand"></span>
+      <span class="muted" id="handnote"></span>
+    </div>
+    <div class="stackcharts">
+      <div class="chart" id="c_hand_level"></div>
+      <div class="chart" id="c_hand_score"></div>
+      <div class="chart" id="c_hand_played"></div>
+    </div>
+  </section>
+
   <section class="panel">
     <h2>Every run</h2>
     <div class="note" style="color:var(--ink-mute);font-size:15px;margin:2px 0 12px">
@@ -201,7 +216,7 @@ const EMPTY = `<div class="empty">Nothing recorded yet.</div>`;
 // x is the run's position in time order rather than its timestamp: runs
 // arrive in clusters, and on a real time axis an evening's play collapses
 // into one unreadable smear. The dates still label the ends.
-const CH = { w: 520, h: 230, l: 54, r: 16, t: 14, b: 30 };
+const CH = { w: 900, h: 300, l: 66, r: 18, t: 16, b: 32 };
 // `ago` switches format inside a day, which put "Sep 20" at one end of an
 // axis and "04:43 PM" at the other. An axis wants one format.
 const axisDate = ts => new Date(ts * 1000)
@@ -211,6 +226,8 @@ const axisDate = ts => new Date(ts * 1000)
 // a counter joker passes two, because it holds two different records and
 // neither is a footnote to the other -- what it contributed while someone
 // held it, and what the counter reached whether or not anyone did.
+//
+// opts: {log, zero, height, xlabels, unit}
 function seriesChart(host, title, note, series, opts) {
   const o = opts || {};
   const live = series.filter(s => s.pts.length);
@@ -219,8 +236,13 @@ function seriesChart(host, title, note, series, opts) {
       `<div class="empty">No runs in this slice have one.</div>`;
     return;
   }
-  const { w, h, l, r, t, b } = CH;
+  const w = CH.w, h = o.height || CH.h, l = CH.l, t = CH.t;
+  // Room on the right for a direct label when there is more than one series
+  // -- identity should not depend on matching a colour to a legend.
+  const r = live.length > 1 ? 150 : CH.r;
+  const b = o.xlabels === false ? 12 : CH.b;
   const iw = w - l - r, ih = h - t - b;
+
   const all = live.flatMap(s => s.pts.map(p => p.y));
   let lo = Math.min(...all), hi = Math.max(...all);
   if (o.zero) lo = Math.min(0, lo);
@@ -244,9 +266,6 @@ function seriesChart(host, title, note, series, opts) {
     : iw * stamps.indexOf(ts) / (stamps.length - 1));
   const Y = v => t + ih - ih * (v - lo) / (hi - lo);
 
-  // On a log axis a tick is an exponent, so whole powers of ten are the
-  // only labels worth printing -- unless the range is too narrow to hold
-  // two of them, where the ordinary spacing beats one lonely line.
   let ticks;
   if (o.log) {
     // Every whole exponent, thinned when there are more than about six so
@@ -263,7 +282,7 @@ function seriesChart(host, title, note, series, opts) {
        o.log ? logTick(v) : fmt(v)}</text>`).join("");
 
   const pts = [];                      // flat, so a hover can find its point
-  let body = "";
+  let body = "", labels = [];
   for (const sr of live) {
     // The running best: what the record actually was after each run. A
     // staircase, because that is how a record moves -- it holds, then jumps.
@@ -279,21 +298,36 @@ function seriesChart(host, title, note, series, opts) {
     });
     if (stair.length) {
       stair.push([X(stamps[stamps.length - 1]), Y(run)]);
-      body += `<path class="best" d="M${stair.map(q =>
-        q.map(n => n.toFixed(1)).join(",")).join("L")}"${
-        sr.dim ? ' style="opacity:.4"' : ""}/>`;
+      body += `<path class="best${sr.dim ? " faint" : ""}" d="M${stair.map(q =>
+        q.map(n => n.toFixed(1)).join(",")).join("L")}"/>`;
+      if (live.length > 1) labels.push({ y: Y(run), sr });
     }
     for (const p of sr.pts) {
       const i = pts.push(p) - 1;
       const x = X(p.ts), y = Y(p.y);
-      body += dot(x, y, sr.dim ? 4.5 : 5.5,
+      body += dot(x, y, sr.dim ? 4 : 7,
         "dot" + (sr.dim ? " amb" : p.rec ? " rec" : ""),
         ` fill="${sr.dim ? "none" : sr.color}" data-pt="${i}"`) +
         // A hit target bigger than the mark, per the interaction spec.
-        `<circle class="hit" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="13"
+        `<circle class="hit" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="14"
           data-pt="${i}"/>`;
     }
   }
+
+  // Direct labels, nudged apart when two series end at the same height.
+  labels.sort((a, c) => a.y - c.y);
+  for (let i = 1; i < labels.length; i++) {
+    if (labels[i].y - labels[i - 1].y < 17) labels[i].y = labels[i - 1].y + 17;
+  }
+  body += labels.map(m =>
+    `<text class="dlab" x="${w - r + 10}" y="${(m.y + 5).toFixed(1)}"
+       style="fill:${m.sr.dim ? "var(--ink-mute)" : m.sr.color}"
+       >${esc(m.sr.label)}</text>`).join("");
+
+  const xlab = o.xlabels === false ? "" :
+    `<text x="${l}" y="${h - 8}">${esc(axisDate(stamps[0]))}</text>
+     <text x="${w - r}" y="${h - 8}" text-anchor="end">${
+       esc(axisDate(stamps[stamps.length - 1]))}</text>`;
 
   host.innerHTML = head(title, note) + `<div class="svgwrap"><svg
       viewBox="0 0 ${w} ${h}" role="img"
@@ -301,14 +335,11 @@ function seriesChart(host, title, note, series, opts) {
       ${grid}
       <line class="axis" x1="${l}" y1="${t}" x2="${l}" y2="${t + ih}"/>
       <line class="axis" x1="${l}" y1="${t + ih}" x2="${w - r}" y2="${t + ih}"/>
-      ${body}
-      <text x="${l}" y="${h - 8}">${esc(axisDate(stamps[0]))}</text>
-      <text x="${w - r}" y="${h - 8}" text-anchor="end">${
-        esc(axisDate(stamps[stamps.length - 1]))}</text>
+      ${body}${xlab}
     </svg></div>
-    <div class="legend">${live.map(sr =>
+    <div class="legend">${live.length > 1 ? live.map(sr =>
       `<span>${sr.icon || `<i style="background:${sr.color}"></i>`}${
-        esc(sr.label)}</span>`).join("")}
+        esc(sr.label)}</span>`).join("") : ""}
       <span><i style="background:var(--ink-dim)"></i>the record, as it stood</span>
     </div>`;
   PTS[host.id] = pts;
@@ -366,9 +397,21 @@ function drawHands(levels, counts, best) {
 }
 
 // ── the joker chart ──────────────────────────────────────────────────────
-// A scaling joker's peak is its own number; a counter joker's is what it
-// contributed, in the unit it contributes -- the ingester converts, so both
-// arrive here already comparable between runs.
+// Which joker and which hand are on screen. Not filter state: nothing here
+// goes to the server as a parameter, so it lives in its own object and
+// stays out of the query string.
+const sel = { joker: "", hand: "" };
+
+// The run list carrying one metric. The filters come from `state`; the
+// metric is whatever the caller is drawing, so several can be fetched for
+// one screen without any of them becoming page state.
+const fetchMetric = m => {
+  const p = new URLSearchParams(qs());
+  p.set("metric", m);
+  return fetch("/api/runs?" + p).then(r => r.json())
+    .then(d => (d && d.error ? Promise.reject(new Error(d.error)) : d));
+};
+
 // A scaling joker's peak is its own number; a counter joker's is what it
 // contributed, in the unit it contributes -- the ingester converts, so both
 // arrive here already comparable between runs.
@@ -380,8 +423,8 @@ function drawHands(levels, counts, best) {
 // record set without ever owning one is that line, not this one.
 async function drawJoker() {
   const host = $("#c_joker");
-  const spec = (state.metric || "").split(":");
-  if (spec.length !== 2 || (spec[0] !== "joker" && spec[0] !== "counter")) {
+  const spec = (sel.joker || "").split(":");
+  if (spec.length !== 2) {
     host.innerHTML = `<div class="empty">Pick a joker to see how its best
       run compares with every run before it.</div>`;
     $("#jokernote").textContent = "";
@@ -397,47 +440,87 @@ async function drawJoker() {
     .filter(r => r.metric_txt !== null && r.metric_txt !== undefined)
     .sort((a, b) => a.started_ts - b.started_ts)
     .map(r => ({
-      ts: r.started_ts, y: r.metric_ord, txt: fmt(r.metric_txt), color: c,
+      ts: r.started_ts, y: Number(r.metric_txt), txt: fmt(r.metric_txt), color: c,
       title: nameOf(key),
       sub: `${r.deck_name || ""} · ${ago(r.started_ts)}`,
     }));
 
   // The same seals the board and the record panels use, so which record a
   // point belongs to reads the same way everywhere on the site.
-  const seal = held => handIcon({ held })
-    .replace('class="hand"', 'class="hand" style="position:static;width:19px;height:19px"');
+  const seal = h => handIcon({ held: h })
+    .replace('class="hand"', 'class="hand" style="position:static;width:22px;height:22px"');
 
   let series, note;
   if (counter) {
     const [held, amb] = await Promise.all([
-      get("/api/runs"), fetchMetric("counter_ambient:" + spec[1]),
+      fetchMetric(sel.joker), fetchMetric("counter_ambient:" + spec[1]),
     ]);
     series = [
       { pts: mk(amb, "var(--ink-mute)"), color: "var(--ink-mute)", dim: true,
-        label: "if you had held it", icon: seal(false) },
-      { pts: mk(held, color), color, label: "while you held it", icon: seal(true) },
+        label: "nobody held it", icon: seal(0) },
+      { pts: mk(held, color), color, label: "you held it", icon: seal(1) },
     ];
-    note = "Both of its records. Log scale, in the unit it contributes.";
+    note = `Both of its records, in the unit it contributes. Hollow rings are
+      what the counter reached with nobody holding it; solid dots are what it
+      actually added while you did.`;
   } else {
-    series = [{ pts: mk(await get("/api/runs"), color), color, label: "peak" }];
-    note = "Its highest value in each run. Log scale.";
+    series = [{ pts: mk(await fetchMetric(sel.joker), color), color, label: "peak" }];
+    note = "Its highest value in each run.";
   }
 
   const n = series.reduce((a, sr) => a + sr.pts.length, 0);
   $("#jokernote").innerHTML = n
     ? `${sprite(key, "j", 30)} ${esc(nameOf(key))}` : "";
-  seriesChart(host, nameOf(key) || "Joker", note, series, { log: true });
+  // Linear: a joker's peak is a number you compare by subtracting, not by
+  // orders of magnitude. Only scores need a log axis.
+  seriesChart(host, nameOf(key) || "Joker", note, series, { zero: true });
 }
 
-// One metric other than the one the filters are carrying. Same endpoint,
-// same slice -- only the metric differs.
-const fetchMetric = m => {
-  const p = new URLSearchParams();
-  for (const [k, v] of Object.entries(state)) if (v !== "" && k !== "metric") p.set(k, v);
-  p.set("metric", m);
-  return fetch("/api/runs?" + p).then(r => r.json())
-    .then(d => (d && d.error ? Promise.reject(new Error(d.error)) : d));
-};
+// ── one hand, run by run ─────────────────────────────────────────────────
+// Three measures with nothing in common but the x axis, so they get three
+// charts stacked rather than two y-scales on one. Only the bottom one is
+// dated -- all three plot the same runs in the same order.
+const HAND_VIEWS = [
+  ["c_hand_level",  "hand_level",  "Level",        "var(--green)", fmt,
+   "How high you had it levelled in each run.", {}],
+  ["c_hand_score",  "hand_score",  "Best score",   "var(--chips)", fmtScore,
+   "The biggest you scored with it. Log scale — the one measure that needs one.",
+   { log: true }],
+  ["c_hand_played", "hand_played", "Times played", "var(--money)", fmt,
+   "How often you played it in each run.", {}],
+];
+
+async function drawHand() {
+  const hand = sel.hand;
+  const hosts = HAND_VIEWS.map(v => $("#" + v[0]));
+  if (!hand) {
+    hosts[0].innerHTML = `<div class="empty">Pick a hand to see its level,
+      its best score and how often you played it, run by run.</div>`;
+    hosts.slice(1).forEach(el => { el.innerHTML = ""; });
+    $("#handnote").textContent = "";
+    return;
+  }
+  $("#handnote").innerHTML = `${sprite(planetOf(hand), "j", 30)} ${esc(hand)}`;
+
+  const got = await Promise.all(
+    HAND_VIEWS.map(v => fetchMetric(`${v[1]}:${hand}`)));
+
+  HAND_VIEWS.forEach(([id, kind, title, color, fmtv, note, opts], i) => {
+    const pts = got[i]
+      .filter(r => r.metric_txt !== null && r.metric_txt !== undefined)
+      .sort((a, b) => a.started_ts - b.started_ts)
+      .map(r => ({
+        // A log chart plots the ordering key; the others plot the value.
+        ts: r.started_ts,
+        y: opts.log ? r.metric_ord : Number(r.metric_txt),
+        txt: fmtv(r.metric_txt), color, title: `${hand} · ${title}`,
+        sub: `${r.deck_name || ""} · ${ago(r.started_ts)}`,
+      }));
+    seriesChart($("#" + id), title, note, [{ pts, color, label: title }],
+      Object.assign({ zero: !opts.log, height: 250,
+                      xlabels: i === HAND_VIEWS.length - 1 }, opts));
+  });
+}
 
 // ── every run ────────────────────────────────────────────────────────────
 function drawRuns(runs) {
@@ -483,18 +566,38 @@ function buildJokerPicker() {
   })).concat((METRICS.counters || []).map(c => ({
     k: "counter:" + c.metric, n: nameOf(c.key), art: sprite(c.key, "j", 30),
   }))).sort((a, b) => a.n.localeCompare(b.n));
-  buildPicker("m_joker", "metric", opts, "j", 30, "Pick a joker", syncHash);
+  buildPicker("m_joker", "joker", opts, "j", 30, "Pick a joker", () => {
+    syncHash();
+    drawJoker();
+  }, sel);
 }
 
-// The chosen joker is the one thing here worth linking to, so it lives in
-// the URL -- and a reload keeps its place instead of emptying the panel.
+function buildHandPicker() {
+  if (!METRICS) return;
+  // Strongest first, the same order the hand charts above use.
+  const opts = METRICS.hands.slice()
+    .sort((a, b) => (handRank(b) || 0) - (handRank(a) || 0))
+    .map(h => ({ k: h, n: h, art: sprite(planetOf(h), "j", 30) }));
+  buildPicker("m_hand", "hand", opts, "j", 30, "Pick a hand", () => {
+    syncHash();
+    drawHand();
+  }, sel);
+}
+
+// What is on screen is worth linking to, so both selections live in the
+// URL -- and a reload keeps its place instead of emptying the panels.
 function syncHash() {
-  const h = state.metric ? "#" + state.metric : "";
+  const p = new URLSearchParams();
+  if (sel.joker) p.set("joker", sel.joker);
+  if (sel.hand) p.set("hand", sel.hand);
+  const h = p.toString() ? "#" + p : "";
   if (h !== location.hash) history.replaceState(null, "", location.pathname + h);
 }
 function readHash() {
-  const h = decodeURIComponent(location.hash.replace(/^#/, ""));
-  if (/^(joker|counter):/.test(h)) state.metric = h;
+  const p = new URLSearchParams(location.hash.replace(/^#/, ""));
+  const j = p.get("joker") || "";
+  if (/^(joker|counter):/.test(j)) sel.joker = j;
+  sel.hand = p.get("hand") || "";
 }
 
 async function refresh() {
@@ -505,7 +608,7 @@ async function refresh() {
     ]);
     drawHands(levels, counts, hands.best || []);
     drawRuns(runs);
-    await drawJoker();
+    await Promise.all([drawJoker(), drawHand()]);
     $("#sub").textContent = `${runs.length} run${runs.length === 1 ? "" : "s"}`;
   } catch (ex) {
     $("#sub").textContent = "error: " + ex.message;
@@ -563,6 +666,7 @@ Promise.all([
     meta.stakes.map(x => ({ k: x.k, n: nameOf(x.k) })), "s", 36, "All stakes");
   readHash();
   buildJokerPicker();
+  buildHandPicker();
   refresh();
 });
 </script>

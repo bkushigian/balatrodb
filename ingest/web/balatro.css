@@ -512,9 +512,12 @@ tr.detail > td { padding: 0; border-top: 0; }
 .nav a:hover { color: var(--ink); }
 
 .chartgrid { display: grid; gap: 16px;
-             /* 330px fitted three charts into 1100px and left each one a
-                60px track with its axis labels on top of each other. */
-             grid-template-columns: repeat(auto-fit, minmax(430px, 1fr)); }
+             /* Stacked, not side by side. Three charts across left each one a
+                short track and a crowded axis; full width gives the bars
+                room to differ and the dots room to separate. */
+             grid-template-columns: 1fr; }
+/* Charts that share an x axis sit closer together than separate ones do. */
+.stackcharts { display: grid; gap: 4px; }
 .chart h3 { font-size: 20px; margin-bottom: 2px;
             text-shadow: 2px 2px 0 #1b2325; }
 /* Reserved, so three charts side by side start their rows on the same
@@ -570,9 +573,8 @@ tr.detail > td { padding: 0; border-top: 0; }
 .pbar.top .v { color: var(--gold); }
 
 /* ── the SVG series ────────────────────────────────────────────────── */
-/* A chart in a full-width panel would otherwise scale to 1400px wide and
-   640px tall, which is a wall, not a chart. */
-.svgwrap { width: 100%; max-width: 760px; }
+/* Wide enough to use the panel, capped so it never becomes a wall. */
+.svgwrap { width: 100%; max-width: 1080px; }
 .chart svg { display: block; width: 100%; height: auto; }
 .chart svg text { font-family: "m6x11", monospace; fill: var(--ink-mute);
                   font-size: 13px; }
@@ -582,6 +584,9 @@ tr.detail > td { padding: 0; border-top: 0; }
    only ever goes up, so it is drawn as a staircase. */
 .chart svg .best { fill: none; stroke: var(--ink-dim); stroke-width: 2;
                    stroke-linejoin: miter; opacity: .8; }
+.chart svg .best.faint { opacity: .3; }
+/* A direct label beats matching a colour against a legend. */
+.chart svg text.dlab { font-size: 15px; }
 .chart svg .dot { stroke: var(--surface); stroke-width: 1.5; cursor: pointer; }
 /* The second series on a counter joker's chart: hollow rings, so it is told
    apart by shape as well as by colour. A CSS rule rather than an attribute
