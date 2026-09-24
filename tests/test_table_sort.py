@@ -236,7 +236,12 @@ def check(name, cond, detail=""):
 
 
 print("the page's script runs to completion")
-check("panels are defined", len(res["panels"]) >= 4, res["panels"])
+# Named rather than counted: a count passes just as well when a panel has
+# been dropped by accident as when three were deliberately merged into one.
+EXPECTED_PANELS = {"jokers", "hands", "runs"}
+check("every expected panel is defined",
+      EXPECTED_PANELS <= set(res["panels"]),
+      f"missing: {sorted(EXPECTED_PANELS - set(res['panels']))}")
 check("every panel has a table to render into", res["orphans"] == [],
       f"defined but absent from the markup: {res['orphans']}")
 check("every column declares how to sort itself", res["noSort"] == [],

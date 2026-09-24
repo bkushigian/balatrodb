@@ -47,30 +47,19 @@
 
   <section class="tiles" id="tiles" aria-label="Records"></section>
 
-  <!-- One grid, not a tall column beside a stack of three: the panels are
-       all leaderboards of the same shape, so letting them flow two-up keeps
-       their bottoms near each other instead of running one column far past
-       the other. -->
-  <section class="cols">
-    <div class="panel">
-      <h2>Jokers</h2>
-      <div class="scroll"><table id="jokers"></table></div>
-    </div>
+  <section class="panel">
+    <h2>Jokers</h2>
+    <div class="scroll"><table id="jokers"></table></div>
+  </section>
 
-    <div class="panel">
-      <h2>Best hand by type</h2>
-      <div class="scroll"><table id="hands"></table></div>
-    </div>
-
-    <div class="panel">
-      <h2>Highest hand levels</h2>
-      <div class="scroll"><table id="handlevels"></table></div>
-    </div>
-
-    <div class="panel">
-      <h2>Most played hands</h2>
-      <div class="scroll"><table id="handcounts"></table></div>
-    </div>
+  <!-- Three questions about the same twelve hands, which used to be three
+       panels repeating the same twelve rows of art and names. One row per
+       hand now, three clusters across; each cluster carries the deck, the
+       stake and the click of whichever run set THAT figure, which is
+       usually not the same run. -->
+  <section class="panel">
+    <h2>Poker hands</h2>
+    <div class="scroll"><table id="hands"></table></div>
   </section>
 
   <section class="panel">
@@ -158,7 +147,7 @@ const TBL = {};
 function defineTable(id, cols, opts) {
   const o = opts || {};
   TBL[id] = { id, cols, rows: [], empty: o.empty || "Nothing yet.",
-              onclick: o.onclick,
+              onclick: o.onclick, groups: o.groups,
               sort: { i: o.sort === undefined ? null : o.sort, dir: -1 } };
 }
 
@@ -180,6 +169,12 @@ function drawTable(id) {
       aria-sort="${dir}"${c.title ? ` title="${esc(c.title)}"` : ""}
       >${esc(c.label)}<span class="ind">${on ? (t.sort.dir < 0 ? "▾" : "▴") : ""}</span></th>`;
   }).join("");
+  // A banner row above the columns, for a table whose columns come in
+  // clusters that each answer a different question about the same row.
+  const groups = t.groups ? `<tr class="grouprow">` + t.groups.map(g =>
+    `<th colspan="${g.span}"${g.cls ? ` class="${g.cls}"` : ""}${
+      g.title ? ` title="${esc(g.title)}"` : ""}>${esc(g.label)}</th>`).join("")
+    + `</tr>` : "";
 
   let rows = t.rows.slice();
   if (t.sort.i !== null) {
@@ -201,18 +196,30 @@ function drawTable(id) {
     // apostrophe BEFORE the JS is parsed, so it never protected a string
     // literal. A delegated listener sidesteps the whole question.
     const click = t.onclick ? ` class="clickable" data-run="${esc(r.run_id)}"` : "";
-    return `<tr${click}>` + t.cols.map(c =>
-      `<td class="${[c.num ? "num" : "", c.cls || ""].filter(Boolean).join(" ")}"${
-        c.style ? ` style="${c.style}"` : ""}>${c.cell(r)}</td>`).join("") + `</tr>`;
+    return `<tr${click}>` + t.cols.map(c => {
+      // A cell may point at a different run from its row: in the hands
+      // table each cluster was set by whichever run did that particular
+      // thing, and they are rarely the same run.
+      const own = c.run ? c.run(r) : null;
+      return `<td class="${[c.num ? "num" : "", c.cls || "",
+                           own ? "cellrun" : ""].filter(Boolean).join(" ")}"${
+        own ? ` data-run="${esc(own)}"` : ""}${
+        c.style ? ` style="${c.style}"` : ""}>${c.cell(r)}</td>`;
+    }).join("") + `</tr>`;
   }).join("")
     : `<tr><td colspan="${t.cols.length}" class="empty">${esc(t.empty)}</td></tr>`;
 
-  el.innerHTML = `<thead><tr>${head}</tr></thead><tbody>${body}</tbody>`;
+  el.innerHTML = `<thead>${groups}<tr>${head}</tr></thead><tbody>${body}</tbody>`;
   if (t.onclick) {
     el.querySelectorAll("tbody tr.clickable").forEach(tr => {
       tr.onclick = () => openRun(tr.dataset.run);
     });
   }
+  // Cell before row: clicking a cluster opens the run that set THAT
+  // figure, not whatever the row as a whole points at.
+  el.querySelectorAll("tbody td.cellrun").forEach(td => {
+    td.onclick = ev => { ev.stopPropagation(); openRun(td.dataset.run); };
+  });
   el.querySelectorAll("button.seed").forEach(b => {
     b.onclick = ev => { ev.stopPropagation(); copySeed(b, b.dataset.seed); };
   });
@@ -323,37 +330,62 @@ defineTable("jokers", [
   { label: "Stake", cell: stakeCell, sort: r => r.stake_key },
 ], { empty: "No jokers recorded yet.", onclick: openRunJS, sort: 1 });
 
-defineTable("hands", [
-  { label: "Hand", title: "Sorts by poker-hand strength.",
-    cell: r => handCell(r.hand), sort: r => handRank(r.hand) },
-  { label: "Score", num: true, style: "color:var(--chips);font-weight:700",
-    cell: r => fmtScore(r.value), sort: r => r.ord },
-  { label: "Lvl", num: true, cls: "muted",
-    title: "The level that hand was at when this score was made.",
-    cell: r => r.level ?? "—", sort: r => r.level },
-  { label: "Deck", cell: deckCell, sort: r => r.deck_name },
-  { label: "Stake", cell: stakeCell, sort: r => r.stake_key },
-], { empty: "No hands recorded yet.", onclick: openRunJS, sort: 1 });
+// One row per hand, three clusters across: its best score, its highest
+// level, and the most times it was played in a run. They are three
+// different questions about the same twelve subjects, and each is usually
+// answered by a DIFFERENT run -- so each cluster carries its own deck,
+// stake and click target.
+const CLUSTER = [
+  ["score",  "Score",  "var(--chips)", r => fmtScore(r.value), r => r.ord,
+   "The biggest that hand has ever scored, and the run that did it."],
+  ["level",  "Level",  "var(--green)", r => fmt(r.level), r => r.level,
+   "The highest that hand has ever been levelled, and the run that did it."],
+  ["played", "Played", "var(--gold)",  r => fmt(r.played), r => r.played,
+   "The most times that hand was played within a single run."],
+];
 
-defineTable("handlevels", [
-  { label: "Hand", title: "Sorts by poker-hand strength.",
-    cell: r => handCell(r.hand), sort: r => handRank(r.hand) },
-  { label: "Level", num: true, style: "color:var(--green);font-weight:700",
-    title: "The highest that hand has ever been levelled, and the run that did it.",
-    cell: r => fmt(r.level), sort: r => r.level },
-  { label: "Deck", cell: deckCell, sort: r => r.deck_name },
-  { label: "Stake", cell: stakeCell, sort: r => r.stake_key },
-], { empty: "No hand levels recorded yet.", onclick: openRunJS, sort: 1 });
+const handCols = () => {
+  const cols = [{ label: "Hand", title: "Sorts by poker-hand strength.",
+                  cell: r => handCell(r.hand), sort: r => handRank(r.hand) }];
+  for (const [key, label, colour, text, ord, title] of CLUSTER) {
+    const at = r => r[key];                      // may be absent for a hand
+    cols.push(
+      { label, title, num: true, style: `color:${colour};font-weight:700`,
+        cell: r => (at(r) ? text(at(r)) : `<span class="muted">—</span>`),
+        sort: r => (at(r) ? ord(at(r)) : null),
+        run: r => (at(r) ? at(r).run_id : null) },
+      { label: "Deck", cell: r => (at(r) ? deckCell(at(r)) : ""),
+        sort: r => (at(r) ? at(r).deck_name : null),
+        run: r => (at(r) ? at(r).run_id : null) },
+      { label: "Stake", cls: "clusterend",
+        cell: r => (at(r) ? stakeCell(at(r)) : ""),
+        sort: r => (at(r) ? at(r).stake_key : null),
+        run: r => (at(r) ? at(r).run_id : null) });
+  }
+  return cols;
+};
 
-defineTable("handcounts", [
-  { label: "Hand", title: "Sorts by poker-hand strength.",
-    cell: r => handCell(r.hand), sort: r => handRank(r.hand) },
-  { label: "Played", num: true, style: "color:var(--gold);font-weight:700",
-    title: "The most times this hand was played within a single run.",
-    cell: r => fmt(r.played), sort: r => r.played },
-  { label: "Deck", cell: deckCell, sort: r => r.deck_name },
-  { label: "Stake", cell: stakeCell, sort: r => r.stake_key },
-], { empty: "No hands recorded yet.", onclick: openRunJS, sort: 1 });
+defineTable("hands", handCols(), {
+  empty: "No hands recorded yet.",
+  sort: 1,
+  groups: [{ label: "", span: 1 }].concat(CLUSTER.map(([, label, , , , title]) =>
+    ({ label, span: 3, cls: "grp", title }))),
+});
+
+// The three answers arrive from three endpoints, each already filtered and
+// ranked the same way. Joined here on the hand rather than in SQL, so the
+// leaderboards stay one query apiece and nothing has to agree about ties.
+function setHandMatrix(best, levels, counts) {
+  const by = new Map();
+  const at = hand => {
+    if (!by.has(hand)) by.set(hand, { hand });
+    return by.get(hand);
+  };
+  for (const r of best || []) at(r.hand).score = r;
+  for (const r of levels || []) at(r.hand).level = r;
+  for (const r of counts || []) at(r.hand).played = r;
+  setRows("hands", [...by.values()]);
+}
 
 const RUNS_COLS = () => [
   { label: "When", cls: "muted", cell: r => ago(r.started_ts),
@@ -433,9 +465,7 @@ async function refresh() {
   drawSummary($("#tiles"), s);
 
   setRows("jokers", jok);
-  setRows("hands", hands.best);
-  setRows("handlevels", levels);
-  setRows("handcounts", counts);
+  setHandMatrix(hands.best, levels, counts);
   TIPS = [];                       // rebuilt with the rows that reference it
   defineRunsTable();
   setRows("runs", runs);

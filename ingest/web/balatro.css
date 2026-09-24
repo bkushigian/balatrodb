@@ -260,6 +260,16 @@ td { padding: 6px 8px; border-top: 1px solid #2b3536; white-space: nowrap; }
 tbody tr:hover { background: #404d4f; }
 td.num, th.num { text-align: right; }
 th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+/* A banner naming each cluster of columns, so "Deck" and "Stake" appearing
+   three times across one row is never ambiguous about which figure they
+   belong to. */
+tr.grouprow th { padding: 2px 8px 5px; color: var(--ink-dim); font-size: 14px;
+                 letter-spacing: .08em; text-transform: uppercase;
+                 text-align: left; border-bottom: 1px solid #2b3536; }
+tr.grouprow th.grp { border-left: 1px solid #2b3536; padding-left: 12px; }
+td.clusterend { padding-right: 16px; }
+td.cellrun { cursor: pointer; }
+tbody tr:hover td.cellrun:hover { background: #2c393b; }
 th.sortable:hover { color: var(--ink); }
 th.sortable .ind { display: inline-block; width: .8em; color: var(--gold); }
 
