@@ -678,10 +678,16 @@ tr.detail > td { padding: 0; border-top: 0; }
 
 /* Centred rather than spread to both edges: pushed apart across 1500px the
    run's numbers and its board read as two unrelated groups. */
+/* Two lines: the board on top, the numbers under it. On one line the board
+   had to fight the numbers for width, and a joker carrying a value tag
+   changed the height of the whole row. */
 .livebar {
+  display: grid; gap: 12px; justify-items: center;
+  padding: 6px 18px 13px; cursor: pointer; border-radius: .35rem;
+}
+.livebar .lstats {
   display: flex; align-items: center; justify-content: center;
   gap: 22px; flex-wrap: wrap;
-  padding: 6px 18px 13px; cursor: pointer; border-radius: .35rem;
 }
 .livebar:hover { background: rgba(255, 255, 255, .05); }
 .livebar:active { transform: translateY(1px); }
@@ -699,8 +705,12 @@ tr.detail > td { padding: 0; border-top: 0; }
 .livebar .lv b { font-size: 25px; font-weight: 700; }
 .livebar .lv i { font-style: normal; color: var(--ink-mute); font-size: 13px;
                  text-transform: uppercase; letter-spacing: .06em; }
-.livebar .lboard { display: flex; gap: 9px; align-items: flex-end;
-                   flex-wrap: wrap; }
+/* Tops aligned, not bottoms: the jokers carrying a value tag hang it below
+   the card, and aligning on the bottom edge pushed those cards up out of
+   line with the rest of the board. */
+.livebar .lboard { display: flex; gap: 11px; align-items: flex-start;
+                   justify-content: center; flex-wrap: wrap;
+                   min-height: 70px; }
 
 /* What it is on course to beat. A bar each, because "how far along" is the
    whole point -- a number alone does not say whether you are nearly there. */

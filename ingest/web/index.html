@@ -754,7 +754,7 @@ function drawLive(d) {
   // The board as it stands, with whatever each joker is accumulating.
   const board = (d.board || []).map(j =>
     `<span class="bj" title="${esc(nameOf(j.key))}">
-       ${sprite(j.key, "j", 38) || esc(nameOf(j.key))}${scaleTag(j.scale)}</span>`
+       ${sprite(j.key, "j", 52) || esc(nameOf(j.key))}${scaleTag(j.scale)}</span>`
   ).join("") || `<span class="muted">no jokers yet</span>`;
 
   const all = d.chasing || [];
@@ -777,14 +777,16 @@ function drawLive(d) {
       <span class="seedwrap">${seedCell(r)}</span>
     </div>
     <div class="livebar" title="Open this run">
-      ${deckCell(r)}${stakeCell(r)}
-      ${stat(esc(String(d.ante ?? "—")), d.blind ? esc(d.blind) : "ante")}
-      ${stat("$" + fmt(d.money), "money")}
-      ${stat("$" + fmt(d.spent), "spent")}
-      ${stat(fmtScore(d.best_hand), d.best_hand_name
-        ? esc(d.best_hand_name) : "best hand")}
-      ${stat(fmt(d.hands_played), "hands")}
-      <span class="lboard">${board}</span>
+      <div class="lboard">${board}</div>
+      <div class="lstats">
+        ${deckCell(r)}${stakeCell(r)}
+        ${stat(esc(String(d.ante ?? "—")), d.blind ? esc(d.blind) : "ante")}
+        ${stat("$" + fmt(d.money), "money")}
+        ${stat("$" + fmt(d.spent), "spent")}
+        ${stat(fmtScore(d.best_hand), d.best_hand_name
+          ? esc(d.best_hand_name) : "best hand")}
+        ${stat(fmt(d.hands_played), "hands")}
+      </div>
     </div>
     ${chases ? `<div class="chases">
        <div class="chtitle">On course to beat</div>${chases}${more}</div>` : ""}
