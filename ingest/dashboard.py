@@ -97,6 +97,7 @@ def sync(db, logs):
         if changed:
             ing.derive_counters()
             ing.derive_records()
+            ing.derive_abandoned()
             db.commit()
             generation += 1
             print(f"  synced {changed} run(s) -> generation {generation}")
@@ -374,6 +375,7 @@ def api_runs(db, q):
         SELECT {metric_txt} metric_txt, {metric_ord} metric_ord,
                r.run_id, r.log_file, r.started_ts, r.deck_name, r.deck_key,
                r.stake_key, r.seed, r.seeded, r.won, r.result, r.terminal,
+               r.abandoned,
                r.went_endless, r.hands_played, r.final_dollars, r.deck_size,
                COALESCE(r.furthest_ante, r.ended_ante) ante,
                -- Sliced by the phase filter like every other derived figure.
@@ -918,8 +920,10 @@ def api_live(db, q):
         if run is not None:
             age = time.time() - run["last_ts"]
             # A run that ended in a death is over, whatever else is true of
-            # it; and nothing here is "current" once it has gone cold.
-            if age > LIVE_STALE or run["result"] == "died":
+            # it, and so is one a later run displaced -- its save is gone.
+            # Nothing here is "current" once it has gone cold either.
+            if (age > LIVE_STALE or run["result"] == "died"
+                    or run["abandoned"]):
                 run = None
     if not run:
         return {"run": None}
@@ -930,6 +934,7 @@ def api_live(db, q):
     age = time.time() - (run["last_ts"] or 0)
     run["fresh"] = age <= LIVE_FRESH
     run["phase"] = ("live" if run["result"] is None
+                    else "over" if run["abandoned"]
                     else "paused" if run["result"] == "suspended"
                     else "endless" if run["went_endless"]
                     else "won" if run["won"] else "over")

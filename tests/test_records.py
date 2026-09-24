@@ -105,5 +105,44 @@ after = sorted(db.execute("SELECT * FROM run_records").fetchall())
 check("same rows on a second pass", before == after,
       f"{len(before)} -> {len(after)}")
 
+print("\na paused run is over once a later run overwrites the save")
+# Balatro keeps ONE save per profile, so "suspended" means resumable only
+# until something else starts. Nothing can log that moment -- the paused run
+# stopped writing when it was suspended -- so it is read across runs, which
+# makes both the profile and the ordering load-bearing.
+#
+# Last in this file because it clears the runs table, which everything above
+# it depends on.
+db.execute("DELETE FROM runs")
+
+
+def prun(rid, ts, result, profile):
+    db.execute("INSERT INTO runs (run_id, log_file, started_ts, result, profile)"
+               " VALUES (?,?,?,?,?)", (rid, rid + ".jsonl", ts, result, profile))
+
+
+prun("P1", 100, "suspended", 1)     # a later run on profile 1 displaces it
+prun("P2", 200, "died", 1)
+prun("Q1", 150, "suspended", 2)     # a different profile, its own save slot
+prun("Q2", 250, "died", 2)
+prun("N1", 300, "died", 1)          # never suspended, never abandoned
+prun("P3", 400, "suspended", 1)     # the newest run of all: still resumable
+
+Ingester(db).derive_abandoned()
+ab = {r[0]: r[1] for r in db.execute("SELECT run_id, abandoned FROM runs")}
+
+check("a later run on the same profile ends it", ab["P1"] == 1, str(ab))
+check("the newest paused run is still resumable", ab["P3"] == 0, str(ab))
+check("each profile has its own save slot", ab["Q1"] == 1, str(ab))
+check("a run that died is never abandoned",
+      ab["P2"] == 0 and ab["N1"] == 0, str(ab))
+
+# Strictly later, so a run never displaces itself.
+db.execute("DELETE FROM runs")
+prun("S1", 500, "suspended", 1)
+Ingester(db).derive_abandoned()
+check("a lone paused run stands",
+      db.execute("SELECT abandoned FROM runs").fetchone()[0] == 0)
+
 print("\nFAILURES:", fails)
 sys.exit(1 if fails else 0)

@@ -59,6 +59,12 @@ CREATE TABLE IF NOT EXISTS runs (
   final_dollars INTEGER,
   deck_size    INTEGER,
   went_endless INTEGER NOT NULL DEFAULT 0,
+  -- A `suspended` run that can never be resumed, because a later run on the
+  -- same profile overwrote the save. Balatro keeps one save per profile, so
+  -- starting a new run ends the paused one -- and nothing in the log says
+  -- so, since by then the paused run had already written its run.end and
+  -- stopped listening. Derived across runs, like run_records.
+  abandoned   INTEGER,
 
   best_hand_ord REAL, best_hand_num REAL, best_hand_txt TEXT,
   furthest_ante  INTEGER,

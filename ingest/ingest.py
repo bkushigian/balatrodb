@@ -719,6 +719,29 @@ class Ingester:
             " WHERE run_id=? AND round_seq=?", (stone, best, total, run_id, round_seq))
 
     # -- counters the derived jokers actually read --------------------------
+    def derive_abandoned(self):
+        """Which paused runs a later run quietly ended.
+
+        Balatro keeps ONE save per profile. Quitting to the menu writes
+        `run.end` with `suspended`, which means "resumable" -- and it is,
+        right up until you start something else, at which point the save is
+        replaced and that run is over. Nothing can be logged at that moment:
+        the paused run stopped writing when it was suspended, and the new
+        run has no idea it displaced anything.
+
+        So it is read across runs instead. Same profile, later start: the
+        save is gone. `IS` rather than `=` on the profile because older logs
+        carry no profile and must still compare equal to each other.
+        """
+        self.db.execute("UPDATE runs SET abandoned = 0")
+        self.db.execute("""
+            UPDATE runs SET abandoned = 1
+             WHERE result = 'suspended'
+               AND EXISTS (SELECT 1 FROM runs b
+                            WHERE b.run_id <> runs.run_id
+                              AND b.profile IS runs.profile
+                              AND b.started_ts > runs.started_ts)""")
+
     def derive_records(self):
         """Work out what each run held a record for at the time it was played.
 
@@ -1064,6 +1087,7 @@ def main():
         changed += 1 if did else 0
     ing.derive_counters()
     ing.derive_records()
+    ing.derive_abandoned()
     db.commit()
 
     print(f"{len(files)} logs, {changed} re-derived, {total} events -> {a.db}")

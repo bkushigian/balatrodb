@@ -313,10 +313,14 @@ function resultChip(r) {
   // even if the run later died in endless, so both are shown rather than the
   // win hiding the ending -- which read as "you won" on a run that lost.
   // "loss" is the older spelling of "died"; both appear in the corpus.
+  // A paused run is only paused until you start something else: Balatro
+  // keeps one save per profile, so the next run overwrote it. `abandoned`
+  // is derived across runs, because nothing can log that moment -- the
+  // paused run had already stopped writing.
   const CHIP = {
     died:      ["died", "DIED"],
     loss:      ["died", "DIED"],
-    suspended: ["susp", "PAUSED"],
+    suspended: r.abandoned ? ["other", "RESTARTED"] : ["susp", "PAUSED"],
     quit:      ["susp", "QUIT"],
     new_run:   ["other", "RESTARTED"],
     completed: null,                 // finished after winning: the WON says it
