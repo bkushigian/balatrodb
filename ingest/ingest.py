@@ -176,12 +176,24 @@ def read_events(path):
 #
 # Lives here rather than in the dashboard because ingest needs it to turn a
 # counter into a score; the dashboard imports it so the two cannot drift.
+# Jokers whose value is a function of GAME state rather than their own
+# ability fields, keyed by the joker: (counter, field, what it contributes).
+#
+# Keyed by joker and not by counter because the COUNTER is shared. Bull and
+# Bootstraps both read your money, and read it differently -- 2 chips per
+# dollar against 2 mult per five dollars -- so one counter feeds two jokers
+# with different units. Keyed the other way round Bootstraps had nowhere to
+# go: `dollars` was already Bull's.
+#
+# The conversion is a function rather than a rate because they are not all
+# linear. Bootstraps pays per $5 and Throwback multiplies.
 COUNTER_JOKERS = {
-    "hand_plays":  ("j_supernova",      "mult",   1),
-    "skips":       ("j_throwback",      "x_mult", 0.25),
-    "tarots":      ("j_fortune_teller", "mult",   1),
-    "stone_cards": ("j_stone",          "chips",  25),
-    "dollars":     ("j_bull",           "chips",  2),
+    "j_supernova":      ("hand_plays",  "mult",   lambda c: c),
+    "j_throwback":      ("skips",       "x_mult", lambda c: 1 + 0.25 * c),
+    "j_fortune_teller": ("tarots",      "mult",   lambda c: c),
+    "j_stone":          ("stone_cards", "chips",  lambda c: 25 * c),
+    "j_bull":           ("dollars",     "chips",  lambda c: 2 * c),
+    "j_bootstraps":     ("dollars",     "mult",   lambda c: 2 * (c // 5)),
 }
 
 
@@ -194,14 +206,13 @@ DECAYING = ("j_turtle_bean", "j_popcorn", "j_ice_cream", "j_ramen")
 DECAYING_SQL = "(" + ", ".join("'" + k + "'" for k in DECAYING) + ")"
 
 
-def counter_value(metric, counter):
-    """What the joker contributes for a given counter reading."""
-    spec = COUNTER_JOKERS.get(metric)
+def counter_value(joker_key, counter):
+    """What that joker contributes for a given counter reading."""
+    spec = COUNTER_JOKERS.get(joker_key)
     if spec is None or counter is None:
         return None, None
-    _key, field, rate = spec
-    # Throwback multiplies rather than adds: X1 + 0.25 per skip.
-    return field, (1 + rate * counter) if field == "x_mult" else rate * counter
+    _metric, field, convert = spec
+    return field, convert(counter)
 
 
 MONEY_SKIP = {"state.change", "snapshot", "joker.scale", "money.change",
@@ -848,7 +859,8 @@ class Ingester:
                 "INSERT OR REPLACE INTO run_records VALUES (" +
                 ",".join("?" * 10) + ")", out)
 
-    COUNTER_SOURCES = {m: spec[0] for m, spec in COUNTER_JOKERS.items()}
+    # The counters worth deriving: what the jokers between them read.
+    COUNTER_METRICS = sorted({spec[0] for spec in COUNTER_JOKERS.values()})
 
     def derive_counters(self):
         """Supernova, Throwback, Fortune Teller, Stone Joker and Bull read
@@ -927,11 +939,11 @@ class Ingester:
         # are taken at plays and at round end, so a joker bought and sold
         # without a hand in between never shows -- and never scored either.
         spans = {}
-        for metric, key in self.COUNTER_SOURCES.items():
+        for key in COUNTER_JOKERS:
             for run_id, seg, lo, hi in self.db.execute(
                     "SELECT run_id, seg, MIN(n), MAX(n) FROM joker_state "
                     "WHERE key = ? GROUP BY run_id, seg, card_id", (key,)):
-                spans.setdefault((run_id, metric), []).append((seg, lo, hi))
+                spans.setdefault((run_id, key), []).append((seg, lo, hi))
 
         plays = {}
         for run_id, seg, n, el in self.db.execute(
@@ -944,56 +956,72 @@ class Ingester:
                 "WHERE value IS NOT NULL ORDER BY run_id, metric, seg, n"):
             series.setdefault((run_id, metric), []).append((seg, n, el, val))
 
+        # One counter can feed several jokers, and each converts it its own
+        # way, so the peaks are stored per joker rather than per counter.
+        # Which jokers read each counter. Usually one; `dollars` feeds two.
+        readers = {}
+        for jk, (metric, field, _c) in COUNTER_JOKERS.items():
+            readers.setdefault(metric, []).append((jk, field))
+
         out = []
         for (run_id, metric), rows_ in series.items():
-            ambient, contributed = {}, {}
+            # The counter's own high-water mark does not depend on who was
+            # holding anything, so it is read once for the whole series.
+            ambient = {}
             for seg, n, el, val in rows_:
                 if val > ambient.get(el, float("-inf")):
                     ambient[el] = val
 
-            held = spans.get((run_id, metric), [])
-            inside = lambda seg, n: any(
-                s == seg and lo <= n <= hi for s, lo, hi in held)
+            for joker_key, field in readers.get(metric, []):
+                held = spans.get((run_id, joker_key), [])
+                inside = lambda seg, n, h=held: any(
+                    s == seg and lo <= n <= hi for s, lo, hi in h)
 
-            # Everything that happened while it was not in your hands. With
-            # no spans at all that is the whole series, which is the case
-            # this record exists for.
-            unheld = {}
-            for seg, n, el, val in rows_:
-                if not inside(seg, n) and val > unheld.get(el, float("-inf")):
-                    unheld[el] = val
+                # Everything that happened while it was not in your hands.
+                # With no spans at all that is the whole series, which is
+                # the case this record exists for.
+                unheld = {}
+                for seg, n, el, val in rows_:
+                    if not inside(seg, n) and val > unheld.get(el, float("-inf")):
+                        unheld[el] = val
 
-            if held:
-                # Carry the counter forward to each play and read it there.
-                i, cur = 0, None
-                for pseg, pn, pel in plays.get(run_id, []):
-                    while i < len(rows_) and (rows_[i][0], rows_[i][1]) <= (pseg, pn):
-                        cur = rows_[i][3]
-                        i += 1
-                    if cur is None:
-                        continue
-                    if inside(pseg, pn):
-                        if cur > contributed.get(pel, float("-inf")):
+                contributed = {}
+                if held:
+                    # Carry the counter forward to each play, read it there.
+                    i, cur = 0, None
+                    for pseg, pn, pel in plays.get(run_id, []):
+                        while i < len(rows_) and (rows_[i][0], rows_[i][1]) <= (pseg, pn):
+                            cur = rows_[i][3]
+                            i += 1
+                        if cur is None:
+                            continue
+                        if inside(pseg, pn) and cur > contributed.get(pel, float("-inf")):
                             contributed[pel] = cur
 
-            for el in set(ambient) | set(contributed) | set(unheld):
-                c, a, u = contributed.get(el), ambient.get(el), unheld.get(el)
-                # Converted here, once. A counter is not comparable across
-                # jokers -- 189 dollars and 189 skips are worth wildly
-                # different things -- so the value in the joker's own unit
-                # is what every reader actually wants.
-                field, cv = counter_value(metric, c) if c is not None else (None, None)
-                field2, av = counter_value(metric, a) if a is not None else (None, None)
-                field3, uv = counter_value(metric, u) if u is not None else (None, None)
-                out.append((run_id, metric, el, c, a,
-                            field or field2 or field3, cv, av,
-                            ord_num(cv)[0], ord_num(av)[0],
-                            u, uv, ord_num(uv)[0]))
+                for el in set(ambient) | set(contributed) | set(unheld):
+                    c = contributed.get(el)
+                    a = ambient.get(el)
+                    u = unheld.get(el)
+                    # Converted here, once. A counter is not comparable
+                    # across jokers -- 189 dollars is 378 chips to Bull and
+                    # 74 mult to Bootstraps -- so the value in the joker's
+                    # own unit is what every reader actually wants.
+                    _f, cv = counter_value(joker_key, c)
+                    _f, av = counter_value(joker_key, a)
+                    _f, uv = counter_value(joker_key, u)
+                    out.append((run_id, joker_key, metric, el, c, a, u, field,
+                                cv, av, uv,
+                                ord_num(cv)[0], ord_num(av)[0], ord_num(uv)[0]))
 
         if out:
+            # Named, not positional: this row has fourteen columns and the
+            # next person to add one should not have to count them.
             self.db.executemany(
                 "INSERT OR REPLACE INTO joker_counter_peaks "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", out)
+                "(run_id, joker_key, metric, endless, contributed, ambient,"
+                " unheld, field, contributed_value, ambient_value,"
+                " unheld_value, contributed_ord, ambient_ord, unheld_ord)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", out)
 
 
 # ─── reporting ────────────────────────────────────────────────────────────

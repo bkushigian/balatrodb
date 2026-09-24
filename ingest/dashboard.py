@@ -272,9 +272,9 @@ METRICS = {
     # comparable between runs, and ingest has already converted it.
     "counter": (
         "(SELECT MAX(cp.contributed_value) FROM joker_counter_peaks cp"
-        "   WHERE cp.run_id = r.run_id AND cp.metric = ?{el})",
+        "   WHERE cp.run_id = r.run_id AND cp.joker_key = ?{el})",
         "(SELECT MAX(cp.contributed_ord) FROM joker_counter_peaks cp"
-        "   WHERE cp.run_id = r.run_id AND cp.metric = ?{el})",
+        "   WHERE cp.run_id = r.run_id AND cp.joker_key = ?{el})",
         " AND cp.endless = ?"),
     # The other half of the same joker: what the counter reached whether or
     # not anyone held it. A Fortune Teller record set without ever owning
@@ -282,15 +282,15 @@ METRICS = {
     # The counter at its best while the joker was NOT in your hands.
     "counter_unheld": (
         "(SELECT MAX(cp.unheld_value) FROM joker_counter_peaks cp"
-        "   WHERE cp.run_id = r.run_id AND cp.metric = ?{el})",
+        "   WHERE cp.run_id = r.run_id AND cp.joker_key = ?{el})",
         "(SELECT MAX(cp.unheld_ord) FROM joker_counter_peaks cp"
-        "   WHERE cp.run_id = r.run_id AND cp.metric = ?{el})",
+        "   WHERE cp.run_id = r.run_id AND cp.joker_key = ?{el})",
         " AND cp.endless = ?"),
     "counter_ambient": (
         "(SELECT MAX(cp.ambient_value) FROM joker_counter_peaks cp"
-        "   WHERE cp.run_id = r.run_id AND cp.metric = ?{el})",
+        "   WHERE cp.run_id = r.run_id AND cp.joker_key = ?{el})",
         "(SELECT MAX(cp.ambient_ord) FROM joker_counter_peaks cp"
-        "   WHERE cp.run_id = r.run_id AND cp.metric = ?{el})",
+        "   WHERE cp.run_id = r.run_id AND cp.joker_key = ?{el})",
         " AND cp.endless = ?"),
 }
 
@@ -309,16 +309,16 @@ def api_metrics(db, q):
     # Counter jokers live in their own table and carry a metric name rather
     # than a joker key, so they are listed apart with the key to draw.
     counters = rows(db, f"""
-        SELECT DISTINCT cp.metric m FROM joker_counter_peaks cp
+        SELECT DISTINCT cp.joker_key k FROM joker_counter_peaks cp
           JOIN runs r USING (run_id)
-         WHERE cp.contributed_value IS NOT NULL{w} ORDER BY m""", p)
+         WHERE cp.contributed_value IS NOT NULL{w} ORDER BY k""", p)
     return {"jokers": [j["k"] for j in jokers], "hands": [h["k"] for h in hands],
-            "counters": [{"metric": c["m"],
-                          "key": ingester.COUNTER_JOKERS[c["m"]][0],
+            "counters": [{"key": c["k"],
+                          "metric": ingester.COUNTER_JOKERS[c["k"]][0],
                           # What it contributes, so a reader can colour it
                           # the way the game does -- blue chips, red mult.
-                          "field": ingester.COUNTER_JOKERS[c["m"]][1]}
-                         for c in counters if c["m"] in ingester.COUNTER_JOKERS]}
+                          "field": ingester.COUNTER_JOKERS[c["k"]][1]}
+                         for c in counters if c["k"] in ingester.COUNTER_JOKERS]}
 
 
 def api_runs(db, q):
@@ -592,17 +592,15 @@ def api_jokers(db, q):
 # Display names for the counter jokers. The mechanical part -- key, field
 # and per-unit rate -- comes from ingest, which needs it to turn a counter
 # into a score, so the two cannot drift.
+# How to say each one, keyed the same way the ingester keys them: by joker.
+# Two of these read the same counter, so the counter cannot be the key.
 COUNTER_LABEL = {
-    "hand_plays":  ("Supernova",      "plays of this hand"),
-    "skips":       ("Throwback",      "blinds skipped"),
-    "tarots":      ("Fortune Teller", "tarots used"),
-    "stone_cards": ("Stone Joker",    "stone cards in deck"),
-    "dollars":     ("Bull",           "dollars held"),
-}
-COUNTER_JOKERS = {
-    m: (ingester.COUNTER_JOKERS[m][0], name, what,
-        ingester.COUNTER_JOKERS[m][1], ingester.COUNTER_JOKERS[m][2])
-    for m, (name, what) in COUNTER_LABEL.items()
+    "j_supernova":      ("Supernova",      "plays of this hand"),
+    "j_throwback":      ("Throwback",      "blinds skipped"),
+    "j_fortune_teller": ("Fortune Teller", "tarots used"),
+    "j_stone":          ("Stone Joker",    "stone cards in deck"),
+    "j_bull":           ("Bull",           "dollars held"),
+    "j_bootstraps":     ("Bootstraps",     "dollars held"),
 }
 
 
@@ -630,15 +628,16 @@ def api_derived(db, q):
             continue
         for r in rows(db, f"""
                 WITH ranked AS (
-                  SELECT cp.metric, cp.{col} value, cp.{col}_value contribution,
+                  SELECT cp.joker_key, cp.{col} value, cp.{col}_value contribution,
                          r.run_id, r.deck_name, r.deck_key, r.stake_key,
-                         ROW_NUMBER() OVER (PARTITION BY cp.metric
-                                            ORDER BY cp.{col} DESC) rn
+                         ROW_NUMBER() OVER (PARTITION BY cp.joker_key
+                                            ORDER BY cp.{col}_value DESC) rn
                     FROM joker_counter_peaks cp JOIN runs r USING (run_id)
                    WHERE cp.{col} IS NOT NULL{w})
                 SELECT * FROM ranked WHERE rn = 1 AND value > 0""", p):
-            key, name, what, field, rate = COUNTER_JOKERS.get(
-                r["metric"], (None, r["metric"], "", "chips", 1))
+            key = r["joker_key"]
+            name, what = COUNTER_LABEL.get(key, (key, ""))
+            field = ingester.COUNTER_JOKERS.get(key, (None, "chips"))[1]
             counter = r["value"]
             # Converted once, in the ingester. Three call sites used to do
             # this arithmetic and two of them render side by side.
@@ -871,11 +870,13 @@ CHASE = {
                     WHERE is_reset = 0 AND to_ord IS NOT NULL
                       AND key NOT IN {decaying} AND run_id {op} ?{scope})
         SELECT k, o, t FROM r WHERE rn = 1""",
+    # Per joker, not per counter: Bull and Bootstraps read the same money
+    # and are worth different things for it.
     "counter": """
-        SELECT metric k, MAX(ambient_ord) o, MAX(ambient_value) t
+        SELECT joker_key k, MAX(ambient_ord) o, MAX(ambient_value) t
           FROM joker_counter_peaks
          WHERE ambient_value IS NOT NULL AND run_id {op} ?{scope}
-         GROUP BY metric""",
+         GROUP BY joker_key""",
 }
 
 
@@ -924,11 +925,9 @@ def chase_tables(db, rid, stake_key):
 
 def chase_entry(kind, subject, cur, rec, at_stake, stake_key):
     """One comparison, against the corpus and against this stake."""
-    # A counter joker is filed under its metric; the art and the name people
-    # know it by belong to the joker.
-    art = (ingester.COUNTER_JOKERS[subject][0]
-           if kind == "counter" and subject in ingester.COUNTER_JOKERS
-           else subject)
+    # Counter jokers are filed under their own key now, so the subject IS
+    # the art for every kind.
+    art = subject
     pct = _progress(cur, rec) if (cur and rec) else (1.0 if cur else 0.0)
     return {
         "kind": kind, "subject": subject, "key": art,
@@ -1030,15 +1029,16 @@ def api_live(db, q):
     # A joker that has never scaled anywhere -- Riff-Raff, Faceless, Raised
     # Fist -- has no record to show and drops out, which is the same test
     # that keeps jokers carrying no number at all off the list.
-    by_key = {v[0]: m for m, v in ingester.COUNTER_JOKERS.items()}
     holding, seen = [], set()
     for j in board:
         key = j.get("key")
         if not key or key in seen or key in ingester.DECAYING:
             continue
         seen.add(key)
-        kind = "counter" if key in by_key else "joker"
-        subject = by_key.get(key, key)
+        # A counter joker is filed under its own key now, so the subject
+        # is the same either way; only which table to read differs.
+        kind = "counter" if key in ingester.COUNTER_JOKERS else "joker"
+        subject = key
         mine, rest, at = tables[kind]
         cur, rec = mine.get(subject), rest.get(subject)
         if cur is None and rec is None:
@@ -1192,12 +1192,9 @@ def attach_scaling(db, rid, jokers):
     # still shows what it reached.
     # A counter joker stores nothing, so its value has to be read off the
     # counter it watches and converted into what it actually contributes --
-    # Bull holds no number at all, it reads your money and adds 2 chips per
-    # dollar. Without this it was the one joker on the board with a blank
-    # under it.
-    by_key = {key: (metric, spec[3], spec[4])
-              for metric, spec in COUNTER_JOKERS.items()
-              for key in (spec[0],) if key}
+    # Bull holds no number at all -- it reads your money and adds 2 chips a
+    # dollar -- and Bootstraps reads the same money for 2 mult per five.
+    # Without this they are the jokers on the board with a blank under them.
 
     cur, i = {}, 0
     cnt, ci = {}, 0
@@ -1212,11 +1209,11 @@ def attach_scaling(db, rid, jokers):
             ci += 1
         for j in jokers[key]:
             scale = cur.get(j["card_id"])
-            if scale is None and j["key"] in by_key:
-                metric, field, rate = by_key[j["key"]]
-                c = cnt.get(metric)
+            spec = ingester.COUNTER_JOKERS.get(j["key"])
+            if scale is None and spec is not None:
+                c = cnt.get(spec[0])          # spec[0] is the counter it reads
                 if c is not None:
-                    field, v = ingester.counter_value(metric, c)
+                    field, v = ingester.counter_value(j["key"], c)
                     scale = {"field": field, "value": v, "ord": ord_of(v)}
             j["scale"] = scale
 

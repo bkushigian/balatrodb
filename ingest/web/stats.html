@@ -540,8 +540,10 @@ async function drawJoker() {
     $("#jokernote").textContent = "";
     return;
   }
-  const key = counter ? (COUNTER_KEY[spec[1]] || "") : spec[1];
-  const field = counter ? (COUNTER_FIELD[spec[1]] || "chips") : null;
+  // A counter joker is keyed by the joker now, same as a scaling one, so
+  // the subject is the art either way.
+  const key = spec[1];
+  const field = counter ? (COUNTER_FIELD[key] || "chips") : null;
   const color = field === "mult" || field === "x_mult"
     ? "var(--mult)" : "var(--chips)";
   const metric = counter
@@ -650,15 +652,14 @@ async function drawRuns() {
 
 // ── wiring ───────────────────────────────────────────────────────────────
 let METRICS = null;
-const COUNTER_KEY = {};      // metric -> joker key, for art and names
-const COUNTER_FIELD = {};    // metric -> what it contributes
+const COUNTER_FIELD = {};    // joker key -> what it contributes
 
 function buildJokerPicker() {
   if (!METRICS) return;
   const opts = METRICS.jokers.map(k => ({
     k: "joker:" + k, n: nameOf(k), art: sprite(k, "j", 30),
   })).concat((METRICS.counters || []).map(c => ({
-    k: "counter:" + c.metric, n: nameOf(c.key), art: sprite(c.key, "j", 30),
+    k: "counter:" + c.key, n: nameOf(c.key), art: sprite(c.key, "j", 30),
   }))).sort((a, b) => a.n.localeCompare(b.n));
   buildPicker("m_joker", "joker", opts, "j", 30, "Pick a joker", () => {
     syncHash();
@@ -803,8 +804,7 @@ Promise.all([
 ]).then(([meta, m]) => {
   METRICS = m;
   for (const c of m.counters || []) {
-    COUNTER_KEY[c.metric] = c.key;
-    COUNTER_FIELD[c.metric] = c.field;
+    COUNTER_FIELD[c.key] = c.field;
   }
   buildPicker("deck", "deck", meta.decks, "b", 48, "All decks");
   buildPicker("stake", "stake",
