@@ -511,6 +511,18 @@ tr.detail > td { padding: 0; border-top: 0; }
 .nav a[aria-current="page"] { --fill: var(--filter); color: #2a1a00; }
 .nav a:hover { color: var(--ink); }
 
+/* Tabs pick the view; the filter bar above them applies to all three. */
+.tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+.view { display: grid; gap: 16px; align-content: start; }
+/* `display` on an element beats the `hidden` attribute, so the inactive
+   views kept showing their panel headings above an empty box. */
+.view[hidden] { display: none; }
+
+/* The bars stop where the plotted area of the charts below stops, so the
+   two halves of a page read as the same width rather than the bars running
+   on past every graph. */
+.pbars, .axisrow { max-width: 1080px; }
+
 .chartgrid { display: grid; gap: 16px;
              /* Stacked, not side by side. Three charts across left each one a
                 short track and a crowded axis; full width gives the bars

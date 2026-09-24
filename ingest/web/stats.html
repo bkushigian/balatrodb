@@ -38,60 +38,74 @@
       </span></span>
   </section>
 
-  <!-- Poker hands: three questions about the same twelve rows, so they
-       share an order (the game's own, strongest first) and differ only in
-       what the bar measures. -->
-  <section class="panel">
-    <h2>Poker hands</h2>
-    <div class="note" style="color:var(--ink-mute);font-size:15px;margin:2px 0 12px">
-      Your best, per hand type, across every run in the slice.
-      The <a href="/">dashboard</a> lists the same figures as sortable tables.
-    </div>
-    <div class="chartgrid">
-      <div class="chart" id="c_level"></div>
-      <div class="chart" id="c_score"></div>
-      <div class="chart" id="c_played"></div>
-    </div>
-  </section>
+  <!-- Three views of the same slice. The filters above apply to all of
+       them; the tabs only choose which is on screen. -->
+  <div class="tabs" id="tabs" role="tablist" aria-label="Which view">
+    <button class="seg pixel-pill" data-t="stats" aria-pressed="true">Stats</button>
+    <button class="seg pixel-pill" data-t="hands" aria-pressed="false">Hands</button>
+    <button class="seg pixel-pill" data-t="jokers" aria-pressed="false">Jokers</button>
+  </div>
 
-  <!-- One joker, run by run. The picker writes state.metric, exactly as the
-       dashboard's does, so the server answers with the same subquery. -->
-  <section class="panel">
-    <h2>A joker, run by run</h2>
-    <div class="runsort">
-      <label>Joker</label><span class="pick" id="m_joker"></span>
-      <span class="muted" id="jokernote"></span>
-    </div>
-    <div class="chart" id="c_joker"></div>
-  </section>
+  <!-- ── the macro view ──────────────────────────────────────────────── -->
+  <div class="view" id="v_stats">
+    <section class="panel">
+      <h2>Every run</h2>
+      <div class="note" style="color:var(--ink-mute);font-size:15px;margin:2px 0 12px">
+        Four separate charts, never two scales on one axis — the numbers
+        have nothing to do with each other.
+      </div>
+      <div class="stackcharts">
+        <div class="chart" id="c_best"></div>
+        <div class="chart" id="c_money"></div>
+        <div class="chart" id="c_played"></div>
+        <div class="chart" id="c_ante"></div>
+      </div>
+    </section>
 
-  <!-- One hand's three measures. They share an x axis and nothing else, so
-       they are three stacked charts rather than two scales on one. -->
-  <section class="panel">
-    <h2>A hand, run by run</h2>
-    <div class="runsort">
-      <label>Hand</label><span class="pick" id="m_hand"></span>
-      <span class="muted" id="handnote"></span>
-    </div>
-    <div class="stackcharts">
-      <div class="chart" id="c_hand_level"></div>
-      <div class="chart" id="c_hand_score"></div>
-      <div class="chart" id="c_hand_played"></div>
-    </div>
-  </section>
+    <!-- Three questions about the same twelve rows, so they share an order
+         (the game's own, strongest first) and differ only in what the bar
+         measures. -->
+    <section class="panel">
+      <h2>Poker hands</h2>
+      <div class="note" style="color:var(--ink-mute);font-size:15px;margin:2px 0 12px">
+        Your best, per hand type, across every run in the slice.
+        The <a href="/">dashboard</a> lists the same figures as sortable tables.
+      </div>
+      <div class="stackcharts">
+        <div class="chart" id="c_level"></div>
+        <div class="chart" id="c_score"></div>
+        <div class="chart" id="c_plays"></div>
+      </div>
+    </section>
+  </div>
 
-  <section class="panel">
-    <h2>Every run</h2>
-    <div class="note" style="color:var(--ink-mute);font-size:15px;margin:2px 0 12px">
-      Three separate charts, never two scales on one axis — the numbers
-      have nothing to do with each other.
-    </div>
-    <div class="chartgrid">
-      <div class="chart" id="c_ante"></div>
-      <div class="chart" id="c_best"></div>
-      <div class="chart" id="c_money"></div>
-    </div>
-  </section>
+  <!-- ── one hand, run by run ────────────────────────────────────────── -->
+  <div class="view" id="v_hands" hidden>
+    <section class="panel">
+      <h2>A hand, run by run</h2>
+      <div class="runsort">
+        <label>Hand</label><span class="pick" id="m_hand"></span>
+        <span class="muted" id="handnote"></span>
+      </div>
+      <div class="stackcharts">
+        <div class="chart" id="c_hand_level"></div>
+        <div class="chart" id="c_hand_score"></div>
+        <div class="chart" id="c_hand_played"></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ── one joker, run by run ───────────────────────────────────────── -->
+  <div class="view" id="v_jokers" hidden>
+    <section class="panel">
+      <h2>A joker, run by run</h2>
+      <div class="runsort">
+        <label>Joker</label><span class="pick" id="m_joker"></span>
+        <span class="muted" id="jokernote"></span>
+      </div>
+      <div class="chart" id="c_joker"></div>
+    </section>
+  </div>
 </main>
 
 <div id="tip" role="tooltip" hidden></div>
@@ -337,11 +351,11 @@ function seriesChart(host, title, note, series, opts) {
       <line class="axis" x1="${l}" y1="${t + ih}" x2="${w - r}" y2="${t + ih}"/>
       ${body}${xlab}
     </svg></div>
-    <div class="legend">${live.length > 1 ? live.map(sr =>
+    ${o.legend === false ? "" : `<div class="legend">${live.length > 1 ? live.map(sr =>
       `<span>${sr.icon || `<i style="background:${sr.color}"></i>`}${
         esc(sr.label)}</span>`).join("") : ""}
       <span><i style="background:var(--ink-dim)"></i>the record, as it stood</span>
-    </div>`;
+    </div>`}`;
   PTS[host.id] = pts;
 }
 
@@ -390,7 +404,7 @@ function drawHands(levels, counts, best) {
                              sub: "lvl " + h.level })),
     { color: "var(--chips)" });
 
-  barChart($("#c_played"), "Hands played", "How often you actually play it.",
+  barChart($("#c_plays"), "Hands played", "How often you actually play it.",
     counts.slice().sort(byStrength).map(h =>
       Object.assign(mk(h), { v: h.played, txt: fmt(h.played) })),
     { color: "var(--money)" });
@@ -518,7 +532,8 @@ async function drawHand() {
       }));
     seriesChart($("#" + id), title, note, [{ pts, color, label: title }],
       Object.assign({ zero: !opts.log, height: 250,
-                      xlabels: i === HAND_VIEWS.length - 1 }, opts));
+                      xlabels: i === HAND_VIEWS.length - 1,
+                      legend: i === HAND_VIEWS.length - 1 }, opts));
   });
 }
 
@@ -531,26 +546,33 @@ function drawRuns(runs) {
       ts: r.started_ts, y: Number(get(r)), txt: fmtv(get(r)), color, title,
       sub: `${r.deck_name || ""} · ${ago(r.started_ts)}`,
     }));
-  const one = (pts, color, label) => [{ pts, color, label }];
-
-  seriesChart($("#c_ante"), "Ante reached",
-    "How far the run got before it ended.",
-    one(mk(r => r.ante, fmt, "var(--green)", "Ante"), "var(--green)", "ante"),
-    { zero: true });
+  // They share the runs and the record line, so the dates and the legend
+  // are said once, under the last chart, rather than four times.
+  const last = "c_ante";
+  const draw = (id, title, note, pts, color, opts) =>
+    seriesChart($("#" + id), title, note, [{ pts, color, label: title }],
+      Object.assign({ height: 250, xlabels: id === last, legend: id === last },
+                    opts));
 
   // Plotted on the ordering key, which IS log10 -- and unlike the score
   // itself it survives values a double cannot hold.
-  seriesChart($("#c_best"), "Best hand", "The run's biggest score. Log scale.",
-    one(asc.filter(r => r.bh_ord !== null && r.bh_ord !== undefined).map(r => ({
+  draw("c_best", "High score", "The biggest hand of each run. Log scale.",
+    asc.filter(r => r.bh_ord !== null && r.bh_ord !== undefined).map(r => ({
       ts: r.started_ts, y: r.bh_ord, txt: fmtScore(r.best_hand),
-      color: "var(--chips)", title: "Best hand",
+      color: "var(--chips)", title: "High score",
       sub: `${r.deck_name || ""} · ${ago(r.started_ts)}`,
-    })), "var(--chips)", "chips"),
-    { log: true });
+    })), "var(--chips)", { log: true });
 
-  seriesChart($("#c_money"), "Peak money", "The most you held at once.",
-    one(mk(r => r.peak_money, v => "$" + fmt(v), "var(--money)", "Peak money"),
-        "var(--money)", "dollars"),
+  draw("c_money", "Peak money", "The most you held at once.",
+    mk(r => r.peak_money, v => "$" + fmt(v), "var(--money)", "Peak money"),
+    "var(--money)", { zero: true });
+
+  draw("c_played", "Hands played", "How many hands the whole run took.",
+    mk(r => r.hands_played, fmt, "var(--purple)", "Hands played"),
+    "var(--purple)", { zero: true });
+
+  draw("c_ante", "Ante reached", "How far the run got before it ended.",
+    mk(r => r.ante, fmt, "var(--green)", "Ante"), "var(--green)",
     { zero: true });
 }
 
@@ -588,6 +610,7 @@ function buildHandPicker() {
 // URL -- and a reload keeps its place instead of emptying the panels.
 function syncHash() {
   const p = new URLSearchParams();
+  if (tab !== "stats") p.set("tab", tab);
   if (sel.joker) p.set("joker", sel.joker);
   if (sel.hand) p.set("hand", sel.hand);
   const h = p.toString() ? "#" + p : "";
@@ -598,18 +621,46 @@ function readHash() {
   const j = p.get("joker") || "";
   if (/^(joker|counter):/.test(j)) sel.joker = j;
   sel.hand = p.get("hand") || "";
+  showTab(p.get("tab") || "stats");
 }
+
+// Which view is on screen. Only its charts are drawn: the hand view alone
+// is three requests, and fetching for panels nobody is looking at made
+// every filter change slower than it needed to be.
+const TABS = ["stats", "hands", "jokers"];
+let tab = "stats";
+
+function showTab(t) {
+  tab = TABS.includes(t) ? t : "stats";
+  for (const id of TABS) $("#v_" + id).hidden = id !== tab;
+  for (const b of $("#tabs").querySelectorAll("button[data-t]")) {
+    b.setAttribute("aria-pressed", b.dataset.t === tab);
+  }
+}
+
+$("#tabs").onclick = e => {
+  const b = e.target.closest("button[data-t]");
+  if (!b || b.dataset.t === tab) return;
+  showTab(b.dataset.t);
+  syncHash();
+  refresh();
+};
 
 async function refresh() {
   try {
-    const [levels, counts, hands, runs] = await Promise.all([
-      get("/api/hand_levels"), get("/api/hand_counts"),
-      get("/api/hands"), get("/api/runs"),
-    ]);
-    drawHands(levels, counts, hands.best || []);
-    drawRuns(runs);
-    await Promise.all([drawJoker(), drawHand()]);
+    const runs = await get("/api/runs");
     $("#sub").textContent = `${runs.length} run${runs.length === 1 ? "" : "s"}`;
+    if (tab === "stats") {
+      const [levels, counts, hands] = await Promise.all([
+        get("/api/hand_levels"), get("/api/hand_counts"), get("/api/hands"),
+      ]);
+      drawHands(levels, counts, hands.best || []);
+      drawRuns(runs);
+    } else if (tab === "hands") {
+      await drawHand();
+    } else {
+      await drawJoker();
+    }
   } catch (ex) {
     $("#sub").textContent = "error: " + ex.message;
   }
