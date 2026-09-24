@@ -461,13 +461,30 @@ CREATE INDEX IF NOT EXISTS run_records_run ON run_records(run_id);
 --
 -- Peak dollars mid-shop is not a Bull score, which is why contributed is
 -- evaluated at plays rather than over the whole series.
+--   unheld:      the highest it reached while the joker was NOT in your
+--                hands. `ambient` is the maximum of this and `contributed`,
+--                which is what makes it a maximum and not a synonym.
+--
+-- Keyed by JOKER, not by counter. One counter can feed several jokers that
+-- read it differently: Bull takes 2 chips a dollar and Bootstraps 2 mult
+-- per five, off the same balance.
 CREATE TABLE IF NOT EXISTS joker_counter_peaks (
   run_id      TEXT NOT NULL,
+  joker_key   TEXT NOT NULL,
   metric      TEXT NOT NULL,
   endless     INTEGER NOT NULL,
   contributed REAL,
   ambient     REAL,
-  PRIMARY KEY (run_id, metric, endless)
+  unheld      REAL,
+  -- And what that joker was worth at each, converted once here.
+  field             TEXT,
+  contributed_value REAL,
+  ambient_value     REAL,
+  unheld_value      REAL,
+  contributed_ord   REAL,
+  ambient_ord       REAL,
+  unheld_ord        REAL,
+  PRIMARY KEY (run_id, joker_key, endless)
 );
 
 CREATE TABLE IF NOT EXISTS money (

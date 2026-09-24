@@ -260,11 +260,11 @@ one endpoint that takes no `endless_col`, so wiring it up as-is would add a
 panel that ignores the phase toggle.
 
 ### Naming drift
-- **`COUNTER_JOKERS` is two different constants** — `ingest.py` is
-  `metric → (key, field, rate)`, `dashboard.py` is
-  `metric → (key, name, what, field, rate)`. Same name, different arity, and
-  the dashboard indexes the other one positionally. Correct today; reads as
-  a typo in six months.
+- ~~**`COUNTER_JOKERS` is two different constants**~~ — **fixed.** There is
+  one, in `ingest.py`, now `joker_key → (metric, field, convert)`; the
+  dashboard keeps only `COUNTER_LABEL` for display names, keyed the same
+  way. Keying by joker was forced by Bootstraps, which reads the same
+  `dollars` counter as Bull.
 - **`joker_derived.held` is a dead column** carrying a six-line comment
   explaining the Fortune Teller problem it was meant to solve. Never
   written, never read; the feature moved to `joker_counter_peaks`. A reader
