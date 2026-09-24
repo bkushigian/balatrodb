@@ -667,9 +667,21 @@ tr.detail > td { padding: 0; border-top: 0; }
   --lip-h: 5px;
   padding: 4px 6px 8px;
 }
+/* The block says what it is. Same shape as the chases' title below it, so
+   the pill reads as two titled sections rather than one anonymous bar. */
+.livetitle {
+  color: var(--ink-dim); font-size: 14px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .09em;
+  padding: 8px 18px 2px; display: flex; align-items: center; gap: 10px;
+}
+.livetitle .seedwrap { margin-left: auto; }
+
+/* Centred rather than spread to both edges: pushed apart across 1500px the
+   run's numbers and its board read as two unrelated groups. */
 .livebar {
-  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
-  padding: 11px 18px 13px; cursor: pointer; border-radius: .35rem;
+  display: flex; align-items: center; justify-content: center;
+  gap: 22px; flex-wrap: wrap;
+  padding: 6px 18px 13px; cursor: pointer; border-radius: .35rem;
 }
 .livebar:hover { background: rgba(255, 255, 255, .05); }
 .livebar:active { transform: translateY(1px); }
@@ -688,7 +700,7 @@ tr.detail > td { padding: 0; border-top: 0; }
 .livebar .lv i { font-style: normal; color: var(--ink-mute); font-size: 13px;
                  text-transform: uppercase; letter-spacing: .06em; }
 .livebar .lboard { display: flex; gap: 9px; align-items: flex-end;
-                   margin-left: auto; flex-wrap: wrap; }
+                   flex-wrap: wrap; }
 
 /* What it is on course to beat. A bar each, because "how far along" is the
    whole point -- a number alone does not say whether you are nearly there. */
@@ -725,6 +737,10 @@ tr.detail > td { padding: 0; border-top: 0; }
    you are meant to press. */
 .chmore { grid-column: 1 / -1; justify-self: start;
           --fill: var(--sunken); --stroke: #10171a;
+          /* Without these the browser's own button chrome paints a
+             rectangle behind the clipped silhouette. Every other pill
+             button on the page resets them; this one had not. */
+          border: 0; background: none; cursor: pointer;
           font: inherit; font-size: 15px; color: var(--ink-dim);
           padding: 8px 15px 10px; }
 .chmore:hover { color: var(--ink); }

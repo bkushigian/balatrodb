@@ -754,9 +754,15 @@ function drawLive(d) {
 
   el.innerHTML = `
    <div class="liverun pixel-pill">
-    <div class="livebar" title="Open this run">
+    <div class="livetitle">
       <span class="chip pixel-pill sm ${phase[0]}${r.fresh ? " beating" : ""}"
         >${phase[1]}</span>
+      <span>Current run</span>
+      ${r.fresh ? "" :
+        `<span class="ago">last played ${esc(ago(r.last_ts))}</span>`}
+      <span class="seedwrap">${seedCell(r)}</span>
+    </div>
+    <div class="livebar" title="Open this run">
       ${deckCell(r)}${stakeCell(r)}
       ${stat(esc(String(d.ante ?? "—")), d.blind ? esc(d.blind) : "ante")}
       ${stat("$" + fmt(d.money), "money")}
@@ -765,9 +771,6 @@ function drawLive(d) {
         ? esc(d.best_hand_name) : "best hand")}
       ${stat(fmt(d.hands_played), "hands")}
       <span class="lboard">${board}</span>
-      ${r.fresh ? "" :
-        `<span class="ago">last played ${esc(ago(r.last_ts))}</span>`}
-      ${seedCell(r)}
     </div>
     ${chases ? `<div class="chases">
        <div class="chtitle">On course to beat</div>${chases}${more}</div>` : ""}
