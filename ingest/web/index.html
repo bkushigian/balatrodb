@@ -692,8 +692,8 @@ function chaseItem(c) {
   const pct = Math.max(0, Math.min(1, c.pct));
   const ahead = c.pct >= 1;
   const head = c.first
-    ? `<span class="flag first">FIRST EVER</span>`
-    : ahead ? `<span class="flag">AHEAD</span>`
+    ? `<span class="flag first">First ever</span>`
+    : ahead ? `<span class="flag">New record!</span>`
             : `<span class="pc">${Math.round(c.pct * 100)}%</span>`;
   const foot = c.first
     ? `<span class="of">nothing to beat</span>`
@@ -724,6 +724,11 @@ const LIVE_PHASE = {
   over:    ["other",   "LAST RUN"],
 };
 
+// The panel redraws on every poll, so "I opened the list" has to live
+// outside it or the list would shut again every three seconds.
+const CHASES_SHOWN = 6;
+let chasesOpen = false;
+
 function drawLive(d) {
   const el = $("#live");
   if (!d || !d.run) { el.hidden = true; return; }
@@ -738,17 +743,24 @@ function drawLive(d) {
        ${sprite(j.key, "j", 38) || esc(nameOf(j.key))}${scaleTag(j.scale)}</span>`
   ).join("") || `<span class="muted">no jokers yet</span>`;
 
-  const chases = (d.chasing || []).map(chaseItem).join("");
-  const more = d.chasing_n > (d.chasing || []).length
-    ? `<div class="chmore">+${d.chasing_n - d.chasing.length} more within reach</div>` : "";
+  const all = d.chasing || [];
+  const shown = chasesOpen ? all : all.slice(0, CHASES_SHOWN);
+  const chases = shown.map(chaseItem).join("");
+  const hidden = all.length - shown.length;
+  const more = (hidden > 0 || chasesOpen)
+    ? `<button class="chmore pixel-pill" id="chtoggle" aria-expanded="${chasesOpen}"
+        >${chasesOpen ? "Show fewer"
+                      : `+${hidden} more within reach`}</button>` : "";
 
   el.innerHTML = `
-    <div class="livebar pixel-pill" title="Open this run">
+   <div class="liverun pixel-pill">
+    <div class="livebar" title="Open this run">
       <span class="chip pixel-pill sm ${phase[0]}${r.fresh ? " beating" : ""}"
         >${phase[1]}</span>
       ${deckCell(r)}${stakeCell(r)}
       ${stat(esc(String(d.ante ?? "—")), d.blind ? esc(d.blind) : "ante")}
       ${stat("$" + fmt(d.money), "money")}
+      ${stat("$" + fmt(d.spent), "spent")}
       ${stat(fmtScore(d.best_hand), d.best_hand_name
         ? esc(d.best_hand_name) : "best hand")}
       ${stat(fmt(d.hands_played), "hands")}
@@ -758,11 +770,20 @@ function drawLive(d) {
       ${seedCell(r)}
     </div>
     ${chases ? `<div class="chases">
-       <div class="chtitle">On course to beat</div>${chases}${more}</div>` : ""}`;
+       <div class="chtitle">On course to beat</div>${chases}${more}</div>` : ""}
+   </div>`;
   el.querySelectorAll("button.seed").forEach(b => {
     b.onclick = ev => { ev.stopPropagation(); copySeed(b, b.dataset.seed); };
   });
   el.querySelector(".livebar").onclick = () => openRun(r.run_id);
+  const tog = el.querySelector("#chtoggle");
+  if (tog) {
+    tog.onclick = ev => {
+      ev.stopPropagation();
+      chasesOpen = !chasesOpen;
+      drawLive(d);                      // same payload, redrawn open
+    };
+  }
 }
 
 // ── wiring ───────────────────────────────────────────────────────────────

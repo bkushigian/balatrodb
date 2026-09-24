@@ -804,7 +804,10 @@ def api_run(db, q):
 
 # How far along counts as worth mentioning. Below this it is not news.
 CHASE_AT = 0.5
-CHASE_SHOWN = 8
+# All of them are returned -- the page shows a few and expands the rest, so
+# cutting the list here would leave it with nothing to expand. The cap is
+# only a ceiling on an absurd answer.
+CHASE_MAX = 60
 
 # Past this, the last thing you played stops being "the run you are in the
 # middle of" and the panel goes away rather than going stale on screen.
@@ -944,6 +947,15 @@ def api_live(db, q):
 
     money = db.execute("""SELECT balance FROM money WHERE run_id = ?
                            ORDER BY seg DESC, n DESC LIMIT 1""", (rid,)).fetchone()
+    # What went out and what came in. `delta` is read straight off the
+    # argument to ease_dollars, so it is exact even where `before` is not
+    # (see open-findings: five call sites apply their change synchronously).
+    # Everything negative counts as spent, including what a blind took off
+    # you -- it left your hands either way.
+    flow = db.execute("""
+        SELECT COALESCE(SUM(CASE WHEN delta < 0 THEN -delta END), 0) spent,
+               COALESCE(SUM(CASE WHEN delta > 0 THEN delta END), 0) earned
+          FROM money WHERE run_id = ?""", (rid,)).fetchone()
     best = db.execute("""SELECT hand, score_txt, score_ord FROM hands
                           WHERE run_id = ? AND score_ord IS NOT NULL
                           ORDER BY score_ord DESC LIMIT 1""", (rid,)).fetchone()
@@ -982,6 +994,8 @@ def api_live(db, q):
         "run": run,
         "board": board,
         "money": money["balance"] if money else None,
+        "spent": flow["spent"],
+        "earned": flow["earned"],
         "best_hand": best["score_txt"] if best else None,
         "best_hand_name": best["hand"] if best else None,
         "hands_played": db.execute(
@@ -990,7 +1004,7 @@ def api_live(db, q):
         "round": where_now["round_seq"] if where_now else None,
         "blind": where_now["blind_name"] if where_now else None,
         "is_boss": where_now["is_boss"] if where_now else None,
-        "chasing": chasing[:CHASE_SHOWN],
+        "chasing": chasing[:CHASE_MAX],
         "chasing_n": len(chasing),
     }
 
