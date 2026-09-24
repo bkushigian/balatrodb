@@ -713,12 +713,24 @@ function chaseItem(c) {
 
 const livePreview = () => new URLSearchParams(location.search).get("live") || "";
 
+// What the run is doing, in the game's own colours: green while it is being
+// played, purple once it is past the win ante, gold for a win that stopped
+// there, grey for one left at the menu.
+const LIVE_PHASE = {
+  live:    ["live",    "LIVE"],
+  endless: ["endless", "ENDLESS"],
+  won:     ["win",     "WON"],
+  paused:  ["susp",    "PAUSED"],
+  over:    ["other",   "LAST RUN"],
+};
+
 function drawLive(d) {
   const el = $("#live");
   if (!d || !d.run) { el.hidden = true; return; }
   el.hidden = false;
   const r = d.run;
   const stat = (v, k) => `<span class="lv"><b>${v}</b><i>${esc(k)}</i></span>`;
+  const phase = LIVE_PHASE[r.phase] || LIVE_PHASE.live;
 
   // The board as it stands, with whatever each joker is accumulating.
   const board = (d.board || []).map(j =>
@@ -732,8 +744,8 @@ function drawLive(d) {
 
   el.innerHTML = `
     <div class="livebar pixel-pill" title="Open this run">
-      <span class="chip pixel-pill sm live">${
-        r.result === "suspended" ? "PAUSED" : "LIVE"}</span>
+      <span class="chip pixel-pill sm ${phase[0]}${r.fresh ? " beating" : ""}"
+        >${phase[1]}</span>
       ${deckCell(r)}${stakeCell(r)}
       ${stat(esc(String(d.ante ?? "—")), d.blind ? esc(d.blind) : "ante")}
       ${stat("$" + fmt(d.money), "money")}
@@ -741,6 +753,8 @@ function drawLive(d) {
         ? esc(d.best_hand_name) : "best hand")}
       ${stat(fmt(d.hands_played), "hands")}
       <span class="lboard">${board}</span>
+      ${r.fresh ? "" :
+        `<span class="ago">last played ${esc(ago(r.last_ts))}</span>`}
       ${seedCell(r)}
     </div>
     ${chases ? `<div class="chases">

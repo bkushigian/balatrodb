@@ -786,9 +786,16 @@ def api_run(db, q):
 
 
 # ─── the run in progress ──────────────────────────────────────────────────
-# A run is still in play while it has no terminal result: either the log has
-# no run.end yet (you are playing, or the game crashed) or it ended in
-# `suspended`, which is a run you can still Continue from the menu.
+# Which run you are in the middle of is a question about the LOG, not about
+# the run's recorded status. Status gets it wrong both ways:
+#
+#   * a run that won and continued past the win ante is `completed` with a
+#     terminal result, and is still being played;
+#   * a `suspended` run you quit and never went back to is not.
+#
+# So the current run is whichever log was written last, and its status only
+# decides what the badge says. A `died` run is genuinely over, so the panel
+# hides rather than announcing a corpse as live.
 #
 # Records here are compared against EVERY other run rather than against the
 # filtered slice. "The record you are chasing" is a fact about the whole
@@ -798,6 +805,27 @@ def api_run(db, q):
 # How far along counts as worth mentioning. Below this it is not news.
 CHASE_AT = 0.5
 CHASE_SHOWN = 8
+
+# Past this, the last thing you played stops being "the run you are in the
+# middle of" and the panel goes away rather than going stale on screen.
+LIVE_STALE = 6 * 3600
+# And past this it is no longer live, just recent -- the badge stops
+# pulsing and says when it was last played.
+LIVE_FRESH = 15 * 60
+
+# Set from --logs at startup; the run rows carry a bare filename.
+LOGS = ingester.DEFAULT_LOGS
+
+
+def log_mtime(name):
+    """When that run's log was last appended to -- the only wall clock there
+    is, since the timestamps inside a log are relative to each segment."""
+    for cand in (os.path.join(LOGS, name), name):
+        try:
+            return os.path.getmtime(cand)
+        except OSError:
+            continue
+    return None
 
 
 def _best_per(db, sql, params):
@@ -870,24 +898,38 @@ def api_live(db, q):
     if q.get("id"):
         run = db.execute("SELECT * FROM runs WHERE run_id = ?",
                          (q["id"],)).fetchone()
+        run = dict(run) if run else None
+        if run:
+            run["last_ts"] = log_mtime(run["log_file"])
     else:
-        run = db.execute("""SELECT * FROM runs
-                             WHERE terminal IS NOT 1
-                             ORDER BY started_ts DESC LIMIT 1""").fetchone()
+        # The newest log wins. Only the last few are worth stat-ing.
+        run = None
+        for cand in db.execute("""SELECT * FROM runs
+                                   ORDER BY started_ts DESC LIMIT 12"""):
+            at = log_mtime(cand["log_file"])
+            if at is None:
+                continue
+            if run is None or at > run["last_ts"]:
+                run = dict(cand)
+                run["last_ts"] = at
+        if run is not None:
+            age = time.time() - run["last_ts"]
+            # A run that ended in a death is over, whatever else is true of
+            # it; and nothing here is "current" once it has gone cold.
+            if age > LIVE_STALE or run["result"] == "died":
+                run = None
     if not run:
         return {"run": None}
-    run = dict(run)
     rid = run["run_id"]
 
-    # When the run was last played. The log's own timestamps are relative to
-    # each segment, so the file's mtime is the only wall clock there is.
-    try:
-        run["last_ts"] = os.path.getmtime(os.path.join(HERE, run["log_file"]))
-    except OSError:
-        try:
-            run["last_ts"] = os.path.getmtime(run["log_file"])
-        except OSError:
-            run["last_ts"] = None
+    # What the badge says. A won run that carried on past the win ante is
+    # the case the old status test got wrong, so it gets its own word.
+    age = time.time() - (run["last_ts"] or 0)
+    run["fresh"] = age <= LIVE_FRESH
+    run["phase"] = ("live" if run["result"] is None
+                    else "paused" if run["result"] == "suspended"
+                    else "endless" if run["went_endless"]
+                    else "won" if run["won"] else "over")
 
     # The board as it stands: the most recent sample of this run's jokers.
     at = db.execute("""SELECT seg, n FROM joker_state WHERE run_id = ?
@@ -1223,6 +1265,7 @@ def main():
 
     Handler.db = connect()
     Handler.logs = a.logs
+    globals()['LOGS'] = a.logs
     sync(Handler.db, a.logs)
     threading.Thread(target=watch, args=(Handler.db, a.logs),
                      daemon=True).start()

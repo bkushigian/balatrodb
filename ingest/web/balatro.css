@@ -667,12 +667,15 @@ tr.detail > td { padding: 0; border-top: 0; }
 .livebar:hover { --fill: #31423e; }
 .livebar:active { transform: translateY(2px); --lip-h: 3px; }
 .livebar .chip.live { --fill: var(--green); color: #12211d; }
-/* A slow pulse, so "still going" is visible without anything moving. */
+/* A slow pulse, so "still going" is visible without anything moving. Only
+   while the log is actually being written -- a badge that keeps beating
+   over a run finished hours ago is a lie. */
 @keyframes livepulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
-.livebar .chip.live { animation: livepulse 2.4s ease-in-out infinite; }
+.livebar .chip.beating { animation: livepulse 2.4s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) {
-  .livebar .chip.live { animation: none; }
+  .livebar .chip.beating { animation: none; }
 }
+.livebar .ago { color: var(--ink-mute); font-size: 14px; }
 .livebar .lv { display: flex; flex-direction: column; line-height: 1.15; }
 .livebar .lv b { font-size: 25px; font-weight: 700; }
 .livebar .lv i { font-style: normal; color: var(--ink-mute); font-size: 13px;
