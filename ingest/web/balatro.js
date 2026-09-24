@@ -229,6 +229,39 @@ const nameOf = (key, fallback) =>
   (SPR && SPR.names && SPR.names[key]) || fallback ||
   (key || "").replace(/^(j|b|m|c)_/, "").replace(/_/g, " ");
 
+// ── the summary tiles ──────────────────────────────────────
+// Both pages open on the same six numbers, off the same /api/summary. The
+// list lives here so adding a tile, or changing what one says, is one edit
+// rather than two that have to be kept in step.
+//
+// Each row is [label, value, sub-label, tone]. The tone is the colour the
+// game would use for that quantity: scores in mult red, money in gold,
+// counts in purple.
+const summaryTiles = s => [
+  ["Best hand", fmtScore(s.best_hand), esc(s.best_hand_name || ""), "mult"],
+  ["Most money", s.max_money !== null ? "$" + fmt(s.max_money) : "—",
+   "peak balance", "money"],
+  ["Furthest ante", fmt(s.max_ante), "", "gold"],
+  ["Biggest cash-out", s.max_cashout !== null ? "$" + fmt(s.max_cashout) : "—",
+   "one round", "money"],
+  ["Largest deck", fmt(s.max_deck), "cards", "chips"],
+  ["Runs", fmt(s.runs), `${s.won} won`, "purple"],
+];
+
+// Renders them into `el`. The values are already formatted and escaped by
+// the list above; the labels are literals.
+function drawSummary(el, s) {
+  if (!el) return;
+  el.innerHTML = summaryTiles(s).map(([k, v, n, c]) =>
+    `<div class="tile"><div class="k">${k}</div><div class="v ${c}">${v}</div>
+     <div class="n">${n}</div></div>`).join("");
+}
+
+// The one-line version under the title, which both pages also share.
+const summaryLine = s =>
+  `${s.runs} runs · ${s.won} won` +
+  (s.win_pct !== null ? ` · ${s.win_pct}% win rate` : "");
+
 // ── talking to the API ──────────────────────────────────────────────────
 
 const qs = () => {

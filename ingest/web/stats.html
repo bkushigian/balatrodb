@@ -48,6 +48,8 @@
 
   <!-- ── the macro view ──────────────────────────────────────────────── -->
   <div class="view" id="v_stats">
+    <section class="tiles" id="tiles" aria-label="Records"></section>
+
     <section class="panel">
       <h2>Every run</h2>
       <div class="note" style="color:var(--ink-mute);font-size:15px;margin:2px 0 12px">
@@ -649,11 +651,16 @@ $("#tabs").onclick = e => {
 async function refresh() {
   try {
     const runs = await get("/api/runs");
+    // The stats tab replaces this with the fuller summary line below.
     $("#sub").textContent = `${runs.length} run${runs.length === 1 ? "" : "s"}`;
     if (tab === "stats") {
-      const [levels, counts, hands] = await Promise.all([
-        get("/api/hand_levels"), get("/api/hand_counts"), get("/api/hands"),
+      const [summary, levels, counts, hands] = await Promise.all([
+        get("/api/summary"), get("/api/hand_levels"),
+        get("/api/hand_counts"), get("/api/hands"),
       ]);
+      // Same six tiles as the dashboard, from the same definition.
+      drawSummary($("#tiles"), summary);
+      $("#sub").textContent = summaryLine(summary);
       drawHands(levels, counts, hands.best || []);
       drawRuns(runs);
     } else if (tab === "hands") {
