@@ -315,7 +315,8 @@ function seriesChart(host, title, note, series, opts) {
     if (stair.length) {
       stair.push([X(stamps[stamps.length - 1]), Y(run)]);
       body += `<path class="best${sr.dim ? " faint" : ""}" d="M${stair.map(q =>
-        q.map(n => n.toFixed(1)).join(",")).join("L")}"/>`;
+        q.map(n => n.toFixed(1)).join(",")).join("L")}"${
+        sr.ring ? ` style="stroke:${sr.ring};opacity:.5"` : ""}/>`;
       if (live.length > 1) labels.push({ y: Y(run), sr });
     }
     for (const p of sr.pts) {
@@ -323,7 +324,8 @@ function seriesChart(host, title, note, series, opts) {
       const x = X(p.ts), y = Y(p.y);
       body += dot(x, y, sr.dim ? 4 : 7,
         "dot" + (sr.dim ? " amb" : p.rec ? " rec" : ""),
-        ` fill="${sr.dim ? "none" : sr.color}" data-pt="${i}"`) +
+        ` fill="${sr.dim ? "none" : sr.color}"${
+          sr.ring ? ` style="stroke:${sr.ring}"` : ""} data-pt="${i}"`) +
         // A hit target bigger than the mark, per the interaction spec.
         `<circle class="hit" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="14"
           data-pt="${i}"/>`;
@@ -337,7 +339,7 @@ function seriesChart(host, title, note, series, opts) {
   }
   body += labels.map(m =>
     `<text class="dlab" x="${w - r + 10}" y="${(m.y + 5).toFixed(1)}"
-       style="fill:${m.sr.dim ? "var(--ink-mute)" : m.sr.color}"
+       style="fill:${m.sr.ring || (m.sr.dim ? "var(--ink-mute)" : m.sr.color)}"
        >${esc(m.sr.label)}</text>`).join("");
 
   const xlab = o.xlabels === false ? "" :
@@ -354,8 +356,10 @@ function seriesChart(host, title, note, series, opts) {
       ${body}${xlab}
     </svg></div>
     ${o.legend === false ? "" : `<div class="legend">${live.length > 1 ? live.map(sr =>
-      `<span>${sr.icon || `<i style="background:${sr.color}"></i>`}${
-        esc(sr.label)}</span>`).join("") : ""}
+      `<span>${sr.icon || `<i style="background:${
+        sr.dim ? "transparent" : sr.color};${
+        sr.dim ? `box-shadow:inset 0 0 0 2px ${sr.ring || "var(--ink-dim)"}` : ""
+      }"></i>`}${esc(sr.label)}</span>`).join("") : ""}
       <span><i style="background:var(--ink-dim)"></i>the record, as it stood</span>
     </div>`}`;
   PTS[host.id] = pts;
@@ -418,15 +422,43 @@ function drawHands(levels, counts, best) {
 // stays out of the query string.
 const sel = { joker: "", hand: "" };
 
-// The run list carrying one metric. The filters come from `state`; the
-// metric is whatever the caller is drawing, so several can be fetched for
-// one screen without any of them becoming page state.
-const fetchMetric = m => {
+// The run list carrying one metric, optionally overriding the phase. The
+// filters come from `state`; the metric and the phase are whatever the
+// caller is drawing, so several can be fetched for one screen without any
+// of them becoming page state.
+const fetchRuns = o => {
   const p = new URLSearchParams(qs());
-  p.set("metric", m);
+  if (o && o.metric) p.set("metric", o.metric);
+  if (o && o.endless !== undefined) p.set("endless", o.endless);
   return fetch("/api/runs?" + p).then(r => r.json())
     .then(d => (d && d.error ? Promise.reject(new Error(d.error)) : d));
 };
+const fetchMetric = m => fetchRuns({ metric: m });
+
+// Standard play and endless are two contests, not one measure with a flag.
+// Left on one axis they do not compare: across this corpus the standard
+// best and the endless best sit five and a half orders of magnitude apart,
+// so five endless runs flatten nineteen standard ones into a line along
+// the bottom, and the record staircase only ever tells you about endless.
+//
+// So when the filter bar is showing both -- which for a TABLE means "no
+// filter" -- a chart draws them as two series instead. The run list splits
+// on `went_endless`, so the two groups are disjoint and complete: a run
+// appears in exactly one, and no point is drawn twice.
+async function runGroups(metric) {
+  if (state.endless !== "") {
+    return [{ rows: await fetchRuns({ metric }), label: "", dim: false }];
+  }
+  const [std, end] = await Promise.all([
+    fetchRuns({ metric, endless: 0 }),
+    fetchRuns({ metric, endless: 1 }),
+  ]);
+  // Endless is hollow, not grey: grey is what the joker chart uses for a
+  // record nobody actually set, and endless is a real contest -- it just
+  // is not the same one.
+  return [{ rows: std, label: "standard", dim: false },
+          { rows: end, label: "endless", dim: true, ring: true }];
+}
 
 // A scaling joker's peak is its own number; a counter joker's is what it
 // contributed, in the unit it contributes -- the ingester converts, so both
@@ -478,9 +510,19 @@ async function drawJoker() {
     ];
     note = `Both of its records, in the unit it contributes. Hollow rings are
       what the counter reached with nobody holding it; solid dots are what it
-      actually added while you did.`;
+      actually added while you did.` + (state.endless === ""
+        ? ` Standard and endless are pooled here — this joker already
+            holds two records, and four lines is not a chart. Pick one under
+            <b>Include</b> to separate them.`
+        : "");
   } else {
-    series = [{ pts: mk(await fetchMetric(sel.joker), color), color, label: "peak" }];
+    // A scaling joker has one measure, so its two series are the two
+    // contests -- the same split every other chart on the page uses.
+    const groups = await runGroups(sel.joker);
+    series = groups.map(g => ({
+      pts: mk(g.rows, color), color, dim: g.dim,
+      ring: g.ring ? color : null, label: g.label || "peak",
+    })).filter(sr => sr.pts.length);
     note = "Its highest value in each run.";
   }
 
@@ -519,20 +561,24 @@ async function drawHand() {
   $("#handnote").innerHTML = `${sprite(planetOf(hand), "j", 30)} ${esc(hand)}`;
 
   const got = await Promise.all(
-    HAND_VIEWS.map(v => fetchMetric(`${v[1]}:${hand}`)));
+    HAND_VIEWS.map(v => runGroups(`${v[1]}:${hand}`)));
 
   HAND_VIEWS.forEach(([id, kind, title, color, fmtv, note, opts], i) => {
-    const pts = got[i]
-      .filter(r => r.metric_txt !== null && r.metric_txt !== undefined)
-      .sort((a, b) => a.started_ts - b.started_ts)
-      .map(r => ({
-        // A log chart plots the ordering key; the others plot the value.
-        ts: r.started_ts,
-        y: opts.log ? r.metric_ord : Number(r.metric_txt),
-        txt: fmtv(r.metric_txt), color, title: `${hand} · ${title}`,
-        sub: `${r.deck_name || ""} · ${ago(r.started_ts)}`,
-      }));
-    seriesChart($("#" + id), title, note, [{ pts, color, label: title }],
+    const series = got[i].map(g => ({
+      color, dim: g.dim, ring: g.ring ? color : null, label: g.label || title,
+      pts: g.rows
+        .filter(r => r.metric_txt !== null && r.metric_txt !== undefined)
+        .sort((a, b) => a.started_ts - b.started_ts)
+        .map(r => ({
+          // A log chart plots the ordering key; the others plot the value.
+          ts: r.started_ts,
+          y: opts.log ? r.metric_ord : Number(r.metric_txt),
+          txt: fmtv(r.metric_txt), color,
+          title: `${hand} · ${title}${g.label ? " · " + g.label : ""}`,
+          sub: `${r.deck_name || ""} · ${ago(r.started_ts)}`,
+        })),
+    })).filter(sr => sr.pts.length);
+    seriesChart($("#" + id), title, note, series,
       Object.assign({ zero: !opts.log, height: 250,
                       xlabels: i === HAND_VIEWS.length - 1,
                       legend: i === HAND_VIEWS.length - 1 }, opts));
@@ -540,42 +586,51 @@ async function drawHand() {
 }
 
 // ── every run ────────────────────────────────────────────────────────────
-function drawRuns(runs) {
-  const asc = runs.slice().sort((a, b) => a.started_ts - b.started_ts);
-  const mk = (get, fmtv, color, title) => asc
-    .filter(r => get(r) !== null && get(r) !== undefined)
-    .map(r => ({
-      ts: r.started_ts, y: Number(get(r)), txt: fmtv(get(r)), color, title,
-      sub: `${r.deck_name || ""} · ${ago(r.started_ts)}`,
-    }));
+async function drawRuns() {
+  const groups = await runGroups();
   // They share the runs and the record line, so the dates and the legend
   // are said once, under the last chart, rather than four times.
   const last = "c_ante";
-  const draw = (id, title, note, pts, color, opts) =>
-    seriesChart($("#" + id), title, note, [{ pts, color, label: title }],
+
+  // `val` returns [y, text] for a run, or null when it has none. y and the
+  // text differ for a score: it is plotted on the ordering key, which IS
+  // log10, and which survives values a double cannot hold.
+  const draw = (id, title, note, val, color, opts) => {
+    const series = groups.map(g => ({
+      color, dim: g.dim, ring: g.ring ? color : null, label: g.label || title,
+      pts: g.rows.slice()
+        .sort((a, b) => a.started_ts - b.started_ts)
+        .map(r => [r, val(r)])
+        .filter(([, v]) => v !== null)
+        .map(([r, [y, txt]]) => ({
+          ts: r.started_ts, y, txt, color,
+          title: `${title}${g.label ? " · " + g.label : ""}`,
+          sub: `${r.deck_name || ""} · ${ago(r.started_ts)}`,
+        })),
+    })).filter(sr => sr.pts.length);
+    seriesChart($("#" + id), title, note, series,
       Object.assign({ height: 250, xlabels: id === last, legend: id === last },
                     opts));
+  };
 
-  // Plotted on the ordering key, which IS log10 -- and unlike the score
-  // itself it survives values a double cannot hold.
+  const plain = (get, fmtv) => r => {
+    const v = get(r);
+    return v === null || v === undefined ? null : [Number(v), fmtv(v)];
+  };
+
   draw("c_best", "High score", "The biggest hand of each run. Log scale.",
-    asc.filter(r => r.bh_ord !== null && r.bh_ord !== undefined).map(r => ({
-      ts: r.started_ts, y: r.bh_ord, txt: fmtScore(r.best_hand),
-      color: "var(--chips)", title: "High score",
-      sub: `${r.deck_name || ""} · ${ago(r.started_ts)}`,
-    })), "var(--chips)", { log: true });
+    r => (r.bh_ord === null || r.bh_ord === undefined
+          ? null : [r.bh_ord, fmtScore(r.best_hand)]),
+    "var(--chips)", { log: true });
 
   draw("c_money", "Peak money", "The most you held at once.",
-    mk(r => r.peak_money, v => "$" + fmt(v), "var(--money)", "Peak money"),
-    "var(--money)", { zero: true });
+    plain(r => r.peak_money, v => "$" + fmt(v)), "var(--money)", { zero: true });
 
   draw("c_played", "Hands played", "How many hands the whole run took.",
-    mk(r => r.hands_played, fmt, "var(--purple)", "Hands played"),
-    "var(--purple)", { zero: true });
+    plain(r => r.hands_played, fmt), "var(--purple)", { zero: true });
 
   draw("c_ante", "Ante reached", "How far the run got before it ended.",
-    mk(r => r.ante, fmt, "var(--green)", "Ante"), "var(--green)",
-    { zero: true });
+    plain(r => r.ante, fmt), "var(--green)", { zero: true });
 }
 
 // ── wiring ───────────────────────────────────────────────────────────────
@@ -650,19 +705,19 @@ $("#tabs").onclick = e => {
 
 async function refresh() {
   try {
-    const runs = await get("/api/runs");
-    // The stats tab replaces this with the fuller summary line below.
-    $("#sub").textContent = `${runs.length} run${runs.length === 1 ? "" : "s"}`;
+    // One summary on every tab: it carries the header line, and on the
+    // stats tab the tiles as well. Cheaper than pulling the whole run list
+    // just to count it.
+    const summary = await get("/api/summary");
+    $("#sub").textContent = summaryLine(summary);
     if (tab === "stats") {
-      const [summary, levels, counts, hands] = await Promise.all([
-        get("/api/summary"), get("/api/hand_levels"),
-        get("/api/hand_counts"), get("/api/hands"),
+      const [levels, counts, hands] = await Promise.all([
+        get("/api/hand_levels"), get("/api/hand_counts"), get("/api/hands"),
       ]);
       // Same six tiles as the dashboard, from the same definition.
       drawSummary($("#tiles"), summary);
-      $("#sub").textContent = summaryLine(summary);
       drawHands(levels, counts, hands.best || []);
-      drawRuns(runs);
+      await drawRuns();
     } else if (tab === "hands") {
       await drawHand();
     } else {
