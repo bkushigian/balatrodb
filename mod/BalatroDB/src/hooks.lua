@@ -85,6 +85,31 @@ local function emit_run_start(resumed)
     -- reader can identify a run -- deck, stake, seed, date -- by reading just
     -- the first line, instead of parsing all of it. Measured at roughly 19x
     -- cheaper for a run-list scan.
+    -- Everything the game is holding is ours from here on.
+    --
+    -- Card:remove only logs a destruction for a card carrying bdb_owned,
+    -- which the add_to_deck hook stamps. A resume never calls add_to_deck:
+    -- CardArea:load (cardarea.lua:718) rebuilds the areas directly. So
+    -- after a resume every pre-existing card failed that gate and its
+    -- destruction went unlogged -- a shattered Glass card, a popped Gros
+    -- Michel, a perishable expiring, anything The Tooth ate.
+    --
+    -- Two runs in the corpus fail the deck-identity check for exactly
+    -- this, one of them missing 28 removals out of 32.
+    --
+    -- Stamped here rather than only on the resume path because this is the
+    -- one place that already enumerates all three areas, and setting the
+    -- flag on a card that has it costs nothing.
+    -- Three calls rather than ipairs over a table of the three: a nil in
+    -- the middle of a table constructor ends ipairs there, so if G.jokers
+    -- were ever absent the consumables would be skipped silently.
+    local function claim(cards)
+        for _, card in ipairs(cards or {}) do card.bdb_owned = true end
+    end
+    claim(G.playing_cards)
+    claim(G.jokers and G.jokers.cards)
+    claim(G.consumeables and G.consumeables.cards)
+
     emit(resumed and 'run.rebaseline' or 'run.baseline', {
         jokers      = joker_sample(),
         consumables = util.nonempty(util.cards(G.consumeables)),

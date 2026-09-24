@@ -49,8 +49,8 @@ for both the instant and the queued path.
 with the same suffix have opposite meanings, which is worse than either being
 wrong alone. Either rename to `hands_left_after` or add 1 in the hook.
 
-### Card removals vanish after a resume
-`mod/BalatroDB/src/hooks.lua:781`, `:807`
+### ~~Card removals vanish after a resume~~ — FIXED, unverified in play
+`mod/BalatroDB/src/hooks.lua`, in the baseline emitter
 
 `bdb_owned` is set in the `add_to_deck` hook, and `Card:load()` never calls
 it — it assigns `added_to_deck` directly. So after a resume every pre-existing
@@ -60,9 +60,30 @@ Tooth. `shop.sell` still fires, so the log looks internally consistent and is
 just missing destructions. Deck size and joker inventory derived from
 add/remove drift permanently wrong from the first resume.
 
-Fix: gate on `card.bdb_owned or card.added_to_deck`, or stamp `bdb_owned` on
-everything in `G.playing_cards` / `G.jokers` / `G.consumeables` while building
-`run.rebaseline`.
+Fixed by the second option: the baseline emitter now stamps `bdb_owned` on
+everything in `G.playing_cards`, `G.jokers` and `G.consumeables` before
+emitting, on both a fresh run and a resume. Gating on `added_to_deck`
+instead would have reintroduced the debuff bug the flag exists to avoid —
+the game clears `added_to_deck` while a joker is debuffed.
+
+**Observed, which is how this surfaced:** two runs carry
+`deck_identity_fail`, both with two segments. `1790229463` (Ghost Deck)
+resumed at 49 cards, logged 11 adds and 4 removes, and ended at 28 — so 32
+cards were destroyed and 4 were recorded. `1790055560` (Yellow) is the same
+shape, missing 2.
+
+The ingester now also re-anchors the deck baseline at a `run.rebaseline`
+and restarts the card counters, so the identity asks whether the events
+since the last known-good state explain the final size. Anchored on the
+first baseline it asked about the whole run, so one gap before a resume
+condemned everything after it.
+
+Those two runs still fail, correctly: the events were never written and
+cannot be recovered.
+
+**Not verified in play.** Needs: Continue a saved run, then destroy a card
+that existed before the resume — shatter a Glass card, or Death/Hanged Man
+a base card — and check the log gains a `card.remove`.
 
 ### `*_num` is NULL for every genuinely beyond-double value
 `ingest/ingest.py`, `as_num`

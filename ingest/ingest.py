@@ -437,6 +437,16 @@ class Ingester:
                 # instead of carrying the drift forward.
                 if e == "run.rebaseline" and as_int(d.get("dollars")) is not None:
                     balance = as_int(d.get("dollars"))
+                # The deck is re-anchored for the same reason, and the card
+                # counters restart with it: the identity asks whether the
+                # events since the last KNOWN-GOOD state explain the final
+                # size. Anchored on the first baseline it instead asks about
+                # the whole run, so one gap before a resume condemns
+                # everything after it and the check stops saying where the
+                # problem is.
+                if e == "run.rebaseline" and d.get("deck_cards") is not None:
+                    baseline_deck = len(d.get("deck_cards") or [])
+                    card_add = card_remove = 0
 
             elif e == "run.win":
                 saw_win = True
