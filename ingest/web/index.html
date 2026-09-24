@@ -47,6 +47,10 @@
 
   <section class="tiles" id="tiles" aria-label="Records"></section>
 
+  <!-- The run you are in the middle of. Hidden entirely when there is not
+       one, rather than sitting there empty. -->
+  <section id="live" aria-label="Run in progress" hidden></section>
+
   <!-- Jokers takes the width of its four columns and the hands table takes
        the rest, which is roughly how much each of them needs. Below about
        1200px the pair wraps and both go full width. -->
@@ -476,10 +480,17 @@ function defineRunsTable() {
 defineRunsTable();
 
 async function refresh() {
-  const [s, jok, hands, levels, counts, runs] = await Promise.all([
+  const [s, jok, hands, levels, counts, runs, live] = await Promise.all([
     get("/api/summary"), get("/api/jokers"), get("/api/hands"),
     get("/api/hand_levels"), get("/api/hand_counts"), get("/api/runs"),
+    // Not filtered: the run you are in the middle of is the run you are in
+    // the middle of, whatever the page is currently showing. ?live=<run>
+    // points the panel at a chosen run instead, which is how a finished run
+    // can be seen the way it looked while it was being played.
+    fetch("/api/live" + (livePreview() ? "?id=" + encodeURIComponent(livePreview()) : ""))
+      .then(x => x.json()),
   ]);
+  drawLive(live);
 
   $("#sub").textContent = summaryLine(s);
   drawSummary($("#tiles"), s);
@@ -656,6 +667,88 @@ async function toggleRound(runId, tr) {
       <span class="hand">${cards}${moved}</span>
       <span class="score"><span>${nc} card${nc === 1 ? "" : "s"}</span>${cash}</span></div>`;
   }).join("") + `</div>`;
+}
+
+// ── the run in progress ──────────────────────────────────────────────────
+// What each kind of chase wears: the art to draw it with, how to name it,
+// and the colour the game gives that quantity.
+const CHASE_ART = {
+  hand_score:  [h => sprite(planetOf(h), "j", 34), h => h, "sc-chips", fmtScore],
+  hand_level:  [h => sprite(planetOf(h), "j", 34), h => h, "sc-level", fmt],
+  hand_played: [h => sprite(planetOf(h), "j", 34), h => h, "sc-money", fmt],
+  joker:       [k => sprite(k, "j", 34), k => nameOf(k), "sc-mult", fmt],
+  counter:     [k => sprite(k, "j", 34), k => nameOf(k), "sc-chips", fmt],
+};
+const CHASE_WHAT = {
+  hand_score: "score", hand_level: "level", hand_played: "plays",
+  joker: "peak", counter: "counter",
+};
+
+// Past the record it is no longer a percentage worth printing -- one run
+// sat at eleven million percent of the standing best. It is either beaten
+// or it is on the way.
+function chaseItem(c) {
+  const [art, name, cls, f] = CHASE_ART[c.kind] || CHASE_ART.joker;
+  const pct = Math.max(0, Math.min(1, c.pct));
+  const ahead = c.pct >= 1;
+  const head = c.first
+    ? `<span class="flag first">FIRST EVER</span>`
+    : ahead ? `<span class="flag">AHEAD</span>`
+            : `<span class="pc">${Math.round(c.pct * 100)}%</span>`;
+  const foot = c.first
+    ? `<span class="of">nothing to beat</span>`
+    : `<span class="of">of ${esc(f(c.record_txt))}</span>`;
+  return `<div class="chase${ahead ? " ahead" : ""}">
+      ${art(c.key) || ""}
+      <div class="cb">
+        <div class="cl">${esc(name(c.key))} <span class="cw">${
+          esc(CHASE_WHAT[c.kind] || "")}</span></div>
+        <div class="cv"><b class="sc ${cls}">${f(c.value_txt)}</b> ${foot}</div>
+        <div class="track"><span class="fill" style="width:${
+          (pct * 100).toFixed(1)}%"></span></div>
+      </div>
+      ${head}
+    </div>`;
+}
+
+const livePreview = () => new URLSearchParams(location.search).get("live") || "";
+
+function drawLive(d) {
+  const el = $("#live");
+  if (!d || !d.run) { el.hidden = true; return; }
+  el.hidden = false;
+  const r = d.run;
+  const stat = (v, k) => `<span class="lv"><b>${v}</b><i>${esc(k)}</i></span>`;
+
+  // The board as it stands, with whatever each joker is accumulating.
+  const board = (d.board || []).map(j =>
+    `<span class="bj" title="${esc(nameOf(j.key))}">
+       ${sprite(j.key, "j", 38) || esc(nameOf(j.key))}${scaleTag(j.scale)}</span>`
+  ).join("") || `<span class="muted">no jokers yet</span>`;
+
+  const chases = (d.chasing || []).map(chaseItem).join("");
+  const more = d.chasing_n > (d.chasing || []).length
+    ? `<div class="chmore">+${d.chasing_n - d.chasing.length} more within reach</div>` : "";
+
+  el.innerHTML = `
+    <div class="livebar pixel-pill" title="Open this run">
+      <span class="chip pixel-pill sm live">${
+        r.result === "suspended" ? "PAUSED" : "LIVE"}</span>
+      ${deckCell(r)}${stakeCell(r)}
+      ${stat(esc(String(d.ante ?? "—")), d.blind ? esc(d.blind) : "ante")}
+      ${stat("$" + fmt(d.money), "money")}
+      ${stat(fmtScore(d.best_hand), d.best_hand_name
+        ? esc(d.best_hand_name) : "best hand")}
+      ${stat(fmt(d.hands_played), "hands")}
+      <span class="lboard">${board}</span>
+      ${seedCell(r)}
+    </div>
+    ${chases ? `<div class="chases">
+       <div class="chtitle">On course to beat</div>${chases}${more}</div>` : ""}`;
+  el.querySelectorAll("button.seed").forEach(b => {
+    b.onclick = ev => { ev.stopPropagation(); copySeed(b, b.dataset.seed); };
+  });
+  el.querySelector(".livebar").onclick = () => openRun(r.run_id);
 }
 
 // ── wiring ───────────────────────────────────────────────────────────────

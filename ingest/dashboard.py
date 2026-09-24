@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import math
 import os
 import zlib
 import sqlite3
@@ -784,6 +785,174 @@ def api_run(db, q):
     }
 
 
+# ─── the run in progress ──────────────────────────────────────────────────
+# A run is still in play while it has no terminal result: either the log has
+# no run.end yet (you are playing, or the game crashed) or it ended in
+# `suspended`, which is a run you can still Continue from the menu.
+#
+# Records here are compared against EVERY other run rather than against the
+# filtered slice. "The record you are chasing" is a fact about the whole
+# corpus; it should not move because the page is currently filtered to one
+# deck you are not playing.
+
+# How far along counts as worth mentioning. Below this it is not news.
+CHASE_AT = 0.5
+CHASE_SHOWN = 8
+
+
+def _best_per(db, sql, params):
+    """{subject: (ord, txt)} from a query yielding (k, o, t)."""
+    return {r["k"]: (r["o"], r["t"]) for r in db.execute(sql, params)}
+
+
+# Each family: how to read one run's figures, and everyone else's. `{op}`
+# becomes `=` for the live run and `<>` for the rest, so the pair is always
+# the same query asked twice and cannot drift.
+CHASE = {
+    "hand_score": """
+        WITH r AS (SELECT hand k, score_ord o, score_txt t,
+                          ROW_NUMBER() OVER (PARTITION BY hand
+                                             ORDER BY score_ord DESC) rn
+                     FROM hands WHERE score_ord IS NOT NULL AND run_id {op} ?)
+        SELECT k, o, t FROM r WHERE rn = 1""",
+    "hand_level": """
+        SELECT hand k, MAX(lvl_to) o, MAX(lvl_to) t FROM hand_levels
+         WHERE lvl_to IS NOT NULL AND hand IS NOT NULL AND run_id {op} ?
+         GROUP BY hand""",
+    # Per RUN first, then the best of those: the record is the most times
+    # it was played inside one run, not across the corpus. Grouping by
+    # (hand, run_id) alone yielded one row per run and the reader kept
+    # whichever came last -- Two Pair's record read 2 against a real 80.
+    "hand_played": """
+        SELECT k, MAX(c) o, MAX(c) t FROM (
+          SELECT hand k, COUNT(*) c FROM hands
+           WHERE hand IS NOT NULL AND run_id {op} ?
+           GROUP BY hand, run_id)
+         GROUP BY k""",
+    "joker": """
+        WITH r AS (SELECT key k, to_ord o, to_txt t,
+                          ROW_NUMBER() OVER (PARTITION BY key
+                                             ORDER BY to_ord DESC) rn
+                     FROM joker_scale
+                    WHERE is_reset = 0 AND to_ord IS NOT NULL
+                      AND key NOT IN {decaying} AND run_id {op} ?)
+        SELECT k, o, t FROM r WHERE rn = 1""",
+    "counter": """
+        SELECT metric k, MAX(ambient_ord) o, MAX(ambient_value) t
+          FROM joker_counter_peaks
+         WHERE ambient_value IS NOT NULL AND run_id {op} ?
+         GROUP BY metric""",
+}
+
+
+def _progress(mine, rec):
+    """How far along, as a fraction. Falls back to the ordering keys when
+    the values are past what a double holds -- 10**(a-b) is the ratio,
+    since the key is log10(1+v)."""
+    try:
+        a, b = float(mine[1]), float(rec[1])
+        if math.isfinite(a) and math.isfinite(b) and b > 0:
+            return a / b
+    except (TypeError, ValueError, OverflowError):
+        pass
+    if mine[0] is None or rec[0] is None:
+        return None
+    try:
+        return 10 ** (mine[0] - rec[0])
+    except OverflowError:
+        return None
+
+
+def api_live(db, q):
+    # `?id=` points the panel at a chosen run instead of the current one --
+    # for looking at a finished run the way you would have seen it while it
+    # was being played, and for checking this panel without one in flight.
+    if q.get("id"):
+        run = db.execute("SELECT * FROM runs WHERE run_id = ?",
+                         (q["id"],)).fetchone()
+    else:
+        run = db.execute("""SELECT * FROM runs
+                             WHERE terminal IS NOT 1
+                             ORDER BY started_ts DESC LIMIT 1""").fetchone()
+    if not run:
+        return {"run": None}
+    run = dict(run)
+    rid = run["run_id"]
+
+    # When the run was last played. The log's own timestamps are relative to
+    # each segment, so the file's mtime is the only wall clock there is.
+    try:
+        run["last_ts"] = os.path.getmtime(os.path.join(HERE, run["log_file"]))
+    except OSError:
+        try:
+            run["last_ts"] = os.path.getmtime(run["log_file"])
+        except OSError:
+            run["last_ts"] = None
+
+    # The board as it stands: the most recent sample of this run's jokers.
+    at = db.execute("""SELECT seg, n FROM joker_state WHERE run_id = ?
+                        ORDER BY seg DESC, n DESC LIMIT 1""", (rid,)).fetchone()
+    board = []
+    if at:
+        board = rows(db, """SELECT seg, n, pos, card_id, key, state
+                              FROM joker_state
+                             WHERE run_id = ? AND seg = ? AND n = ?
+                             ORDER BY pos, card_id""", (rid, at["seg"], at["n"]))
+        attach_scaling(db, rid, {(at["seg"], at["n"]): board})
+
+    money = db.execute("""SELECT balance FROM money WHERE run_id = ?
+                           ORDER BY seg DESC, n DESC LIMIT 1""", (rid,)).fetchone()
+    best = db.execute("""SELECT hand, score_txt, score_ord FROM hands
+                          WHERE run_id = ? AND score_ord IS NOT NULL
+                          ORDER BY score_ord DESC LIMIT 1""", (rid,)).fetchone()
+    where_now = db.execute("""SELECT ante, round_seq, blind_name, is_boss
+                                FROM rounds WHERE run_id = ?
+                               ORDER BY round_seq DESC LIMIT 1""", (rid,)).fetchone()
+
+    chasing = []
+    for kind, sql in CHASE.items():
+        tmpl = sql.format(op="{op}", decaying=ingester.DECAYING_SQL)
+        mine = _best_per(db, tmpl.format(op="="), (rid,))
+        rest = _best_per(db, tmpl.format(op="<>"), (rid,))
+        for subject, cur in mine.items():
+            # A counter joker is filed under its metric; the art and the
+            # name people know it by belong to the joker.
+            art = (ingester.COUNTER_JOKERS[subject][0]
+                   if kind == "counter" and subject in ingester.COUNTER_JOKERS
+                   else subject)
+            rec = rest.get(subject)
+            if rec is None:
+                # Nobody has ever done this. That is its own kind of news,
+                # and it is a record the moment it exists.
+                chasing.append({"kind": kind, "subject": subject, "key": art,
+                                "value_txt": str(cur[1]), "record_txt": None,
+                                "pct": 1.0, "first": True})
+                continue
+            pct = _progress(cur, rec)
+            if pct is None or pct < CHASE_AT:
+                continue
+            chasing.append({"kind": kind, "subject": subject, "key": art,
+                            "value_txt": str(cur[1]), "record_txt": str(rec[1]),
+                            "pct": pct, "first": False})
+    chasing.sort(key=lambda c: (-c["pct"], c["kind"]))
+
+    return {
+        "run": run,
+        "board": board,
+        "money": money["balance"] if money else None,
+        "best_hand": best["score_txt"] if best else None,
+        "best_hand_name": best["hand"] if best else None,
+        "hands_played": db.execute(
+            "SELECT COUNT(*) FROM hands WHERE run_id = ?", (rid,)).fetchone()[0],
+        "ante": (where_now["ante"] if where_now else None) or run["furthest_ante"],
+        "round": where_now["round_seq"] if where_now else None,
+        "blind": where_now["blind_name"] if where_now else None,
+        "is_boss": where_now["is_boss"] if where_now else None,
+        "chasing": chasing[:CHASE_SHOWN],
+        "chasing_n": len(chasing),
+    }
+
+
 def api_version(db, q):
     return {"generation": generation, "last_sync": last_sync}
 
@@ -970,6 +1139,7 @@ def attribute_money(db, rid, rs, steps):
 
 ROUTES = {
     "/api/round": api_round,
+    "/api/live": api_live,
     "/api/version": api_version,
     "/api/meta": api_meta,
     "/api/summary": api_summary,
