@@ -294,6 +294,15 @@ const seedCell = r => r.seed
   : `<span class="muted">—</span>`;
 const shortRun = r => (r || "").split("-")[1] || r;
 
+// Which build of the mod wrote this run. It is per SEGMENT, so a run
+// resumed after an update legitimately carries two -- and that matters,
+// because what the log captures has changed between versions.
+const modVersions = segs => {
+  const v = [...new Set((segs || []).map(x => x.ver_balatrodb).filter(Boolean))];
+  return v.length ? v.map(x => `v${esc(x)}`).join(" → ")
+                  : `<span class="muted">—</span>`;
+};
+
 
 function resultChip(r) {
   // No run.end yet: either still being played, or the game crashed. The log
@@ -558,6 +567,7 @@ async function openRun(id) {
       ${mt("Final", r.final_dollars === null ? "—" : "$" + fmt(r.final_dollars), "money")}
       ${mt("Deck size", fmt(r.deck_size), "")}
       ${mt("Sessions", fmt(d.segments.length), "")}
+      ${mt("Logged by", modVersions(d.segments), "", true)}
       ${mt("Seed", seedCell(r), "", true)}
     </div>
     <div class="muted logline">${ago(r.started_ts)} · log

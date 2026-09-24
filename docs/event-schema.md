@@ -445,6 +445,37 @@ churn. That matters because the format has already changed repeatedly under
 identify anything, and alpha logs are only interpretable via
 `env.balatrodb`.
 
+### Capture history
+
+Since `v` stays at 1 through alpha, **`env.balatrodb` is what says how much
+of a run was captured**. Every segment carries it, so a run resumed after an
+update carries two and the run dialog shows both.
+
+What changed, and what it costs a run logged before it:
+
+| Version | Change | Runs before it are missing |
+|---|---|---|
+| **0.4.1** | A resumed run claims the cards it already holds, so `Card:remove` fires for cards that existed before the resume. | Destructions of pre-resume cards — shattered Glass, a popped Gros Michel, an expired perishable. Only affects runs with more than one session. |
+| **0.4.0** | `consumable.use` / `pack.open` / `pack.pick` / `voucher.redeem` routed apart. | Consumable and pack activity, conflated or absent. |
+| **0.3.0** | `run.baseline` split out of `run.start`; terminal result vocabulary. | — |
+| **0.2.0** | First logs. | Almost everything derived: see the defect list below. |
+
+The defects sniffed from the corpus line up with this exactly, which is the
+point of sniffing them rather than trusting the version string:
+
+```
+0.2.0  13 runs  legacy_no_baseline, consumables_as_cards, no_endless_flag,
+                no_best_hand, legacy_run_end_score, no_card_modify, ...
+0.3.0   2 runs  won_without_win, deck_identity_fail
+0.4.0  11 runs  deck_identity_fail        (the resume bug 0.4.1 fixes)
+0.4.1           clean so far
+```
+
+A run carrying no defects is usable for everything the schema supports. A run
+carrying `deck_identity_fail` has a deck history that does not balance, so
+deck-size and card-destruction figures from it are wrong; everything else in
+that run — scores, jokers, money — is unaffected.
+
 ### What counts as breaking
 
 Breaking, so bumps `v`: removing or renaming a field, changing a field's units
