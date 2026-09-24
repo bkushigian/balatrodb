@@ -369,6 +369,14 @@ CREATE TABLE IF NOT EXISTS joker_counter_peaks (
   -- other value needs the same log key, not the raw number.
   contributed_ord   REAL,
   ambient_ord       REAL,
+  -- The counter at its highest while the joker was NOT in your hands. The
+  -- third of the three a run can hold, and the one a Fortune Teller record
+  -- set without ever owning one lives in. `ambient` is the maximum of this
+  -- and `contributed`, which is what makes it a real maximum rather than a
+  -- second name for one of them.
+  unheld            REAL,
+  unheld_value      REAL,
+  unheld_ord        REAL,
   PRIMARY KEY (run_id, metric, endless)
 );
 

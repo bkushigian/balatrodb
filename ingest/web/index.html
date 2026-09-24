@@ -644,13 +644,18 @@ function buildMetricPickers() {
     // and the run list could not be sorted by one. It offers both of its
     // records, wearing the same seals the panels use to tell them apart.
     if (kind === "joker") {
+      // Three peaks, not two: what it added while you held it, what the
+      // counter reached while you did not, and the larger of the two. The
+      // seals say which; the maximum wears none, because it is either.
       opts = opts.concat((METRICS.counters || []).flatMap(c => [
         { k: `counter:${c.metric}`, n: nameOf(c.key),
           art: `<span class="jart">${sprite(c.key, "j", 30)}${
             handIcon({ held: 1 })}</span>` },
-        { k: `counter_ambient:${c.metric}`, n: nameOf(c.key),
+        { k: `counter_unheld:${c.metric}`, n: nameOf(c.key),
           art: `<span class="jart">${sprite(c.key, "j", 30)}${
             handIcon({ held: 0 })}</span>` },
+        { k: `counter_ambient:${c.metric}`, n: nameOf(c.key),
+          art: sprite(c.key, "j", 30) },
       ])).sort((a, b) => a.n.localeCompare(b.n));
     }
     buildPicker(id, "metric", opts, "j", 30, placeholder, buildMetricPickers);

@@ -277,6 +277,13 @@ METRICS = {
     # The other half of the same joker: what the counter reached whether or
     # not anyone held it. A Fortune Teller record set without ever owning
     # one is this, and for most runs it is the only one that exists.
+    # The counter at its best while the joker was NOT in your hands.
+    "counter_unheld": (
+        "(SELECT MAX(cp.unheld_value) FROM joker_counter_peaks cp"
+        "   WHERE cp.run_id = r.run_id AND cp.metric = ?{el})",
+        "(SELECT MAX(cp.unheld_ord) FROM joker_counter_peaks cp"
+        "   WHERE cp.run_id = r.run_id AND cp.metric = ?{el})",
+        " AND cp.endless = ?"),
     "counter_ambient": (
         "(SELECT MAX(cp.ambient_value) FROM joker_counter_peaks cp"
         "   WHERE cp.run_id = r.run_id AND cp.metric = ?{el})",
@@ -331,8 +338,15 @@ def api_runs(db, q):
     sub, tail = [], []
     if q.get("endless") in ("0", "1"):
         el = int(q["endless"])
-        w += " AND r.went_endless = ?"
-        p = p + [el]
+        # `scope=event` keeps the per-EVENT filter and drops the per-run one,
+        # so every run reports what it did in that phase instead of dropping
+        # out of the list entirely. A chart needs this: to show a run's
+        # standard best beside its overall best, the run has to appear in
+        # both answers. The run LIST still filters both ways by default,
+        # which is the question that page is asking.
+        if q.get("scope") != "event":
+            w += " AND r.went_endless = ?"
+            p = p + [el]
         hw, mw = " AND h.endless = ?", " AND m.endless = ?"
         rw = " AND ro.endless = ?"
         sub = [el, el, el, el]       # bh_ord, best_hand, peak_money, rounds_won

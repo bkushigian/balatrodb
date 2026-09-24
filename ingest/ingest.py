@@ -879,9 +879,14 @@ class Ingester:
         point": your peak dollars may well happen mid-shop, when Bull is
         contributing nothing.
 
-        `ambient` is the highest the counter reached at all, held or not. A
-        Fortune Teller record set without ever owning a Fortune Teller is
-        this one -- a real record about the run rather than about the joker.
+        `unheld` is the highest it reached while the joker was NOT in your
+        hands. A Fortune Teller record set without ever owning a Fortune
+        Teller is this one -- a record about the run rather than about the
+        joker.
+
+        `ambient` is the highest it reached at all, which is the maximum of
+        the other two. Stored rather than worked out at read time so the
+        three can never disagree about which of them is the largest.
         """
         self.db.execute("DELETE FROM joker_counter_peaks")
 
@@ -914,6 +919,17 @@ class Ingester:
                     ambient[el] = val
 
             held = spans.get((run_id, metric), [])
+            inside = lambda seg, n: any(
+                s == seg and lo <= n <= hi for s, lo, hi in held)
+
+            # Everything that happened while it was not in your hands. With
+            # no spans at all that is the whole series, which is the case
+            # this record exists for.
+            unheld = {}
+            for seg, n, el, val in rows_:
+                if not inside(seg, n) and val > unheld.get(el, float("-inf")):
+                    unheld[el] = val
+
             if held:
                 # Carry the counter forward to each play and read it there.
                 i, cur = 0, None
@@ -923,26 +939,28 @@ class Ingester:
                         i += 1
                     if cur is None:
                         continue
-                    if any(s == pseg and lo <= pn <= hi for s, lo, hi in held):
+                    if inside(pseg, pn):
                         if cur > contributed.get(pel, float("-inf")):
                             contributed[pel] = cur
 
-            for el in set(ambient) | set(contributed):
-                c, a = contributed.get(el), ambient.get(el)
+            for el in set(ambient) | set(contributed) | set(unheld):
+                c, a, u = contributed.get(el), ambient.get(el), unheld.get(el)
                 # Converted here, once. A counter is not comparable across
                 # jokers -- 189 dollars and 189 skips are worth wildly
                 # different things -- so the value in the joker's own unit
                 # is what every reader actually wants.
                 field, cv = counter_value(metric, c) if c is not None else (None, None)
                 field2, av = counter_value(metric, a) if a is not None else (None, None)
+                field3, uv = counter_value(metric, u) if u is not None else (None, None)
                 out.append((run_id, metric, el, c, a,
-                            field or field2, cv, av,
-                            ord_num(cv)[0], ord_num(av)[0]))
+                            field or field2 or field3, cv, av,
+                            ord_num(cv)[0], ord_num(av)[0],
+                            u, uv, ord_num(uv)[0]))
 
         if out:
             self.db.executemany(
                 "INSERT OR REPLACE INTO joker_counter_peaks "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)", out)
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", out)
 
 
 # ─── reporting ────────────────────────────────────────────────────────────

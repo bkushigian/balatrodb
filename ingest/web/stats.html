@@ -103,6 +103,18 @@
       <h2>A joker, run by run</h2>
       <div class="runsort">
         <label>Joker</label><span class="pick" id="m_joker"></span>
+        <!-- Only counter jokers have these three; a scaling joker has one
+             number and the group stays hidden. Exclusive, unlike the
+             filter toggles above. -->
+        <span class="seggroup" id="heldsel" role="group"
+              aria-label="Which counter record" hidden>
+          <button class="seg pixel-pill" data-h="held" aria-pressed="true"
+            title="What it added while the joker was in your hands">Held it</button>
+          <button class="seg pixel-pill" data-h="unheld" aria-pressed="false"
+            title="What the counter reached while you did not hold it">Didn't hold it</button>
+          <button class="seg pixel-pill" data-h="max" aria-pressed="false"
+            title="The highest the counter reached either way">Max</button>
+        </span>
         <span class="muted" id="jokernote"></span>
       </div>
       <div class="chart" id="c_joker"></div>
@@ -420,7 +432,7 @@ function drawHands(levels, counts, best) {
 // Which joker and which hand are on screen. Not filter state: nothing here
 // goes to the server as a parameter, so it lives in its own object and
 // stays out of the query string.
-const sel = { joker: "", hand: "" };
+const sel = { joker: "", hand: "", held: "held" };
 
 // The run list carrying one metric, optionally overriding the phase. The
 // filters come from `state`; the metric and the phase are whatever the
@@ -430,109 +442,126 @@ const fetchRuns = o => {
   const p = new URLSearchParams(qs());
   if (o && o.metric) p.set("metric", o.metric);
   if (o && o.endless !== undefined) p.set("endless", o.endless);
+  // Without this the phase filter also drops the runs that went endless,
+  // and every one of them then looks like a run with no standard reading.
+  if (o && o.scope) p.set("scope", o.scope);
   return fetch("/api/runs?" + p).then(r => r.json())
     .then(d => (d && d.error ? Promise.reject(new Error(d.error)) : d));
 };
 const fetchMetric = m => fetchRuns({ metric: m });
 
-// Standard play and endless are two contests, not one measure with a flag.
-// Left on one axis they do not compare: across this corpus the standard
-// best and the endless best sit five and a half orders of magnitude apart,
-// so five endless runs flatten nineteen standard ones into a line along
-// the bottom, and the record staircase only ever tells you about endless.
+// Standard play and endless are not two halves of a run, they are two
+// CATEGORIES, and one contains the other. Anything you managed before the
+// win ante you also managed under endless rules -- endless only drops the
+// restriction. So a run's endless best is the best of everything in it,
+// and it can never sit below its standard best.
 //
-// So when the filter bar is showing both -- which for a TABLE means "no
-// filter" -- a chart draws them as two series instead. The run list splits
-// on `went_endless`, so the two groups are disjoint and complete: a run
-// appears in exactly one, and no point is drawn twice.
-async function runGroups(metric) {
-  if (state.endless !== "") {
-    return [{ rows: await fetchRuns({ metric }), label: "", dim: false }];
-  }
-  const [std, end] = await Promise.all([
-    fetchRuns({ metric, endless: 0 }),
-    fetchRuns({ metric, endless: 1 }),
+// Which is why a run is one dot and not two whenever the readings agree: a
+// run that never went endless, or that went and never beat what it had
+// already done, has a single value, and it is drawn as the stronger claim
+// -- that you did it under the restriction.
+//
+// Undivided these still do not compare: across this corpus the standard
+// best and the endless best sit five and a half orders of magnitude apart,
+// so a handful of endless runs flattens everything else into a line along
+// the bottom.
+async function phasePair(metric) {
+  const [ne, all] = await Promise.all([
+    // scope=event keeps every run in the answer and filters only its
+    // events, so a run that went endless still reports what it did before.
+    fetchRuns({ metric, endless: 0, scope: "event" }),
+    fetchRuns({ metric }),
   ]);
-  // Endless is hollow, not grey: grey is what the joker chart uses for a
-  // record nobody actually set, and endless is a real contest -- it just
-  // is not the same one.
-  return [{ rows: std, label: "standard", dim: false },
-          { rows: end, label: "endless", dim: true, ring: true }];
+  const std = new Map(ne.map(r => [r.run_id, r]));
+  return all.map(r => ({ all: r, ne: std.get(r.run_id) || null }));
 }
 
-// A scaling joker's peak is its own number; a counter joker's is what it
-// contributed, in the unit it contributes -- the ingester converts, so both
-// arrive here already comparable between runs.
-//
-// A counter joker gets TWO series, because it holds two records and neither
-// is a footnote to the other: what it added while someone actually held it,
-// and what the counter reached whether or not anyone did. For most runs
-// only the second exists, which is the point -- a Fortune Teller world
-// record set without ever owning one is that line, not this one.
+// Turns those pairs into the one or two series a chart draws. `val` reads a
+// run row and returns [y, text], or null when that run has no value.
+function phaseSeries(pairs, val, color, title) {
+  const asc = pairs.slice().sort((a, b) => a.all.started_ts - b.all.started_ts);
+  const read = (row, label) => {
+    if (!row) return null;
+    const v = val(row);
+    return v === null ? null : {
+      ts: row.started_ts, y: v[0], txt: v[1], color,
+      title: title + (label ? " · " + label : ""),
+      sub: `${row.deck_name || ""} · ${ago(row.started_ts)}`,
+    };
+  };
+
+  // One category chosen under Include: one series. "Endless" there means
+  // the unrestricted category, not only the part played after the win.
+  if (state.endless === "0" || state.endless === "1") {
+    const pick = state.endless === "0" ? x => x.ne : x => x.all;
+    return [{ color, label: title,
+              pts: asc.map(x => read(pick(x))).filter(Boolean) }];
+  }
+
+  const std = [], end = [];
+  for (const x of asc) {
+    const a = read(x.ne, "standard"), b = read(x.all, "endless");
+    if (a) std.push(a);
+    if (b) { b.beat = !a || b.y > a.y + 1e-9; end.push(b); }
+  }
+  // Endless is listed FIRST so the standard line draws over the top of it:
+  // where the two coincide you see the stronger claim, and the endless line
+  // only emerges once it has actually beaten something.
+  return [
+    { color, dim: true, ring: color, label: "endless",
+      stair: end, pts: end.filter(p => p.beat) },
+    { color, label: "standard", pts: std },
+  ];
+}
+
+
+// A counter joker reads game state, so a run can hold three different
+// peaks for it: what it added while you held it, what the counter reached
+// while you did NOT, and the largest of the two. Times the two categories,
+// that is six numbers for one run -- which is not a chart. So the three
+// are a toggle and the categories stay the lines, the same as everywhere
+// else on the page.
+const HELD_METRIC = { held: "counter", unheld: "counter_unheld", max: "counter_ambient" };
+const HELD_NOTE = {
+  held: "What it actually added while it was in your hands.",
+  unheld: "What the counter reached while the joker was NOT in your hands — " +
+          "the record you can set without ever owning one.",
+  max: "The highest the counter reached at all, held or not.",
+};
+
 async function drawJoker() {
   const host = $("#c_joker");
   const spec = (sel.joker || "").split(":");
+  const counter = spec[0] === "counter";
+  $("#heldsel").hidden = !counter;
   if (spec.length !== 2) {
     host.innerHTML = `<div class="empty">Pick a joker to see how its best
       run compares with every run before it.</div>`;
     $("#jokernote").textContent = "";
     return;
   }
-  const counter = spec[0] === "counter";
   const key = counter ? (COUNTER_KEY[spec[1]] || "") : spec[1];
   const field = counter ? (COUNTER_FIELD[spec[1]] || "chips") : null;
   const color = field === "mult" || field === "x_mult"
     ? "var(--mult)" : "var(--chips)";
+  const metric = counter
+    ? `${HELD_METRIC[sel.held] || "counter"}:${spec[1]}` : sel.joker;
 
-  const mk = (runs, c) => runs
-    .filter(r => r.metric_txt !== null && r.metric_txt !== undefined)
-    .sort((a, b) => a.started_ts - b.started_ts)
-    .map(r => ({
-      ts: r.started_ts, y: Number(r.metric_txt), txt: fmt(r.metric_txt), color: c,
-      title: nameOf(key),
-      sub: `${r.deck_name || ""} · ${ago(r.started_ts)}`,
-    }));
+  const pairs = await phasePair(metric);
+  const series = phaseSeries(pairs,
+    r => (r.metric_txt === null || r.metric_txt === undefined
+          ? null : [Number(r.metric_txt), fmt(r.metric_txt)]),
+    color, nameOf(key)).filter(sr => sr.pts.length);
 
-  // The same seals the board and the record panels use, so which record a
-  // point belongs to reads the same way everywhere on the site.
-  const seal = h => handIcon({ held: h })
-    .replace('class="hand"', 'class="hand" style="position:static;width:22px;height:22px"');
-
-  let series, note;
-  if (counter) {
-    const [held, amb] = await Promise.all([
-      fetchMetric(sel.joker), fetchMetric("counter_ambient:" + spec[1]),
-    ]);
-    series = [
-      { pts: mk(amb, "var(--ink-mute)"), color: "var(--ink-mute)", dim: true,
-        label: "nobody held it", icon: seal(0) },
-      { pts: mk(held, color), color, label: "you held it", icon: seal(1) },
-    ];
-    note = `Both of its records, in the unit it contributes. Hollow rings are
-      what the counter reached with nobody holding it; solid dots are what it
-      actually added while you did.` + (state.endless === ""
-        ? ` Standard and endless are pooled here — this joker already
-            holds two records, and four lines is not a chart. Pick one under
-            <b>Include</b> to separate them.`
-        : "");
-  } else {
-    // A scaling joker has one measure, so its two series are the two
-    // contests -- the same split every other chart on the page uses.
-    const groups = await runGroups(sel.joker);
-    series = groups.map(g => ({
-      pts: mk(g.rows, color), color, dim: g.dim,
-      ring: g.ring ? color : null, label: g.label || "peak",
-    })).filter(sr => sr.pts.length);
-    note = "Its highest value in each run.";
-  }
-
-  const n = series.reduce((a, sr) => a + sr.pts.length, 0);
-  $("#jokernote").innerHTML = n
-    ? `${sprite(key, "j", 30)} ${esc(nameOf(key))}` : "";
+  $("#jokernote").innerHTML = `${sprite(key, "j", 30)} ${esc(nameOf(key))}`;
+  const note = counter
+    ? `${HELD_NOTE[sel.held] || ""} In the unit it contributes.`
+    : "Its highest value in each run.";
   // Linear: a joker's peak is a number you compare by subtracting, not by
   // orders of magnitude. Only scores need a log axis.
   seriesChart(host, nameOf(key) || "Joker", note, series, { zero: true });
 }
+
 
 // ── one hand, run by run ─────────────────────────────────────────────────
 // Three measures with nothing in common but the x axis, so they get three
@@ -561,23 +590,14 @@ async function drawHand() {
   $("#handnote").innerHTML = `${sprite(planetOf(hand), "j", 30)} ${esc(hand)}`;
 
   const got = await Promise.all(
-    HAND_VIEWS.map(v => runGroups(`${v[1]}:${hand}`)));
+    HAND_VIEWS.map(v => phasePair(`${v[1]}:${hand}`)));
 
   HAND_VIEWS.forEach(([id, kind, title, color, fmtv, note, opts], i) => {
-    const series = got[i].map(g => ({
-      color, dim: g.dim, ring: g.ring ? color : null, label: g.label || title,
-      pts: g.rows
-        .filter(r => r.metric_txt !== null && r.metric_txt !== undefined)
-        .sort((a, b) => a.started_ts - b.started_ts)
-        .map(r => ({
-          // A log chart plots the ordering key; the others plot the value.
-          ts: r.started_ts,
-          y: opts.log ? r.metric_ord : Number(r.metric_txt),
-          txt: fmtv(r.metric_txt), color,
-          title: `${hand} · ${title}${g.label ? " · " + g.label : ""}`,
-          sub: `${r.deck_name || ""} · ${ago(r.started_ts)}`,
-        })),
-    })).filter(sr => sr.pts.length);
+    const series = phaseSeries(got[i], r =>
+      // A log chart plots the ordering key; the others plot the value.
+      (r.metric_txt === null || r.metric_txt === undefined ? null
+       : [opts.log ? r.metric_ord : Number(r.metric_txt), fmtv(r.metric_txt)]),
+      color, `${hand} · ${title}`).filter(sr => sr.pts.length);
     seriesChart($("#" + id), title, note, series,
       Object.assign({ zero: !opts.log, height: 250,
                       xlabels: i === HAND_VIEWS.length - 1,
@@ -587,7 +607,7 @@ async function drawHand() {
 
 // ── every run ────────────────────────────────────────────────────────────
 async function drawRuns() {
-  const groups = await runGroups();
+  const pairs = await phasePair();
   // They share the runs and the record line, so the dates and the legend
   // are said once, under the last chart, rather than four times.
   const last = "c_ante";
@@ -596,18 +616,8 @@ async function drawRuns() {
   // text differ for a score: it is plotted on the ordering key, which IS
   // log10, and which survives values a double cannot hold.
   const draw = (id, title, note, val, color, opts) => {
-    const series = groups.map(g => ({
-      color, dim: g.dim, ring: g.ring ? color : null, label: g.label || title,
-      pts: g.rows.slice()
-        .sort((a, b) => a.started_ts - b.started_ts)
-        .map(r => [r, val(r)])
-        .filter(([, v]) => v !== null)
-        .map(([r, [y, txt]]) => ({
-          ts: r.started_ts, y, txt, color,
-          title: `${title}${g.label ? " · " + g.label : ""}`,
-          sub: `${r.deck_name || ""} · ${ago(r.started_ts)}`,
-        })),
-    })).filter(sr => sr.pts.length);
+    const series = phaseSeries(pairs, val, color, title)
+      .filter(sr => sr.pts.length);
     seriesChart($("#" + id), title, note, series,
       Object.assign({ height: 250, xlabels: id === last, legend: id === last },
                     opts));
@@ -626,10 +636,15 @@ async function drawRuns() {
   draw("c_money", "Peak money", "The most you held at once.",
     plain(r => r.peak_money, v => "$" + fmt(v)), "var(--money)", { zero: true });
 
-  draw("c_played", "Hands played", "How many hands the whole run took.",
+  // Whole-run facts: the game keeps one number each, so unlike a score
+  // they have no standard reading distinct from an endless one and the
+  // chart is always a single series.
+  draw("c_played", "Hands played",
+    "How many hands the whole run took — one number per run, endless included.",
     plain(r => r.hands_played, fmt), "var(--purple)", { zero: true });
 
-  draw("c_ante", "Ante reached", "How far the run got before it ended.",
+  draw("c_ante", "Ante reached",
+    "How far the run got — one number per run, endless antes included.",
     plain(r => r.ante, fmt), "var(--green)", { zero: true });
 }
 
@@ -669,6 +684,7 @@ function syncHash() {
   const p = new URLSearchParams();
   if (tab !== "stats") p.set("tab", tab);
   if (sel.joker) p.set("joker", sel.joker);
+  if (sel.held !== "held") p.set("held", sel.held);
   if (sel.hand) p.set("hand", sel.hand);
   const h = p.toString() ? "#" + p : "";
   if (h !== location.hash) history.replaceState(null, "", location.pathname + h);
@@ -677,6 +693,11 @@ function readHash() {
   const p = new URLSearchParams(location.hash.replace(/^#/, ""));
   const j = p.get("joker") || "";
   if (/^(joker|counter):/.test(j)) sel.joker = j;
+  const h = p.get("held") || "held";
+  if (HELD_METRIC[h]) sel.held = h;
+  for (const b of $("#heldsel").querySelectorAll("button[data-h]")) {
+    b.setAttribute("aria-pressed", b.dataset.h === sel.held);
+  }
   sel.hand = p.get("hand") || "";
   showTab(p.get("tab") || "stats");
 }
@@ -740,6 +761,17 @@ const paint = (sel, map) => {
   for (const b of $(sel).querySelectorAll("button[data-v]")) {
     b.setAttribute("aria-pressed", !!map[b.dataset.v]);
   }
+};
+
+$("#heldsel").onclick = e => {
+  const b = e.target.closest("button[data-h]");
+  if (!b || b.dataset.h === sel.held) return;
+  sel.held = b.dataset.h;
+  for (const x of $("#heldsel").querySelectorAll("button[data-h]")) {
+    x.setAttribute("aria-pressed", x.dataset.h === sel.held);
+  }
+  syncHash();
+  drawJoker();
 };
 
 $("#seeded").onclick = e => {
