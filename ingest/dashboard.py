@@ -846,11 +846,12 @@ CHASE = {
         WITH r AS (SELECT hand k, score_ord o, score_txt t,
                           ROW_NUMBER() OVER (PARTITION BY hand
                                              ORDER BY score_ord DESC) rn
-                     FROM hands WHERE score_ord IS NOT NULL AND run_id {op} ?)
+                     FROM hands
+                    WHERE score_ord IS NOT NULL AND run_id {op} ?{scope})
         SELECT k, o, t FROM r WHERE rn = 1""",
     "hand_level": """
         SELECT hand k, MAX(lvl_to) o, MAX(lvl_to) t FROM hand_levels
-         WHERE lvl_to IS NOT NULL AND hand IS NOT NULL AND run_id {op} ?
+         WHERE lvl_to IS NOT NULL AND hand IS NOT NULL AND run_id {op} ?{scope}
          GROUP BY hand""",
     # Per RUN first, then the best of those: the record is the most times
     # it was played inside one run, not across the corpus. Grouping by
@@ -859,7 +860,7 @@ CHASE = {
     "hand_played": """
         SELECT k, MAX(c) o, MAX(c) t FROM (
           SELECT hand k, COUNT(*) c FROM hands
-           WHERE hand IS NOT NULL AND run_id {op} ?
+           WHERE hand IS NOT NULL AND run_id {op} ?{scope}
            GROUP BY hand, run_id)
          GROUP BY k""",
     "joker": """
@@ -868,12 +869,12 @@ CHASE = {
                                              ORDER BY to_ord DESC) rn
                      FROM joker_scale
                     WHERE is_reset = 0 AND to_ord IS NOT NULL
-                      AND key NOT IN {decaying} AND run_id {op} ?)
+                      AND key NOT IN {decaying} AND run_id {op} ?{scope})
         SELECT k, o, t FROM r WHERE rn = 1""",
     "counter": """
         SELECT metric k, MAX(ambient_ord) o, MAX(ambient_value) t
           FROM joker_counter_peaks
-         WHERE ambient_value IS NOT NULL AND run_id {op} ?
+         WHERE ambient_value IS NOT NULL AND run_id {op} ?{scope}
          GROUP BY metric""",
 }
 
@@ -894,6 +895,54 @@ def _progress(mine, rec):
         return 10 ** (mine[0] - rec[0])
     except OverflowError:
         return None
+
+
+# Runs at one stake, as a clause the chase queries can append. A record at
+# the stake you are actually playing is the one within reach; the all-time
+# record is the one that counts. Both are worth seeing, so both are read.
+STAKE_SCOPE = " AND run_id IN (SELECT run_id FROM runs WHERE stake_key = ?)"
+
+
+def chase_tables(db, rid, stake_key):
+    """{kind: (mine, all_time, at_stake)}, each {subject: (ord, txt)}.
+
+    Everyone else's best is read twice, once unscoped and once among runs at
+    this stake. `mine` is this run and needs no scope -- it IS at this stake.
+    """
+    out = {}
+    for kind, sql in CHASE.items():
+        tmpl = sql.format(op="{op}", scope="{scope}",
+                          decaying=ingester.DECAYING_SQL)
+        mine = _best_per(db, tmpl.format(op="=", scope=""), (rid,))
+        rest = _best_per(db, tmpl.format(op="<>", scope=""), (rid,))
+        at = ({} if not stake_key else
+              _best_per(db, tmpl.format(op="<>", scope=STAKE_SCOPE),
+                        (rid, stake_key)))
+        out[kind] = (mine, rest, at)
+    return out
+
+
+def chase_entry(kind, subject, cur, rec, at_stake, stake_key):
+    """One comparison, against the corpus and against this stake."""
+    # A counter joker is filed under its metric; the art and the name people
+    # know it by belong to the joker.
+    art = (ingester.COUNTER_JOKERS[subject][0]
+           if kind == "counter" and subject in ingester.COUNTER_JOKERS
+           else subject)
+    pct = _progress(cur, rec) if (cur and rec) else (1.0 if cur else 0.0)
+    return {
+        "kind": kind, "subject": subject, "key": art,
+        "value_txt": None if cur is None else str(cur[1]),
+        "record_txt": None if rec is None else str(rec[1]),
+        "stake_txt": None if at_stake is None else str(at_stake[1]),
+        "stake_key": stake_key,
+        # Beating the stake's best is a smaller thing than beating the
+        # corpus, and it happens first, so it is said separately.
+        "beats_stake": bool(cur and at_stake
+                            and (_progress(cur, at_stake) or 0) > 1),
+        "pct": pct,
+        "first": cur is not None and rec is None,
+    }
 
 
 def api_live(db, q):
@@ -968,32 +1017,50 @@ def api_live(db, q):
                                 FROM rounds WHERE run_id = ?
                                ORDER BY round_seq DESC LIMIT 1""", (rid,)).fetchone()
 
+    stake_key = run["stake_key"]
+    tables = chase_tables(db, rid, stake_key)
+
+
+    # Every joker on the board and where this run stands with it, however
+    # far off -- the whole board, not the part of it that happens to be
+    # close. Built first, because a joker shown here is left out of the
+    # chases below: rendered both ways the two lists were the same two
+    # cards twice.
+    #
+    # A joker that has never scaled anywhere -- Riff-Raff, Faceless, Raised
+    # Fist -- has no record to show and drops out, which is the same test
+    # that keeps jokers carrying no number at all off the list.
+    by_key = {v[0]: m for m, v in ingester.COUNTER_JOKERS.items()}
+    holding, seen = [], set()
+    for j in board:
+        key = j.get("key")
+        if not key or key in seen or key in ingester.DECAYING:
+            continue
+        seen.add(key)
+        kind = "counter" if key in by_key else "joker"
+        subject = by_key.get(key, key)
+        mine, rest, at = tables[kind]
+        cur, rec = mine.get(subject), rest.get(subject)
+        if cur is None and rec is None:
+            continue
+        holding.append(chase_entry(kind, subject, cur, rec,
+                                   at.get(subject), stake_key))
+    holding.sort(key=lambda c: -(c["pct"] or 0))
+    on_board = {(c["kind"], c["subject"]) for c in holding}
+
+    # What else is within reach: hand scores, levels and counts, and the
+    # jokers this run scaled but is no longer holding.
     chasing = []
-    for kind, sql in CHASE.items():
-        tmpl = sql.format(op="{op}", decaying=ingester.DECAYING_SQL)
-        mine = _best_per(db, tmpl.format(op="="), (rid,))
-        rest = _best_per(db, tmpl.format(op="<>"), (rid,))
+    for kind, (mine, rest, at) in tables.items():
         for subject, cur in mine.items():
-            # A counter joker is filed under its metric; the art and the
-            # name people know it by belong to the joker.
-            art = (ingester.COUNTER_JOKERS[subject][0]
-                   if kind == "counter" and subject in ingester.COUNTER_JOKERS
-                   else subject)
-            rec = rest.get(subject)
-            if rec is None:
-                # Nobody has ever done this. That is its own kind of news,
-                # and it is a record the moment it exists.
-                chasing.append({"kind": kind, "subject": subject, "key": art,
-                                "value_txt": str(cur[1]), "record_txt": None,
-                                "pct": 1.0, "first": True})
+            if (kind, subject) in on_board:
                 continue
-            pct = _progress(cur, rec)
-            if pct is None or pct < CHASE_AT:
-                continue
-            chasing.append({"kind": kind, "subject": subject, "key": art,
-                            "value_txt": str(cur[1]), "record_txt": str(rec[1]),
-                            "pct": pct, "first": False})
-    chasing.sort(key=lambda c: (-c["pct"], c["kind"]))
+            e = chase_entry(kind, subject, cur, rest.get(subject),
+                            at.get(subject), stake_key)
+            # Nobody has ever done it, or you are at least halfway there.
+            if e["first"] or (e["pct"] or 0) >= CHASE_AT:
+                chasing.append(e)
+    chasing.sort(key=lambda c: (-(c["pct"] or 0), c["kind"]))
 
     return {
         "run": run,
@@ -1011,6 +1078,7 @@ def api_live(db, q):
         "is_boss": where_now["is_boss"] if where_now else None,
         "chasing": chasing[:CHASE_MAX],
         "chasing_n": len(chasing),
+        "holding": holding,
     }
 
 

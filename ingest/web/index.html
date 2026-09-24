@@ -709,15 +709,23 @@ function chaseItem(c) {
     ? `<span class="flag first">First ever</span>`
     : ahead ? `<span class="flag">New record!</span>`
             : `<span class="pc">${Math.round(c.pct * 100)}%</span>`;
+  // Two records, because they are two different things: the corpus best is
+  // the record, and the best at the stake you are actually playing is the
+  // one in reach. The stake's is marked when this run is already past it.
+  const stake = c.stake_txt === null || c.stake_txt === undefined ? ""
+    : `<span class="ofs${c.beats_stake ? " past" : ""}">${
+        sprite(c.stake_key, "s", 17) || ""}${f(c.stake_txt)}</span>`;
   const foot = c.first
     ? `<span class="of">nothing to beat</span>`
-    : `<span class="of">of ${esc(f(c.record_txt))}</span>`;
+    : `<span class="of">of ${esc(f(c.record_txt))}</span>${stake}`;
   return `<div class="chase${ahead ? " ahead" : ""}">
       ${art(c.key) || ""}
       <div class="cb">
         <div class="cl">${esc(name(c.key))} <span class="cw">${
           esc(CHASE_WHAT[c.kind] || "")}</span></div>
-        <div class="cv"><b class="sc ${cls}">${f(c.value_txt)}</b> ${foot}</div>
+        <div class="cv">${c.value_txt === null || c.value_txt === undefined
+          ? `<b class="sc muted">—</b>` : `<b class="sc ${cls}">${f(c.value_txt)}</b>`
+        } ${foot}</div>
         <div class="track"><span class="fill" style="width:${
           (pct * 100).toFixed(1)}%"></span></div>
       </div>
@@ -757,6 +765,10 @@ function drawLive(d) {
        ${sprite(j.key, "j", 52) || esc(nameOf(j.key))}${scaleTag(j.scale)}</span>`
   ).join("") || `<span class="muted">no jokers yet</span>`;
 
+  // Every scaling joker in hand, however far off. A card can appear here
+  // and in the chases above; that is the two lists agreeing.
+  const held = (d.holding || []).map(chaseItem).join("");
+
   const all = d.chasing || [];
   const shown = chasesOpen ? all : all.slice(0, CHASES_SHOWN);
   const chases = shown.map(chaseItem).join("");
@@ -790,6 +802,8 @@ function drawLive(d) {
     </div>
     ${chases ? `<div class="chases">
        <div class="chtitle">On course to beat</div>${chases}${more}</div>` : ""}
+    ${held ? `<div class="chases held">
+       <div class="chtitle">On your board</div>${held}</div>` : ""}
    </div>`;
   el.querySelectorAll("button.seed").forEach(b => {
     b.onclick = ev => { ev.stopPropagation(); copySeed(b, b.dataset.seed); };

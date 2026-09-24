@@ -731,6 +731,14 @@ tr.detail > td { padding: 0; border-top: 0; }
              letter-spacing: .06em; }
 .chase .cv { font-size: 15px; margin: 1px 0 4px; }
 .chase .cv .of { color: var(--ink-mute); font-size: 13px; }
+/* The record at the stake being played, beside the all-time one. Carries
+   the stake's own chip so which stake it is needs no words. */
+.chase .cv .ofs { color: var(--ink-mute); font-size: 13px; margin-left: 9px;
+                  display: inline-flex; align-items: center; gap: 4px; }
+.chase .cv .ofs.past { color: var(--gold); }
+/* The board's own section is the quieter of the two. */
+.chases.held { padding-top: 0; }
+.chases.held .chtitle { padding-top: 12px; }
 .chase .track { background: #1b2223; border-radius: 3px; height: 7px; }
 .chase .fill { display: block; height: 100%; border-radius: 3px;
                background: var(--filter); }
