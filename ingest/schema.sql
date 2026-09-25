@@ -389,6 +389,31 @@ CREATE TABLE IF NOT EXISTS joker_counter_peaks (
 -- shape -- an action, a thing, and an amount -- and the questions worth
 -- asking ("what do I spend on", "how many rerolls a shop", "what do I
 -- sell") all want them side by side.
+-- What was on offer, as opposed to what you took. A row per card the shop
+-- or an open booster put in front of you, re-emitted whenever the contents
+-- change -- so each reroll is its own set. `taken` is filled in afterwards
+-- by matching against the shop and consumable tables.
+--
+-- Only runs played from 0.4.2 have any of this: the offers were never
+-- logged before, so there is nothing to backfill.
+CREATE TABLE IF NOT EXISTS offers (
+  run_id  TEXT    NOT NULL,
+  seg     INTEGER NOT NULL,
+  n       INTEGER NOT NULL,
+  ante    INTEGER,
+  round_seq INTEGER,
+  endless INTEGER NOT NULL,
+  source  TEXT    NOT NULL,          -- shop | voucher | booster | pack
+  slot    INTEGER NOT NULL,
+  key     TEXT,
+  set_    TEXT,
+  name    TEXT,
+  cost    INTEGER,
+  PRIMARY KEY (run_id, seg, n, source, slot)
+);
+
+CREATE INDEX IF NOT EXISTS offers_run ON offers(run_id, key);
+
 CREATE TABLE IF NOT EXISTS shop (
   run_id  TEXT    NOT NULL,
   seg     INTEGER NOT NULL,

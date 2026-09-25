@@ -6,7 +6,7 @@
     "description": "Records every run as an append-only event log for statistics and replay.",
     "prefix": "bdb",
     "main_file": "main.lua",
-    "version": "0.4.1",
+    "version": "0.4.2",
     "priority": 100,
     "badge_colour": "2E5E4E",
     "dependencies": ["Steamodded (>=1.0.0)"]

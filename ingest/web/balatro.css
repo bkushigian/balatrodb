@@ -770,3 +770,16 @@ tr.detail > td { padding: 0; border-top: 0; }
 .shopline b { font-weight: 700; }
 .shopline i { font-style: normal; color: var(--ink-mute); font-size: 12px;
               margin-right: 7px; }
+
+/* What the shop is offering. A strip of cards rather than the chase cards'
+   grid: these are a row of things to choose between, and the number that
+   matters on each is its price. */
+.chases.offers { padding-top: 0; }
+.chases.offers .chtitle { padding-top: 12px; }
+.offerstrip { grid-column: 1 / -1; display: flex; gap: 14px; flex-wrap: wrap; }
+.offer { display: flex; flex-direction: column; align-items: center; gap: 2px;
+         background: rgba(0, 0, 0, .22); border-radius: .35rem;
+         padding: 9px 11px 7px; min-width: 74px; }
+.offer .oc { font-size: 17px; line-height: 1.1; min-height: 1.1em; }
+.offer .orec { font-size: 12px; color: var(--ink-mute); white-space: nowrap; }
+.offer .orec .of { color: var(--ink-dim); }

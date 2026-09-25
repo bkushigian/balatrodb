@@ -322,6 +322,8 @@ end)
 --------------------------------------------------------------------------
 
 local last_state, last_stage
+-- Defined below, beside the rest of the offer watching.
+local watch_offers
 
 util.hook(Game, 'update', function()
     local st, stage = G.STATE, G.STAGE
@@ -354,7 +356,91 @@ util.hook(Game, 'update', function()
         end
         last_state = st
     end
+
+    watch_offers()
 end)
+
+--------------------------------------------------------------------------
+-- What was OFFERED
+--
+-- Until now the log recorded what you bought and never what you turned
+-- down, which leaves every "how often does this appear, and how often do I
+-- take it" question unanswerable.
+--
+-- Watched in Game:update rather than hooked at a call site. The shop is
+-- torn down and repopulated in a QUEUED event
+-- (button_callbacks.lua:2929), so neither entering the shop nor rerolling
+-- can read the new contents at the moment it fires -- which is what the
+-- note on reroll_shop meant by "shop.enter reports them once they exist",
+-- an event that was described and never written. Watching the contents
+-- change catches every path that fills those areas, including a voucher
+-- or a tag doing it, without a hook per path.
+--------------------------------------------------------------------------
+
+local last_shop_sig, last_pack_sig
+
+--- A cheap identity for a card area: enough to notice it changed, without
+--- serialising the cards every frame.
+local function area_sig(area)
+    -- An EMPTY area returns nil, not the empty string: the empty string is
+    -- truthy in Lua, so a pack area that still exists with nothing in it
+    -- would read as a new offer and emit one every time a pack was closed.
+    if not (area and area.cards and area.cards[1]) then return nil end
+    local parts = {}
+    for i, c in ipairs(area.cards) do
+        parts[i] = tostring(c.sort_id or c.ID or i) .. ':' ..
+            tostring(c.config and c.config.center and c.config.center.key)
+    end
+    return table.concat(parts, ',')
+end
+
+local function offer_cards(area)
+    if not (area and area.cards) then return nil end
+    local out = {}
+    for i, c in ipairs(area.cards) do
+        local card = util.card(c)
+        if card then
+            card.cost = util.num(c.cost)
+            out[#out + 1] = card
+        end
+    end
+    return util.nonempty(out)
+end
+
+--- Called from the Game:update hook above, once per frame while a run is
+--- active. Both signatures are compared before anything is serialised.
+function watch_offers()
+    if not state.active then return end
+
+    -- The shop only holds cards while you are in it; comparing outside the
+    -- shop state would emit an empty offer every time it is torn down.
+    if G.STATE == G.STATES.SHOP then
+        local sig = area_sig(G.shop_jokers)
+        if sig and sig ~= last_shop_sig then
+            last_shop_sig = sig
+            emit('shop.offer', {
+                cards    = offer_cards(G.shop_jokers),
+                vouchers = offer_cards(G.shop_vouchers),
+                boosters = offer_cards(G.shop_booster),
+                reroll   = util.num(G.GAME and G.GAME.current_round
+                                    and G.GAME.current_round.reroll_cost),
+            })
+        end
+    else
+        last_shop_sig = nil
+    end
+
+    -- G.pack_cards exists only while a booster is open.
+    local psig = area_sig(G.pack_cards)
+    if psig then
+        if psig ~= last_pack_sig then
+            last_pack_sig = psig
+            emit('pack.offer', { cards = offer_cards(G.pack_cards) })
+        end
+    else
+        last_pack_sig = nil
+    end
+end
 
 --------------------------------------------------------------------------
 -- Joker scaling

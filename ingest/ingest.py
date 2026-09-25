@@ -571,6 +571,26 @@ class Ingester:
                     "INSERT OR REPLACE INTO consumable_uses VALUES (?,?,?,?,?,?,?)",
                     (run_id, seg, n, ante, el, c.get("key"), c.get("set")))
 
+            elif e in ("shop.offer", "pack.offer"):
+                # One event carries several areas; each becomes its own
+                # source so "what did the shop have" and "what did the pack
+                # have" stay separable.
+                areas = ((("shop", d.get("cards")), ("voucher", d.get("vouchers")),
+                          ("booster", d.get("boosters")))
+                         if e == "shop.offer" else (("pack", d.get("cards")),))
+                for source, cards in areas:
+                    for slot, c in enumerate(cards or []):
+                        if not isinstance(c, dict):
+                            continue
+                        self.db.execute(
+                            "INSERT OR REPLACE INTO offers (run_id, seg, n,"
+                            " ante, round_seq, endless, source, slot, key,"
+                            " set_, name, cost)"
+                            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (run_id, seg, n, ante, open_round or round_seq, el,
+                             source, slot, c.get("key"), c.get("set"),
+                             c.get("name"), as_int(c.get("cost"))))
+
             elif e in ("shop.buy", "shop.sell", "shop.reroll"):
                 c = d.get("card") or {}
                 self.db.execute(

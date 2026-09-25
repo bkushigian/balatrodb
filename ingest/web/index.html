@@ -781,6 +781,26 @@ function drawLive(d) {
        ${sprite(j.key, "j", 52) || esc(nameOf(j.key))}${scaleTag(j.scale)}</span>`
   ).join("") || `<span class="muted">no jokers yet</span>`;
 
+  // What is in front of you: the shop's current stock, or an open pack.
+  // A card with a record says what it is; one without is still worth
+  // seeing, because knowing a joker has never scaled for you is also
+  // information when you are deciding whether to buy it.
+  const offers = (d.offered || []).map(o => {
+    const art = sprite(o.key, "j", 46) ||
+      `<span class="muted">${esc(o.name || o.key || "?")}</span>`;
+    const rec = o.record;
+    const line = !rec ? `<span class="muted">—</span>`
+      : rec.record_txt === null
+        ? `<span class="sc-level">first ever</span>`
+        : `<span class="of">best ${esc(recFmt({ kind: "joker" })(rec.record_txt))}</span>`;
+    return `<span class="offer" title="${esc(nameOf(o.key, o.name))}${
+        o.cost !== null && o.cost !== undefined ? ` — $${o.cost}` : ""}">
+      ${art}
+      <span class="oc">${o.cost === null || o.cost === undefined
+        ? "" : `<b class="sc-money">$${fmt(o.cost)}</b>`}</span>
+      <span class="orec">${line}</span></span>`;
+  }).join("");
+
   // Every scaling joker in hand, however far off. A card can appear here
   // and in the chases above; that is the two lists agreeing.
   const held = (d.holding || []).map(chaseItem).join("");
@@ -818,6 +838,10 @@ function drawLive(d) {
     </div>
     ${chases ? `<div class="chases">
        <div class="chtitle">On course to beat</div>${chases}${more}</div>` : ""}
+    ${offers ? `<div class="chases offers">
+       <div class="chtitle">${d.offer_kind === "pack"
+         ? "In the pack" : "In the shop"}</div>
+       <div class="offerstrip">${offers}</div></div>` : ""}
     ${held ? `<div class="chases held">
        <div class="chtitle">On your board</div>${held}</div>` : ""}
    </div>`;

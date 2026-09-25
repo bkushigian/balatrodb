@@ -1042,6 +1042,32 @@ def api_live(db, q):
     stake_key = run["stake_key"]
     tables = chase_tables(db, rid, stake_key)
 
+    # What is in front of you right now: the most recent set of offers, be
+    # that a shop or an open pack. Re-emitted on every reroll, so the last
+    # one is what is on screen.
+    last_offer = db.execute(
+        """SELECT seg, n, source FROM offers WHERE run_id = ?
+            ORDER BY seg DESC, n DESC LIMIT 1""", (rid,)).fetchone()
+    offered = []
+    if last_offer:
+        src = "pack" if last_offer["source"] == "pack" else "shop"
+        offered = rows(db, """
+            SELECT source, slot, key, set_, name, cost FROM offers
+             WHERE run_id = ? AND seg = ? AND n = ?
+             ORDER BY source, slot""",
+            (rid, last_offer["seg"], last_offer["n"]))
+        for o in offered:
+            # Only jokers carry a record worth chasing; the rest are shown
+            # for what they are.
+            kind = ("counter" if o["key"] in ingester.COUNTER_JOKERS
+                    else "joker")
+            mine, rest, at = tables[kind]
+            cur, rec = mine.get(o["key"]), rest.get(o["key"])
+            o["record"] = (chase_entry(kind, o["key"], cur, rec,
+                                       at.get(o["key"]), stake_key)
+                           if (cur or rec) else None)
+        offered = [o for o in offered if o["source"] != "voucher" or o["key"]]
+
 
     # Every joker on the board and where this run stands with it, however
     # far off -- the whole board, not the part of it that happens to be
@@ -1102,6 +1128,8 @@ def api_live(db, q):
         "chasing": chasing[:CHASE_MAX],
         "chasing_n": len(chasing),
         "holding": holding,
+        "offered": offered,
+        "offer_kind": (last_offer["source"] if last_offer else None),
     }
 
 
