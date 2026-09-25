@@ -72,6 +72,8 @@ CREATE TABLE IF NOT EXISTS runs (
   final_round_score_ord REAL, final_round_score_num REAL, final_round_score_txt TEXT
 );
 CREATE INDEX IF NOT EXISTS runs_slice ON runs(deck_key, stake_key, went_endless);
+-- The run list's default order, and how the live panel finds the newest run.
+CREATE INDEX IF NOT EXISTS runs_recent ON runs(started_ts DESC);
 
 -- Environment lives here, not on runs: a run can span a mod update. Play,
 -- quit, update BalatroDB, resume -- and seg 0 was written by one build and
@@ -151,7 +153,13 @@ CREATE TABLE IF NOT EXISTS hands (
   oneshot    INTEGER,          -- this hand alone beat the blind
   score_ord  REAL, score_num REAL, score_txt TEXT,
   chips_before_ord REAL, chips_before_num REAL, chips_before_txt TEXT,
-  hands_left_before INTEGER,
+  -- After the decrement, not before: ease_hands_played(-1) is queued at
+  -- state_events.lua:491, ahead of the evaluate_play entry point the mod
+  -- observes, so the counter has already moved. Its neighbour genuinely IS
+  -- the before (state_events.lua:452 runs after that entry point), which is
+  -- why the two no longer share a suffix. Logs written before 0.4.3 call
+  -- this `hands_left_before` and hold the same quantity.
+  hands_left_after INTEGER,
   discards_left_before INTEGER,
   -- Engine clock (love.timer) at the moment the event was emitted.
   -- Money is attributed to an action by comparing these: a play's
@@ -232,9 +240,15 @@ CREATE TABLE IF NOT EXISTS joker_state (
   stone_tally REAL,
   perma_bonus REAL,
   state     TEXT,
+  -- card_id can be NULL, which never conflicts in SQLite, so this
+  -- constrains only the rows that have one. Writes are INSERT OR REPLACE
+  -- over a table the derive truncates, so it costs nothing today.
   PRIMARY KEY (run_id, seg, n, card_id)
 );
 CREATE INDEX IF NOT EXISTS joker_state_key ON joker_state(key, endless);
+-- The per-round joker view filters on this pair; without it every sample in
+-- the run is scanned.
+CREATE INDEX IF NOT EXISTS joker_state_round ON joker_state(run_id, round_seq);
 
 -- Game counters that certain jokers read INSTEAD of their own ability fields,
 -- so their value is a function of run history and can never come from a
@@ -248,12 +262,11 @@ CREATE TABLE IF NOT EXISTS joker_derived (
   metric  TEXT NOT NULL,      -- hand_plays | skips | stone_cards | tarots | dollars
   subject TEXT,               -- the poker hand, for hand_plays
   value   REAL,
-  -- Whether the joker that reads this counter was actually in hand at the
-  -- time. Without it the board credited a run with "Fortune Teller 83" when
-  -- that run never held one -- 83 tarots were simply used. Both readings are
-  -- worth having: held is the joker's real peak, and the counter regardless
-  -- is what it WOULD have been worth.
-  held    INTEGER NOT NULL DEFAULT 0,
+  -- `subject` is NULL for every metric but hand_plays, and NULL never
+  -- conflicts in SQLite, so this key does not actually constrain those
+  -- rows. derive_counters truncates the table before rebuilding it, so
+  -- nothing depends on the conflict -- but a reader should not believe the
+  -- key either. (The held/unheld reading lives in joker_counter_peaks.)
   PRIMARY KEY (run_id, seg, n, metric, subject)
 );
 CREATE INDEX IF NOT EXISTS joker_derived_metric ON joker_derived(metric, endless, value DESC);
@@ -343,7 +356,13 @@ CREATE TABLE IF NOT EXISTS run_records (
   -- same chronology.
   prev_txt  TEXT,
   prev_run  TEXT,
-  PRIMARY KEY (run_id, kind, subject, endless)
+  -- `held` belongs in the key: a counter joker genuinely has two records
+  -- for one (run, subject, endless), and without it the two collided and
+  -- INSERT OR REPLACE kept whichever pass ran last -- the not-held one, so
+  -- every counter joker lost its held record. (NULL never conflicts in
+  -- SQLite, so this constrains only the counter rows; the other kinds
+  -- produce one row per key by construction.)
+  PRIMARY KEY (run_id, kind, subject, endless, held)
 );
 CREATE INDEX IF NOT EXISTS run_records_run ON run_records(run_id);
 

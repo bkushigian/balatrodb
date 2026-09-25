@@ -349,6 +349,18 @@ function resultChip(r) {
   return out.join(" ");
 }
 
+// Sorting the Result column on `r.result` sorts a field the column does not
+// show: `won` is a separate flag, so the three WON runs scattered across
+// completed, died and suspended. This ranks the chips as rendered, best
+// first, which is what the arrow then means.
+function resultRank(r) {
+  if (!r.result) return 0;                      // IN PROGRESS
+  if (r.won) return 1;                          // WON, whatever followed it
+  return { died: 2, loss: 2, quit: 3,
+           suspended: r.abandoned ? 5 : 4,      // RESTARTED reads as ended
+           new_run: 5, completed: 6 }[r.result] ?? 7;
+}
+
 // ── panel definitions ────────────────────────────────────────────────────
 // Marks a table's rows as openable; the handler is attached in drawTable.
 const openRunJS = true;
@@ -380,7 +392,7 @@ defineTable("jokers", [
     }">${r.field === "x_mult" ? "X" : "+"}${fmt(r.value)}</span>`,
     sort: r => r.ord },
   { label: "Deck", cell: deckCell, sort: r => r.deck_name },
-  { label: "Stake", cell: stakeCell, sort: r => r.stake_key },
+  { label: "Stake", cell: stakeCell, sort: r => stakeOrd(r.stake_key) },
 ], { empty: "No jokers recorded yet.", onclick: openRunJS, sort: 1 });
 
 // One row per hand, three clusters across: its best score, its highest
@@ -412,7 +424,7 @@ const handCols = () => {
         sort: r => (at(r) ? at(r).deck_name : null), run },
       { label: "Stake", cl: key, cls: "clend",
         cell: r => (at(r) ? stakeCell(at(r)) : ""),
-        sort: r => (at(r) ? at(r).stake_key : null), run });
+        sort: r => (at(r) ? stakeOrd(at(r).stake_key) : null), run });
   }
   return cols;
 };
@@ -443,11 +455,11 @@ const RUNS_COLS = () => [
   { label: "When", cls: "muted", cell: r => ago(r.started_ts),
     sort: r => r.started_ts },
   { label: "Deck", cell: deckCell, sort: r => r.deck_name },
-  { label: "Stake", cell: stakeCell, sort: r => r.stake_key },
+  { label: "Stake", cell: stakeCell, sort: r => stakeOrd(r.stake_key) },
   { label: "Result",
     cell: r => resultChip(r) + (r.went_endless
       ? ' <span class="chip pixel-pill sm endless">ENDLESS</span>' : ""),
-    sort: r => r.result || "" },
+    sort: resultRank },
   { label: "Records", cls: "recscell",
     title: "What this run was the first to achieve, at the time it was played.",
     cell: recordsCell, sort: r => (r.records || []).length },
@@ -866,6 +878,7 @@ Promise.all([
   fetch("/api/meta").then(r => r.json()),
   SPR_READY,
 ]).then(([m]) => {
+  setStakeOrder(m.stakes);
   buildPicker("deck", "deck", m.decks, "b", 48, "All decks");
   buildPicker("stake", "stake",
     m.stakes.map(x => ({ k: x.k, n: nameOf(x.k) })), "s", 36, "All stakes");

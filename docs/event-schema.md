@@ -258,7 +258,7 @@ is the only way to derive Stone Joker, Hiker and max deck size.
 
 | Event | Payload |
 |---|---|
-| `hand.play` | `cards`, `hand`, `level`, `score`, `blind_chips`, `chips_before`, `oneshot`, `hands_left_before`, `discards_left_before`, `jokers` |
+| `hand.play` | `cards`, `hand`, `level`, `score`, `blind_chips`, `chips_before`, `oneshot`, `hands_left_after`, `discards_left_before`, `jokers` |
 | `hand.discard` | `cards`, `discards_left_before`, `forced?` |
 | `hand.levelup` | `hand`, `from`, `to`, `amount` |
 

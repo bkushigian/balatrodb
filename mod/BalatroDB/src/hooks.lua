@@ -517,16 +517,26 @@ end
 
 -- state_events.lua:586. The played cards have already moved from G.hand into
 -- G.play by the time this runs, and are cleared afterwards, so capture on the
--- way in. Hand and discard counters are captured here too: the ease_* calls
--- that decrement them are queued, and the two are not even consistent with
--- each other, so everything is reported with explicit "before" semantics.
+-- way in.
+--
+-- The two counters are captured here too, and they do NOT agree about when
+-- "here" is. ease_hands_played(-1) is queued at state_events.lua:491, before
+-- evaluate_play is reached, so hands_left has already moved by the time this
+-- observer runs -- on a 4-hand deck the first play of a round reads 3 and
+-- the last reads 0. Discards are the opposite: state_events.lua:452 runs
+-- after the hooked entry point, so discards_left is genuinely the before.
+--
+-- So the hands field is named for what it holds, `hands_left_after`, rather
+-- than sharing a `_before` suffix with a field that means the opposite. Logs
+-- written before 0.4.3 carry the same quantity under the old name, and the
+-- ingester reads either.
 util.hook_around(G.FUNCS, 'evaluate_play', function()
     local round = (G.GAME or {}).current_round or {}
     return {
         cards = util.cards(G.play),
         blind_chips = G.GAME and G.GAME.blind and G.GAME.blind.chips,
         chips_before = G.GAME and G.GAME.chips,
-        hands_left_before = round.hands_left,
+        hands_left_after = round.hands_left,
         discards_left_before = round.discards_left,
         -- Jokers are sampled AFTER the hand resolves, below. Sampling here
         -- would capture their pre-scoring values, which is the opposite of
@@ -554,7 +564,7 @@ end, function(_, _, pre)
         -- "the blind is now cleared" -- a three-hand clear is false on every
         -- hand including the last.
         oneshot     = SMODS.last_hand_oneshot and true or false,
-        hands_left_before = pre and pre.hands_left_before,
+        hands_left_after = pre and pre.hands_left_after,
         discards_left_before = pre and pre.discards_left_before,
         -- Post-scoring, so an accumulator that grew during this hand shows its
         -- new value here rather than a hand late.
@@ -604,17 +614,31 @@ end)
 -- Money
 --
 -- Every balance change funnels through ease_dollars (common_events.lua:68),
--- which queues its mutation unless `instant` is passed -- and no gameplay call
--- site passes it. So no after-hook anywhere can observe a new balance, and
--- recording the deltas here is both exact and simpler than trying.
+-- which queues its mutation unless `instant` is passed. This was an
+-- after-hook on the assumption that no gameplay call site passes it. Five
+-- do, and they apply the change synchronously: The Ox (blind.lua:611) and
+-- Wraith (card.lua:1784), which set the balance to $0, and The Hermit
+-- (card.lua:1710), Temperance (card.lua:1718) and the Economy Tag
+-- (tag.lua:205), which double it. For those, an after-hook read the balance
+-- the change had ALREADY produced, so `before` was the after -- and since
+-- the ingester derives `after = before + delta`, an Ox reading of
+-- {delta = -18, before = 0} came out as a balance of -18 that never existed.
+-- Confirmed in 1790055560-CX8GHTIX-574a.jsonl: {"delta":18,"before":36}
+-- immediately after the balance reached 18.
+--
+-- Reading it in a BEFORE observer is correct on both paths: the queued one
+-- has not run yet either way, and the instant one has not yet reached its
+-- own assignment. `delta` was always exact -- it is read from the argument.
 --------------------------------------------------------------------------
 
-util.hook(_G, 'ease_dollars', function(args)
+util.hook_around(_G, 'ease_dollars', function()
+    return { before = util.num(G.GAME and G.GAME.dollars) }
+end, function(args, _, pre)
     local delta = args[1]
     if not delta or delta == 0 then return end
     emit('money.change', {
         delta  = util.num(delta),
-        before = util.num(G.GAME and G.GAME.dollars),
+        before = pre and pre.before,
     })
 end)
 

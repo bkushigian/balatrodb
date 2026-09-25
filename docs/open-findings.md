@@ -15,10 +15,16 @@ wrong today cannot be repaired later — the log is the system of record.
 These produce a plausible number rather than an obvious failure, which is the
 worst kind. Fix before collecting a corpus you intend to keep.
 
-### `money.change.before` is the post-change balance for five sources
-`mod/BalatroDB/src/hooks.lua:493`
+### ~~`money.change.before` is the post-change balance for five sources~~ -- FIXED in 0.4.3
+`mod/BalatroDB/src/hooks.lua`
 
-The hook is after-only, on the assumption that no gameplay call site passes
+Now a `hook_around` reading `G.GAME.dollars` in the BEFORE observer, which
+is correct on both paths: the queued one has not run yet either way, and
+the instant one has not reached its own assignment. Logs written before
+0.4.3 still carry the wrong `before` at these five sites, and cannot be
+repaired -- the true balance was never written down.
+
+The hook was after-only, on the assumption that no gameplay call site passes
 `instant` to `ease_dollars`. Five do, and they apply the change synchronously:
 
 | site | what |
@@ -37,8 +43,14 @@ never existed**. Confirmed in `1790055560-CX8GHTIX-574a.jsonl`:
 Fix: `hook_around`, capture `G.GAME.dollars` in the *before* observer. Correct
 for both the instant and the queued path.
 
-### `hand.play.hands_left_before` is the value *after* the decrement
-`mod/BalatroDB/src/hooks.lua:415`
+### ~~`hand.play.hands_left_before` is the value *after* the decrement~~ -- FIXED in 0.4.3
+`mod/BalatroDB/src/hooks.lua`
+
+Renamed, not adjusted: the field is `hands_left_after` in the event, the
+column and the docs, because that is what it holds. The ingester reads
+either key, so pre-0.4.3 logs -- which carry the same quantity under the old
+name -- land in the same column. Adding 1 instead would have been a guess
+dressed as a fix.
 
 `ease_hands_played(-1)` (`state_events.lua:491`) is queued before
 `evaluate_play` is reached, so the counter has already moved. Confirmed: on a
@@ -85,8 +97,15 @@ cannot be recovered.
 that existed before the resume — shatter a Glass card, or Death/Hanged Man
 a base card — and check the log gains a `card.remove`.
 
-### `*_num` is NULL for every genuinely beyond-double value
+### `*_num` is NULL for every genuinely beyond-double value -- now DETECTED
 `ingest/ingest.py`, `as_num`
+
+`value_beyond_double` is raised now. The check asks the stored rows -- "any
+row where `ord` is set and `num` is NULL" -- over every ord/num/txt triple
+found by walking `PRAGMA table_info`, so it covers all eight of them today
+and any added later without being updated. It does not fire on the current
+corpus: nothing has exceeded a double yet. The real fix, a scaled or
+decimal-string column, is still open.
 
 `float("1.2345e+400")` is `inf`, `isinf` → `None`. So a real Talisman score is
 dropped from every `SUM`/`AVG`, biased low in a way that grows with how good
@@ -189,24 +208,31 @@ Unreconstructable later, so if you want them they have to go in now.
   mod can genuinely produce duplicates (`log.lua:115` re-queues the whole
   chunk after a failed append). `count_mismatch` now detects it; nothing
   refuses to use the poisoned columns.
-- **Two primary keys are unenforceable**: `joker_derived` (NULL `subject`) and
-  `joker_state` (NULL `card_id`). NULL never conflicts in SQLite.
-- **Missing indexes**: `joker_state(run_id, round_seq)` — the per-round view
-  scans every sample in the run — and `runs(started_ts)`.
-- **`log.close()` leaves `armed` set**, so a later `commit()` would reopen a
-  finished run's file and append past its `run.end`. And `log.open` clears the
-  buffer unconditionally, dropping events if a retry fails twice.
-- **`tests/test_util.py` checks `ord()` against a Python reimplementation in
-  the test file**, not `ingest.ord_num`. The exact historical bug it describes
-  could return and the suite would stay green.
+- **Two primary keys are unenforceable**: `joker_derived` (NULL `subject`)
+  and `joker_state` (NULL `card_id`). NULL never conflicts in SQLite. Both
+  now say so in the schema rather than implying a constraint that is not
+  there; both tables are truncated and rebuilt, so nothing depends on the
+  conflict. (`run_records` had the same shape and it *did* cost rows — see
+  the counter-records entry above.)
+- ~~**Missing indexes**~~ — added: `joker_state(run_id, round_seq)` and
+  `runs(started_ts DESC)`.
+- ~~**`log.close()` leaves `armed` set**~~ — fixed; it clears both, so a
+  later `commit()` cannot reopen a finished run's file and append past its
+  `run.end`. Still open: `log.open` clears the buffer unconditionally,
+  dropping events if a retry fails twice.
+- ~~**`tests/test_util.py` checks `ord()` against a reimplementation**~~ --
+  it imports `ingest.ord_num` now, so the two cannot drift apart into
+  agreement.
 
 ## 6. Dashboard
 
-- **Stake sorts alphabetically** (gold → orange → white). `runs.stake` holds
-  the real ordinal and `api_meta` already uses it; the run payload does not
-  include it.
-- **Result sorts by the raw field** (`died`/`loss` apart, the three WON runs
-  scattered) rather than by what is rendered.
+- ~~**Stake sorts alphabetically**~~ -- fixed. `/api/meta` returns the game's
+  ordinal per stake and `balatro.js` holds one `stakeOrd()` that all three
+  stake columns sort on, including the two whose rows carry only the key.
+  (True order: white 1, blue 5, orange 7, gold 8.)
+- ~~**Result sorts by the raw field**~~ -- fixed. `resultRank()` ranks the
+  chips as rendered, so `won` -- a separate flag from `result` -- no longer
+  scatters the WON runs across completed, died and suspended.
 - **Not keyboard reachable**: sortable headers are `<th>` with `onclick` and
   no `tabindex`; run rows are `<tr onclick>`. `aria-sort` is set correctly, so
   a screen reader is told the state of a control it cannot operate.
@@ -221,32 +247,66 @@ Unreconstructable later, so if you want them they have to go in now.
 From a review aimed specifically at duplicated work. The ones that produced
 wrong output are fixed; these are what is left.
 
-### `held` is a page-wide filter that one panel honours
-`ingest/dashboard.py:128` (`where`), `:369` (`attach_records`)
+### ~~`held` is a page-wide filter that one panel honours~~ — FIXED
+`ingest/dashboard.py`, `attach_records`
 
-The "Joker records: Held / Not held" toggle reaches `api_derived` and
-nothing else. `run_records.held` carries exactly the same distinction, so
-the record badges on the Runs table — 183 of them — ignore the toggle while
-the Jokers panel correctly moves between 14 and 16 rows. The run dialog
-ignoring it is deliberate and documented; the Runs column is not.
+The toggle reaches the record badges now, scoped to the rows that carry the
+distinction: `rr.held IS NULL OR rr.held = ?`. A bare equality would have
+dropped all 155 hand and joker-scale records the moment the toggle was
+touched, since NULL never equals anything. Held 34 -> 7 / 27 across the two
+settings, with the other 155 constant.
 
-### `sort=` is dead server-side, and crashes when combined with a metric
-`ingest/dashboard.py:281-320`
+Chasing this turned up the reason the filter had nothing to filter — see
+below.
 
-Five sort modes exist; `state` has no `sort` key, so the page never sends
-one and the Runs table sorts client-side over whatever 300 rows came back.
-Harmless at 24 runs, wrong at 400. And `?sort=score&metric=hand_score:Pair&
-endless=0` raises `ProgrammingError: Incorrect number of bindings` — `tail`
-is appended and then the metric branch overwrites `sort`, orphaning it.
-Only reachable by hand-crafted URL.
+### ~~Counter jokers set no records at all~~ — FIXED
+`ingest/ingest.py`, `derive_records`; `ingest/schema.sql`, `run_records`
 
-### "Pick the maximum" has two tiebreak rules
-Four queries break an `ord` tie on `CAST(txt AS REAL)`
-(`dashboard.py:199`, `:450`, `:533`, `ingest.py:942`); five comparable ones
-do not (`dashboard.py:240`, `:246`, `:335`, `:613`, `ingest.py:729`/`:786`).
-So the summary tile and the Runs row can print different text for the same
-maximum. **0 collisions in the current corpus** — it starts the first time
-two hands in one run land on the same ordering key.
+Two bugs stacked, both silent, both producing "no rows" — which reads
+exactly like "no run happened to set one".
+
+**The lookup used the wrong key.** Rekeying `joker_counter_peaks` from the
+counter to the joker — forced by Bootstraps, which reads the same `dollars`
+as Bull — left `derive_records` calling `COUNTER_JOKERS.get(metric)`, which
+no longer keys it. Every lookup missed and the block `continue`d. So Bull,
+Bootstraps, Supernova, Stone Joker, Steel Joker, Fortune Teller and
+Throwback were absent from records entirely: 0 of 182 rows, `held` NULL in
+all of them. This is the second time that block has silently produced
+nothing; the first was the bug it was written to fix.
+
+**`held` was not in the primary key.** It is documented as "which of its two
+records this is", and a counter joker genuinely has two for one
+`(run_id, kind, subject, endless)`. They collided, and `INSERT OR REPLACE`
+kept whichever pass ran last — the not-held one — so every counter joker
+also lost its held record.
+
+41 records recovered (224 total, was 182). The block now reads the stored
+`contributed_value` / `ambient_value` rather than reapplying the conversion
+formula, which is what the table stores them for. An inert value is also no
+longer a record: `if value` catches a zero chips or mult but X-mult is inert
+at 1, so Steel Joker with no steel cards was filing "X1" as an achievement.
+
+Pinned by `tests/test_records.py`, which is what caught the second bug.
+
+### `sort=` is dead server-side — the CRASH is fixed
+`ingest/dashboard.py`, `api_runs`
+
+`?sort=score&metric=hand_score:Pair&endless=0` raised
+`ProgrammingError: Incorrect number of bindings`: `tail` held the ORDER BY's
+placeholder and the metric branch then overwrote `sort`, orphaning it. The
+metric branch clears `tail` now, and both URLs return 200.
+
+Still open, and only a scale problem: five sort modes exist, `state` has no
+`sort` key, so the page never sends one and the Runs table sorts client-side
+over whatever 300 rows came back. Harmless at 31 runs, wrong at 400.
+
+### ~~"Pick the maximum" has two tiebreak rules~~ — FIXED
+One rule, in `dashboard.top(ord_col, txt_col)`, applied at the seven sites
+that pick a single row to display and previously ordered on `ord` alone.
+`ord` is an accelerator and distinct values collide on it, so without the
+text tiebreak the summary tile and a Runs row could print different text for
+the same maximum. 0 collisions in the corpus today — it would have started
+the first time two hands in one run landed on the same ordering key.
 
 ### Snapshots carry the game's own per-hand play counts, and ingest ignores them
 `hooks.lua:862-876` logs `G.GAME.hands` as `{played, level}` per hand.
@@ -256,10 +316,11 @@ duplicate log lines inflate. `derive()` already cross-checks `hands_played`
 and `skips` against `run.end` to raise `count_mismatch`; the same check per
 hand type is sitting unused in every snapshot.
 
-### `/api/antes` is dead
-In `ROUTES` with `.bars`/`.bar` CSS to render it, no caller. It is also the
-one endpoint that takes no `endless_col`, so wiring it up as-is would add a
-panel that ignores the phase toggle.
+### ~~`/api/antes` is dead~~ -- REMOVED
+The endpoint, its route and the `.bars`/`.bar` CSS written to render it. The
+stats page answers "how far did runs get" already, and this was the one
+endpoint that took no `endless_col`, so wiring it up as-is would have added
+a panel that ignores the phase toggle.
 
 ### Naming drift
 - ~~**`COUNTER_JOKERS` is two different constants**~~ — **fixed.** There is
@@ -267,10 +328,9 @@ panel that ignores the phase toggle.
   dashboard keeps only `COUNTER_LABEL` for display names, keyed the same
   way. Keying by joker was forced by Bootstraps, which reads the same
   `dollars` counter as Bull.
-- **`joker_derived.held` is a dead column** carrying a six-line comment
-  explaining the Fortune Teller problem it was meant to solve. Never
-  written, never read; the feature moved to `joker_counter_peaks`. A reader
-  will trust the comment.
+- ~~**`joker_derived.held` is a dead column**~~ -- **removed**, along with
+  the six-line comment describing the Fortune Teller problem it was meant to
+  solve. The feature lives in `joker_counter_peaks`.
 - **Jokers are stored twice** — `CARD_ARRAYS` includes `"jokers"`, so every
   snapshot writes them into `cards` (10,568 rows) *and* `joker_state`
   (6,473). `db-schema.md:565` still documents the `cards` path that

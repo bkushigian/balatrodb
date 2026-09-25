@@ -125,6 +125,30 @@ DEFECTS = {
                             "*_num column is NULL and SUM/AVG omit it",
 }
 
+_BEYOND_DOUBLE_COLS = None
+
+
+def beyond_double_columns(db):
+    """Every (table, prefix) carrying an ord/num/txt triple, from the schema.
+
+    Discovered rather than listed so a new triple is covered the day it is
+    added; the alternative is a constant that silently stops being complete.
+    """
+    global _BEYOND_DOUBLE_COLS
+    if _BEYOND_DOUBLE_COLS is None:
+        found = []
+        for (table,) in db.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'").fetchall():
+            cols = {r[1] for r in db.execute(
+                "PRAGMA table_info(" + table + ")")}
+            if "run_id" not in cols:
+                continue
+            found += [(table, c[:-4]) for c in sorted(cols)
+                      if c.endswith("_num") and c[:-4] + "_ord" in cols]
+        _BEYOND_DOUBLE_COLS = found
+    return _BEYOND_DOUBLE_COLS
+
+
 LEGACY_RESULTS = {"quit", "loss", "win"}
 
 # Payload keys holding cards, and which hold arrays. `items` is deliberately
@@ -225,6 +249,11 @@ COUNTER_JOKERS = {
 DECAYING = ("j_turtle_bean", "j_popcorn", "j_ice_cream", "j_ramen")
 # These are module constants, never user input.
 DECAYING_SQL = "(" + ", ".join("'" + k + "'" for k in DECAYING) + ")"
+
+
+# What each ability field is worth when it is doing nothing. Mult and chips
+# add, so zero; X-mult multiplies, so one.
+INERT_FIELD = {"chips": 0, "mult": 0, "x_mult": 1}
 
 
 def counter_value(joker_key, counter):
@@ -521,7 +550,11 @@ class Ingester:
                     (run_id, seg, n, open_round or round_seq, ante, el, d.get("hand"),
                      as_int(d.get("level")), 1 if d.get("oneshot") else 0,
                      so, sn, stx, co, cn, ctx,
-                     as_int(d.get("hands_left_before")), as_int(d.get("discards_left_before")),
+                     # Pre-0.4.3 logs carry this quantity under the old,
+                     # wrong name. Same number either way.
+                     as_int(d.get("hands_left_after",
+                                  d.get("hands_left_before"))),
+                     as_int(d.get("discards_left_before")),
                      ts))
                 self.sample_jokers(run_id, seg, n, open_round or round_seq, ante, el,
                                    d.get("jokers"))
@@ -638,6 +671,20 @@ class Ingester:
                     (run_id,)).fetchone()[0]
                 if theirs != ours:
                     defects.add("count_mismatch")
+
+        # A value too large for a double leaves `ord` set and `num` NULL,
+        # so the run still RANKS correctly and only the arithmetic is wrong
+        # -- SUM and AVG quietly omit it, biased low in proportion to how
+        # good the run was. Asked of the stored rows rather than at the point
+        # of conversion, so it holds for every column that carries the
+        # triple, including ones added later.
+        for table, col in beyond_double_columns(self.db):
+            if self.db.execute(
+                    f"SELECT 1 FROM {table} WHERE run_id = ?"
+                    f"   AND {col}_ord IS NOT NULL AND {col}_num IS NULL"
+                    "  LIMIT 1", (run_id,)).fetchone():
+                defects.add("value_beyond_double")
+                break
 
         for seg, mx in seg_max_n.items():
             if seg_lines.get(seg) != mx + 1:
@@ -862,17 +909,31 @@ class Ingester:
         # Their peaks come from joker_counter_peaks instead, converted from
         # the counter into what the joker actually contributes, and both of
         # their records are eligible.
+        #
+        # Keyed by JOKER. Rekeying joker_counter_peaks from the counter to
+        # the joker -- forced by Bootstraps, which reads the same `dollars`
+        # as Bull -- left this block looking COUNTER_JOKERS up by `metric`,
+        # which no longer keys it. Every lookup missed, so the block silently
+        # went back to producing nothing and counter jokers dropped out of
+        # records again: 0 of 182 rows, and `held` NULL in all of them.
+        #
+        # The values are read rather than reconverted. The table stores what
+        # each joker was worth at each moment precisely so no reader has to
+        # apply the formula a second time.
         counter_rows = {0: [], 1: []}
-        for run_id, metric, el, contributed, ambient in self.db.execute(
-                "SELECT run_id, metric, endless, contributed, ambient "
-                "  FROM joker_counter_peaks"):
-            spec = COUNTER_JOKERS.get(metric)
-            if not spec:
+        for run_id, joker_key, el, held_value, ambient_value, field in                 self.db.execute(
+                    "SELECT run_id, joker_key, endless, contributed_value,"
+                    "       ambient_value, field FROM joker_counter_peaks"):
+            if joker_key not in COUNTER_JOKERS:
                 continue
-            for counter, held in ((contributed, 1), (ambient, 0)):
-                field, value = counter_value(metric, counter)
-                if value:
-                    counter_rows[el].append((run_id, spec[0], value, field, held))
+            # A held-only joker has no ambient reading, so it offers only
+            # the held record -- which is the whole point of held_only.
+            for value, held in ((held_value, 1), (ambient_value, 0)):
+                # An inert value is not a record. `if value` catches a zero
+                # chips or mult, but X-mult is inert at 1, so Steel Joker
+                # with no steel cards was filing "X1" as an achievement.
+                if value is not None and value != INERT_FIELD.get(field, 0):
+                    counter_rows[el].append((run_id, joker_key, value, field, held))
 
         out = []
         for el in (0, 1):

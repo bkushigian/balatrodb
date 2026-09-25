@@ -105,6 +105,51 @@ after = sorted(db.execute("SELECT * FROM run_records").fetchall())
 check("same rows on a second pass", before == after,
       f"{len(before)} -> {len(after)}")
 
+# -- counter jokers reach records at all -----------------------------------
+# They have no joker_scale rows -- their value is a function of run history,
+# not of their own ability fields -- so they arrive through
+# joker_counter_peaks instead. That path has now silently produced nothing
+# TWICE: once when the feature was written, and again when the peaks table
+# was rekeyed from the counter to the joker while the lookup here kept using
+# the old key. Both times the symptom was zero rows, which reads exactly
+# like "no run happened to set one".
+print("\ncounter jokers set records too")
+db.execute("DELETE FROM run_records")
+for rid, ts in (("K1", 100), ("K2", 200)):
+    db.execute("INSERT INTO runs (run_id, log_file, started_ts) VALUES (?,?,?)",
+               (rid, rid + ".jsonl", ts))
+peak = ("INSERT INTO joker_counter_peaks (run_id, joker_key, metric, endless,"
+        " field, contributed_value, ambient_value) VALUES (?,?,?,0,?,?,?)")
+#                                                   held   not held
+db.execute(peak, ("K1", "j_bull", "dollars", "chips", 100.0, 200.0))
+db.execute(peak, ("K2", "j_bull", "dollars", "chips", 300.0, 150.0))
+# Supernova is held_only: no ambient reading exists for it.
+db.execute(peak, ("K1", "j_supernova", "hand_plays", "mult", 40.0, None))
+# Steel Joker at X1 is holding nothing; an inert value is not an achievement.
+db.execute(peak, ("K2", "j_steel_joker", "steel_cards", "x_mult", 1.0, 1.0))
+
+Ingester(db).derive_records()
+recs = {(r[0], r[1], r[2]): r[3] for r in db.execute(
+    "SELECT run_id, subject, held, value_txt FROM run_records"
+    " WHERE held IS NOT NULL")}
+
+check("a counter joker reaches run_records at all", len(recs) > 0, str(recs))
+check("the held reading is its own contest",
+      recs.get(("K1", "j_bull", 1)) == "100"
+      and recs.get(("K2", "j_bull", 1)) == "300", str(recs))
+check("the not-held reading is a separate one, won by the other run",
+      recs.get(("K1", "j_bull", 0)) == "200"
+      and ("K2", "j_bull", 0) not in recs, str(recs))
+check("a held_only joker offers no not-held record",
+      ("K1", "j_supernova", 1) in recs
+      and ("K1", "j_supernova", 0) not in recs, str(recs))
+check("an inert X1 is not a record",
+      not any(k[1] == "j_steel_joker" for k in recs), str(recs))
+
+db.execute("DELETE FROM joker_counter_peaks")
+db.execute("DELETE FROM runs")
+db.execute("DELETE FROM run_records")
+
 print("\na paused run is over once a later run overwrites the save")
 # Balatro keeps ONE save per profile, so "suspended" means resumable only
 # until something else starts. Nothing can log that moment -- the paused run

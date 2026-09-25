@@ -234,6 +234,14 @@ document.addEventListener("scroll", () => { $("#tip").hidden = true; }, true);
 
 // ── display names ───────────────────────────────────────────────────────
 
+// Stake order is the game's, not the alphabet's. Filled from /api/meta by
+// whichever page loads it; an unknown key sorts last rather than at white.
+let STAKE_ORD = {};
+const setStakeOrder = stakes => {
+  STAKE_ORD = Object.fromEntries((stakes || []).map(s => [s.k, s.o]));
+};
+const stakeOrd = key => (key in STAKE_ORD ? STAKE_ORD[key] : null);
+
 const nameOf = (key, fallback) =>
   (SPR && SPR.names && SPR.names[key]) || fallback ||
   (key || "").replace(/^(j|b|m|c)_/, "").replace(/_/g, " ");

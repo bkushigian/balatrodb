@@ -253,8 +253,8 @@ CREATE TABLE IF NOT EXISTS hands (
   oneshot    INTEGER,          -- this hand alone beat the blind
   score_ord  REAL, score_num REAL, score_txt TEXT,
   chips_before_ord REAL, chips_before_num REAL, chips_before_txt TEXT,
-  hands_left_before INTEGER,
-  discards_left_before INTEGER,
+  hands_left_after INTEGER,      -- after the decrement; see below
+  discards_left_before INTEGER,  -- genuinely before
   -- Engine clock (love.timer) at the moment the event was emitted.
   -- Money is attributed to an action by comparing these: a play's
   -- money resolves in the SAME frame, a discard's a beat later.

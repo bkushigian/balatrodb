@@ -83,8 +83,16 @@ check("l is numeric, not text", isinstance(big['l'], float))
 # sorted against each other. A bare log10(|x|) is not interchangeable: below 1
 # it goes negative, so a small POSITIVE number sorted beneath zero and beneath
 # every negative one. That shipped, and only a live review caught it.
-import math as _m
-ordref = lambda x: (-1 if x < 0 else 1) * _m.log10(1 + abs(x))
+#
+# Asked of the ingester itself rather than of a copy of its formula: a copy
+# here would agree with a changed ingester only by luck, and the bug above is
+# exactly the kind that a matching pair of reimplementations hides.
+import os
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                os.pardir, "ingest"))
+import ingest as _ingester
+ordref = lambda x: _ingester.ord_num(x)[0]
 for v, label in [(0.123456789012345, "small positive"),
                  (-0.123456789012345, "small negative"),
                  (123456789012345.0, "large positive"),

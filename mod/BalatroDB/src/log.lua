@@ -127,7 +127,10 @@ function log.close()
     -- after a failed flush strands the retry buffer: the next log.open resets
     -- it, and those events are gone for good.
     if #buffer == 0 then
-        path = nil
+        -- `armed` goes with it. Left set, a later commit() would see a nil
+        -- path and re-open this finished run's file, appending past its
+        -- run.end.
+        armed, path = nil, nil
     else
         sendWarnMessage('closing with ' .. tostring(buffer_bytes) ..
                         ' bytes unwritten; will retry on the next flush', 'BalatroDB')

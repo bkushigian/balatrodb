@@ -126,6 +126,18 @@ def watch(db, logs, every=3.0):
 # LIST it is necessarily per run (did this run ever go endless), which is a
 # different question with the same name.
 
+def top(ord_col, txt_col):
+    """ORDER BY that picks the true maximum, not merely the top `ord`.
+
+    `ord` is sign(x)*log10(1+|x|) -- an accelerator, not a key, and distinct
+    values collide on it. Every query that picks ONE row to display has to
+    break the tie on the exact text, or two surfaces showing the same
+    maximum can disagree about which text it is. Written once because it was
+    previously written four times and omitted seven.
+    """
+    return f"{ord_col} DESC, CAST({txt_col} AS REAL) DESC"
+
+
 def where(q, prefix="r.", endless_col=None):
     clauses, params = [], []
     if q.get("deck"):
@@ -166,8 +178,12 @@ def api_meta(db, q):
     return {
         "decks": rows(db, "SELECT DISTINCT deck_key k, deck_name n FROM runs "
                           "WHERE deck_key IS NOT NULL ORDER BY n"),
-        "stakes": rows(db, "SELECT DISTINCT stake_key k FROM runs "
-                           "WHERE stake_key IS NOT NULL ORDER BY stake"),
+        # `o` is the game's own stake ordinal. Without it the client
+        # sorted stake columns by the key, which is alphabetical: gold
+        # above orange above white.
+        "stakes": rows(db, "SELECT stake_key k, MIN(stake) o FROM runs "
+                           "WHERE stake_key IS NOT NULL "
+                           "GROUP BY stake_key ORDER BY o"),
         "defects": rows(db, "SELECT defect, COUNT(*) n FROM run_defects "
                             "GROUP BY defect ORDER BY n DESC"),
     }
@@ -250,13 +266,15 @@ def api_summary(db, q):
 METRICS = {
     "joker": (
         "(SELECT to_txt FROM joker_scale js WHERE js.run_id = r.run_id"
-        "   AND js.key = ? AND js.is_reset = 0{el} ORDER BY js.to_ord DESC LIMIT 1)",
+        "   AND js.key = ? AND js.is_reset = 0{el} ORDER BY "
+        + top("js.to_ord", "js.to_txt") + " LIMIT 1)",
         "(SELECT MAX(js.to_ord) FROM joker_scale js WHERE js.run_id = r.run_id"
         "   AND js.key = ? AND js.is_reset = 0{el})",
         " AND js.endless = ?"),
     "hand_score": (
         "(SELECT score_txt FROM hands h WHERE h.run_id = r.run_id"
-        "   AND h.hand = ?{el} ORDER BY h.score_ord DESC LIMIT 1)",
+        "   AND h.hand = ?{el} ORDER BY "
+        + top("h.score_ord", "h.score_txt") + " LIMIT 1)",
         "(SELECT MAX(h.score_ord) FROM hands h WHERE h.run_id = r.run_id"
         "   AND h.hand = ?{el})",
         " AND h.endless = ?"),
@@ -373,6 +391,12 @@ def api_runs(db, q):
     metric_txt = metric_ord = "NULL"
     metric = (q.get("metric") or "").split(":", 1)
     if len(metric) == 2 and metric[0] in METRICS:
+        # ...which means dropping whatever the column sort had queued for
+        # the ORDER BY. `sort=score` with a phase filter puts a placeholder
+        # there; overwriting `sort` without clearing `tail` left the binding
+        # with nothing to bind to, and ?sort=score&metric=hand_score:Pair&
+        # endless=0 raised "Incorrect number of bindings".
+        tail = []
         val_sql, ord_sql, el_clause = METRICS[metric[0]]
         el = el_clause if q.get("endless") in ("0", "1") else ""
         metric_txt = val_sql.format(el=el)
@@ -381,6 +405,7 @@ def api_runs(db, q):
         sub = args + args + sub          # both appear before the outer WHERE
         sort = "metric_ord IS NULL, metric_ord DESC"
 
+    best = top("score_ord", "score_txt")
     out = rows(db, f"""
         SELECT {metric_txt} metric_txt, {metric_ord} metric_ord,
                r.run_id, r.log_file, r.started_ts, r.deck_name, r.deck_key,
@@ -395,7 +420,7 @@ def api_runs(db, q):
                  WHERE h.run_id = r.run_id{hw}) bh_ord,
                (SELECT score_txt FROM hands h
                  WHERE h.run_id = r.run_id{hw}
-                 ORDER BY score_ord DESC LIMIT 1) best_hand,
+                 ORDER BY {best} LIMIT 1) best_hand,
                (SELECT MAX(balance) FROM money m
                  WHERE m.run_id = r.run_id{mw}) peak_money,
                -- A round only gets a cash-out when its blind was beaten, so
@@ -497,8 +522,20 @@ def attach_records(db, runs, q=None):
         prev_deck[u["run_id"]] = u["deck_name"]
     ew = ""
     if (q or {}).get("endless") in ("0", "1"):
-        ew = " AND rr.endless = ?"
+        ew += " AND rr.endless = ?"
         params.append(int(q["endless"]))
+    # `held` is the same distinction run_records carries, so the page-wide
+    # toggle belongs here too. Without it the Jokers panel moved between 14
+    # and 16 rows while the 183 record badges on the Runs table ignored the
+    # toggle entirely -- two surfaces answering the same question
+    # differently on one screen.
+    if (q or {}).get("held") in ("0", "1"):
+        # Only the rows the toggle speaks about. `held` is NULL for a hand
+        # record -- there is no joker to have been holding -- and a bare
+        # `rr.held = ?` made all 149 of them vanish the moment the toggle
+        # was touched.
+        ew += " AND (rr.held IS NULL OR rr.held = ?)"
+        params.append(int(q["held"]))
     for rec in rows(db, f"""
             SELECT rr.run_id, rr.kind, rr.subject, rr.endless, rr.field, rr.held,
                    rr.value_txt, rr.value_ord, rr.prev_txt,
@@ -722,16 +759,6 @@ def api_hand_counts(db, q):
           FROM ranked WHERE rn = 1 ORDER BY played DESC""", p)
 
 
-def api_antes(db, q):
-    """Distribution of how far runs got. Single series, so no categorical
-    palette is involved."""
-    w, p = where(q)
-    return rows(db, f"""
-        SELECT COALESCE(r.furthest_ante, r.ended_ante) ante, COUNT(*) n
-          FROM runs r WHERE COALESCE(r.furthest_ante, r.ended_ante) IS NOT NULL{w}
-         GROUP BY ante ORDER BY ante""", p)
-
-
 def run_records_for(db, rid):
     """One run's records, with the endless ones filtered as attach_records
     filters them -- one rule, read from one place."""
@@ -774,7 +801,7 @@ def api_run(db, q):
                                      (SELECT to_txt FROM joker_scale x
                                        WHERE x.run_id=j.run_id AND x.key=j.key
                                          AND x.field=j.field
-                                       ORDER BY x.to_ord DESC LIMIT 1) peak
+                                       ORDER BY """ + top("x.to_ord", "x.to_txt") + """ LIMIT 1) peak
                                 FROM joker_scale j WHERE run_id=? AND is_reset=0
                                GROUP BY key, field ORDER BY o DESC""", (rid,)),
         # Every record this run set, both contests, whatever the page is
@@ -864,7 +891,7 @@ CHASE = {
     "hand_score": """
         WITH r AS (SELECT hand k, score_ord o, score_txt t,
                           ROW_NUMBER() OVER (PARTITION BY hand
-                                             ORDER BY score_ord DESC) rn
+                                             ORDER BY {best_score}) rn
                      FROM hands
                     WHERE score_ord IS NOT NULL AND run_id {op} ?{scope})
         SELECT k, o, t FROM r WHERE rn = 1""",
@@ -885,7 +912,7 @@ CHASE = {
     "joker": """
         WITH r AS (SELECT key k, to_ord o, to_txt t,
                           ROW_NUMBER() OVER (PARTITION BY key
-                                             ORDER BY to_ord DESC) rn
+                                             ORDER BY {best_to}) rn
                      FROM joker_scale
                     WHERE is_reset = 0 AND to_ord IS NOT NULL
                       AND key NOT IN {decaying} AND run_id {op} ?{scope})
@@ -936,7 +963,9 @@ def chase_tables(db, rid, stake_key):
     out = {}
     for kind, sql in CHASE.items():
         tmpl = sql.format(op="{op}", scope="{scope}",
-                          decaying=ingester.DECAYING_SQL)
+                          decaying=ingester.DECAYING_SQL,
+                          best_score=top("score_ord", "score_txt"),
+                          best_to=top("to_ord", "to_txt"))
         mine = _best_per(db, tmpl.format(op="=", scope=""), (rid,))
         rest = _best_per(db, tmpl.format(op="<>", scope=""), (rid,))
         at = ({} if not stake_key else
@@ -1034,7 +1063,8 @@ def api_live(db, q):
           FROM money WHERE run_id = ?""", (rid,)).fetchone()
     best = db.execute("""SELECT hand, score_txt, score_ord FROM hands
                           WHERE run_id = ? AND score_ord IS NOT NULL
-                          ORDER BY score_ord DESC LIMIT 1""", (rid,)).fetchone()
+                          ORDER BY """ + top("score_ord", "score_txt")
+                      + " LIMIT 1", (rid,)).fetchone()
     where_now = db.execute("""SELECT ante, round_seq, blind_name, is_boss
                                 FROM rounds WHERE run_id = ?
                                ORDER BY round_seq DESC LIMIT 1""", (rid,)).fetchone()
@@ -1154,7 +1184,7 @@ def api_round(db, q):
     steps = rows(db, """
         SELECT seg, n, t, 'play' AS kind, hand, level, oneshot,
                score_txt, score_num, chips_before_txt, chips_before_num,
-               hands_left_before, discards_left_before, NULL AS cards_n
+               hands_left_after, discards_left_before, NULL AS cards_n
           FROM hands WHERE run_id = ? AND round_seq = ?
         UNION ALL
         SELECT seg, n, t, 'discard', NULL, NULL, NULL,
@@ -1326,7 +1356,6 @@ ROUTES = {
     "/api/hand_levels": api_hand_levels,
     "/api/hand_counts": api_hand_counts,
     "/api/metrics": api_metrics,
-    "/api/antes": api_antes,
     "/api/run": api_run,
 }
 

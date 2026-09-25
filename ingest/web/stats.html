@@ -806,6 +806,7 @@ Promise.all([
   fetch("/api/metrics").then(r => r.json()),
   SPR_READY,
 ]).then(([meta, m]) => {
+  setStakeOrder(meta.stakes);
   METRICS = m;
   for (const c of m.counters || []) {
     COUNTER_FIELD[c.key] = c.field;
