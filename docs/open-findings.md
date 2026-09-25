@@ -116,12 +116,55 @@ arithmetic is wrong — which makes it harder to notice.
 raised.** Raising it is the minimum fix; storing a scaled or decimal-string
 column is the real one.
 
-### Duplicate `round.end` when a save is resumed at the cash-out screen
-`game.lua:3503-3527` re-runs `evaluate_round` when `G.STATE_COMPLETE` is false,
-and `save_run()` is called at `:3510` — inside `update_round_eval`, before
-`evaluate_round`. So ROUND_EVAL is a normal save point and the natural place to
-stop for the night. Resuming there emits a second `round.end` with the same
-items and total. Any `SUM(total)` is inflated. The player is paid once.
+### Duplicate `round.end` on a cash-out resume — real, and harmless today
+`game.lua:3503-3527` re-runs `evaluate_round` when `G.STATE_COMPLETE` is
+false, and `save_run()` is called at `:3510` — inside `update_round_eval`,
+*before* `evaluate_round`. So ROUND_EVAL is a normal save point and the
+natural place to stop for the night.
+
+**Measured, because the original claim here was wrong.** 8 of 32 logs have
+more than one segment; 5 of those open the resumed segment with a
+`round.end` inside the first five events. Only **one** of the five is
+actually a duplicate:
+
+| | what happened | count |
+|---|---|---|
+| save taken *before* `evaluate_round` ran | the round.end was never emitted pre-quit, and the resume emits it for the first time | 4 |
+| save taken *after* it ran, `STATE_COMPLETE` still false | emitted twice | 1 |
+
+They are told apart by content: the true duplicate repeats the previous
+segment's last `round.end` exactly (same blind, score, total and item
+count); the other four are for a *different* blind. So the resume is
+usually **rescuing** the event, not doubling it — which is why "drop any
+`round.end` right after a `run.resume`" would be the wrong fix, losing four
+real cash-outs to suppress one duplicate.
+
+**`SUM(total)` is NOT inflated.** The ingest branch is idempotent:
+`UPDATE rounds ... WHERE run_id = ? AND round_seq = ?` and
+`INSERT OR REPLACE INTO cashout_items` keyed `(run_id, round_seq, i)`. The
+resumed `round.end` arrives before any new `round.start`, so `round_seq` has
+not advanced and it rewrites the same row with the same values. Verified on
+`1789882854-34SJKDTO-0f3e`: 7 `round.end` events, 6 rounds, 6 cash-outs,
+`SUM(cashout_total)` = 53.
+
+**The money is paid once, and in the resumed segment.** In seg 0 the payout
+for The Window was announced and never paid — the player quit, so no
+`money.change` followed. Seg 1 announced it again and paid it: `+8` appears
+exactly once in the ledger, at `seg1/n4`, balance 5 → 13.
+
+What is left is **latent, not active**:
+
+- nothing *enforces* that the resumed `round.end` precedes the next
+  `round.start`. If one ever arrived after it, `round_seq` would have moved
+  and a stale payout would overwrite the wrong round.
+- `cashout_items` is keyed by position, so if two emissions of the same
+  cash-out ever differed in item count, the extra rows would linger.
+
+The cheap guard, if it is worth one: in the ingester, ignore a `round.end`
+whose `(blind, total, score)` matches the round already cashed at that
+`round_seq`. That blocks the true duplicate, keeps all four rescues — their
+rounds have no `cashout_total` yet — and closes the stale-overwrite case,
+with no mod change and retroactively over the whole corpus.
 
 ---
 
