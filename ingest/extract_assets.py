@@ -51,17 +51,29 @@ def png_size(data: bytes) -> tuple[int, int]:
     return struct.unpack(">II", data[16:24])
 
 
-def parse_centers(src: str) -> dict[str, tuple[int, int]]:
-    """key -> (x, y) atlas cell, from the centre tables in game.lua."""
+def parse_centers(src: str) -> dict[str, tuple]:
+    """key -> (x, y, soul) atlas cell, from the centre tables in game.lua.
+
+    `soul` is a second cell drawn OVER the first, or None. Six jokers use
+    one -- Hologram and the five Legendaries -- and their base cell is a
+    bordered card with nothing on it, so drawing the base alone shows an
+    empty card. In the game the soul layer also shimmers and floats; here
+    it is simply composited, which is the part that carries the picture.
+    """
     entry = re.compile(
         r"(\b(?:j|b|c|m)_[a-z0-9_]+|stake_[a-z]+)\s*=\s*\{(.*?)\},?\s*"
         r"(?=\n|\b(?:j|b|c|m)_[a-z0-9_]+\s*=)", re.S)
-    pos = re.compile(r"pos\s*=\s*\{\s*x\s*=\s*(\d+)\s*,\s*y\s*=\s*(\d+)")
-    out: dict[str, tuple[int, int]] = {}
+    pos = re.compile(
+        r"(?<!soul_)pos\s*=\s*\{\s*x\s*=\s*(\d+)\s*,\s*y\s*=\s*(\d+)")
+    soul = re.compile(
+        r"soul_pos\s*=\s*\{\s*x\s*=\s*(\d+)\s*,\s*y\s*=\s*(\d+)")
+    out: dict[str, tuple] = {}
     for key, body in entry.findall(src):
         m = pos.search(body)
         if m and key not in out:
-            out[key] = (int(m.group(1)), int(m.group(2)))
+            sm = soul.search(body)
+            out[key] = (int(m.group(1)), int(m.group(2)),
+                        (int(sm.group(1)), int(sm.group(2))) if sm else None)
     return out
 
 
@@ -301,12 +313,14 @@ def main() -> int:
     for value, suit, x, y in card_re.findall(src):
         sprites[f"card:{suit}:{value}"] = {"a": "8BitDeck.png",
                                            "x": int(x), "y": int(y)}
-    for key, (x, y) in centers.items():
+    for key, (x, y, soul) in centers.items():
         info = atlas_for(key)
         if not info:
             continue
         atlas, cw, ch = info
         sprites[key] = {"a": atlas, "x": x, "y": y}
+        if soul:
+            sprites[key]["soul"] = {"x": soul[0], "y": soul[1]}
 
     doc = {
         "names": names,

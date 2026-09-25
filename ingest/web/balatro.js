@@ -103,11 +103,20 @@ function sprite(key, kind, px) {
   // "stake_white" and a joker "j_wee". Playing-card layers carry their own
   // combined title on the wrapper instead.
   const tip = kind.startsWith("pc") ? "" : ` title="${esc(nameOf(key))}"`;
+  // Six jokers are two cells: a bordered card with nothing on it, and a
+  // "soul" drawn over it -- Hologram and the five Legendaries. Drawing
+  // only the base showed them as blank cards. Two background layers in the
+  // one element rather than two elements, so every caller is unchanged and
+  // nothing has to learn to stack. The soul is listed FIRST because CSS
+  // paints the first background layer on top.
+  const at = c => `-${(c.x * a.cw * scale).toFixed(1)}px `
+                + `-${(c.y * a.ch * scale).toFixed(1)}px`;
+  const layers = s.soul ? [s.soul, s] : [s];
   return `<span class="spr ${kind}"${tip} style="
       width:${px}px; height:${(a.ch * scale).toFixed(1)}px;
-      background-image:url(assets/${s.a});
+      background-image:${layers.map(() => `url(assets/${s.a})`).join(",")};
       background-size:${(a.w * scale).toFixed(1)}px ${(a.h * scale).toFixed(1)}px;
-      background-position:-${(s.x * a.cw * scale).toFixed(1)}px -${(s.y * a.ch * scale).toFixed(1)}px"></span>`;
+      background-position:${layers.map(at).join(",")}"></span>`;
 }
 
 // The game's own display names, from localization/en-us.lua. Without them a
