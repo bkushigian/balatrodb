@@ -29,6 +29,7 @@ import math
 import os
 import sqlite3
 import zlib
+from typing import NamedTuple
 import sys
 import time
 
@@ -187,13 +188,33 @@ def read_events(path):
 #
 # The conversion is a function rather than a rate because they are not all
 # linear. Bootstraps pays per $5 and Throwback multiplies.
+class Counter(NamedTuple):
+    """How one state-reading joker turns a counter into a contribution."""
+    metric: str                 # the counter it reads
+    field: str                  # chips, mult or x_mult
+    convert: object             # counter -> what it contributes
+    # Whether the counter means anything when nobody holds the joker.
+    #
+    # For most of them it does, and that is a record worth keeping: a
+    # Fortune Teller high set in a run that never owned one is a real fact
+    # about the run. Supernova is the exception. Its counter is simply how
+    # many times that hand has been played -- which the hand leaderboards
+    # already report -- and the game counts every one of them, including
+    # the thousand you played before buying it. So "if you had held it"
+    # says nothing Supernova-shaped; only the plays it was actually present
+    # for are its own.
+    held_only: bool = False
+
+
 COUNTER_JOKERS = {
-    "j_supernova":      ("hand_plays",  "mult",   lambda c: c),
-    "j_throwback":      ("skips",       "x_mult", lambda c: 1 + 0.25 * c),
-    "j_fortune_teller": ("tarots",      "mult",   lambda c: c),
-    "j_stone":          ("stone_cards", "chips",  lambda c: 25 * c),
-    "j_bull":           ("dollars",     "chips",  lambda c: 2 * c),
-    "j_bootstraps":     ("dollars",     "mult",   lambda c: 2 * (c // 5)),
+    "j_supernova":      Counter("hand_plays",  "mult",   lambda c: c,
+                                held_only=True),
+    "j_throwback":      Counter("skips",       "x_mult", lambda c: 1 + 0.25 * c),
+    "j_fortune_teller": Counter("tarots",      "mult",   lambda c: c),
+    "j_stone":          Counter("stone_cards", "chips",  lambda c: 25 * c),
+    "j_steel_joker":    Counter("steel_cards", "x_mult", lambda c: 1 + 0.2 * c),
+    "j_bull":           Counter("dollars",     "chips",  lambda c: 2 * c),
+    "j_bootstraps":     Counter("dollars",     "mult",   lambda c: 2 * (c // 5)),
 }
 
 
@@ -211,8 +232,7 @@ def counter_value(joker_key, counter):
     spec = COUNTER_JOKERS.get(joker_key)
     if spec is None or counter is None:
         return None, None
-    _metric, field, convert = spec
-    return field, convert(counter)
+    return spec.field, spec.convert(counter)
 
 
 MONEY_SKIP = {"state.change", "snapshot", "joker.scale", "money.change",
@@ -711,23 +731,29 @@ class Ingester:
         """
         if not isinstance(deck, list):
             return
-        stone = best = total = 0
+        stone = steel = best = total = 0
         for c in deck:
             if not isinstance(c, dict):
                 continue
             # The enhancement is named "Stone Card", not "Stone" -- the
             # earlier comparison never matched, so deck_stone was always 0
             # and Stone Joker was unreconstructable.
-            if (c.get("enhancement") or "").startswith("Stone"):
+            enh = c.get("enhancement") or ""
+            if enh.startswith("Stone"):
                 stone += 1
+            # Steel Joker reads the whole deck the same way Stone Joker
+            # does, so it is counted in the same pass.
+            elif enh.startswith("Steel"):
+                steel += 1
             stt = c.get("state")
             if isinstance(stt, dict):
                 b = as_num(stt.get("perma_bonus")) or 0.0
                 best = max(best, b)
                 total += b
         self.db.execute(
-            "UPDATE rounds SET deck_stone=?, deck_perma_max=?, deck_perma_total=?"
-            " WHERE run_id=? AND round_seq=?", (stone, best, total, run_id, round_seq))
+            "UPDATE rounds SET deck_stone=?, deck_steel=?, deck_perma_max=?,"
+            " deck_perma_total=? WHERE run_id=? AND round_seq=?",
+            (stone, steel, best, total, run_id, round_seq))
 
     # -- counters the derived jokers actually read --------------------------
     def derive_abandoned(self):
@@ -899,6 +925,12 @@ class Ingester:
             SELECT run_id, seg, start_n, endless, 'stone_cards', NULL, deck_stone
               FROM rounds WHERE deck_stone IS NOT NULL AND start_n IS NOT NULL
         """)
+        # Steel Joker: steel cards in the deck, from the per-round scalar.
+        self.db.execute("""
+            INSERT INTO joker_derived (run_id, seg, n, endless, metric, subject, value)
+            SELECT run_id, seg, start_n, endless, 'steel_cards', NULL, deck_steel
+              FROM rounds WHERE deck_steel IS NOT NULL AND start_n IS NOT NULL
+        """)
         # Fortune Teller: tarots used so far.
         self.db.execute("""
             INSERT INTO joker_derived (run_id, seg, n, endless, metric, subject, value)
@@ -960,8 +992,8 @@ class Ingester:
         # way, so the peaks are stored per joker rather than per counter.
         # Which jokers read each counter. Usually one; `dollars` feeds two.
         readers = {}
-        for jk, (metric, field, _c) in COUNTER_JOKERS.items():
-            readers.setdefault(metric, []).append((jk, field))
+        for jk, spec in COUNTER_JOKERS.items():
+            readers.setdefault(spec.metric, []).append((jk, spec))
 
         out = []
         for (run_id, metric), rows_ in series.items():
@@ -972,7 +1004,8 @@ class Ingester:
                 if val > ambient.get(el, float("-inf")):
                     ambient[el] = val
 
-            for joker_key, field in readers.get(metric, []):
+            for joker_key, spec in readers.get(metric, []):
+                field = spec.field
                 held = spans.get((run_id, joker_key), [])
                 inside = lambda seg, n, h=held: any(
                     s == seg and lo <= n <= hi for s, lo, hi in h)
@@ -998,9 +1031,17 @@ class Ingester:
                         if inside(pseg, pn) and cur > contributed.get(pel, float("-inf")):
                             contributed[pel] = cur
 
-                for el in set(ambient) | set(contributed) | set(unheld):
+                # A held-only joker has no meaningful reading for the
+                # moments it was absent, so those two are not written at
+                # all rather than written and then explained away.
+                if spec.held_only:
+                    unheld, ambient_ = {}, {}
+                else:
+                    ambient_ = ambient
+
+                for el in set(ambient_) | set(contributed) | set(unheld):
                     c = contributed.get(el)
-                    a = ambient.get(el)
+                    a = ambient_.get(el)
                     u = unheld.get(el)
                     # Converted here, once. A counter is not comparable
                     # across jokers -- 189 dollars is 378 chips to Bull and

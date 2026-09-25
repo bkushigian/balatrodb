@@ -533,7 +533,9 @@ async function drawJoker() {
   const host = $("#c_joker");
   const spec = (sel.joker || "").split(":");
   const counter = spec[0] === "counter";
-  $("#heldsel").hidden = !counter;
+  // A held-only joker has just the one reading, so the three-way toggle
+  // would be two dead buttons.
+  $("#heldsel").hidden = !counter || !!COUNTER_HELD_ONLY[spec[1]];
   if (spec.length !== 2) {
     host.innerHTML = `<div class="empty">Pick a joker to see how its best
       run compares with every run before it.</div>`;
@@ -547,7 +549,8 @@ async function drawJoker() {
   const color = field === "mult" || field === "x_mult"
     ? "var(--mult)" : "var(--chips)";
   const metric = counter
-    ? `${HELD_METRIC[sel.held] || "counter"}:${spec[1]}` : sel.joker;
+    ? `${(COUNTER_HELD_ONLY[spec[1]] ? "counter"
+          : HELD_METRIC[sel.held] || "counter")}:${spec[1]}` : sel.joker;
 
   const pairs = await phasePair(metric);
   const series = phaseSeries(pairs,
@@ -653,6 +656,7 @@ async function drawRuns() {
 // ── wiring ───────────────────────────────────────────────────────────────
 let METRICS = null;
 const COUNTER_FIELD = {};    // joker key -> what it contributes
+const COUNTER_HELD_ONLY = {};// joker key -> has no "if you had held it"
 
 function buildJokerPicker() {
   if (!METRICS) return;
@@ -805,6 +809,7 @@ Promise.all([
   METRICS = m;
   for (const c of m.counters || []) {
     COUNTER_FIELD[c.key] = c.field;
+    COUNTER_HELD_ONLY[c.key] = c.held_only;
   }
   buildPicker("deck", "deck", meta.decks, "b", 48, "All decks");
   buildPicker("stake", "stake",

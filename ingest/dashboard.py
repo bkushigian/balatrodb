@@ -311,13 +311,17 @@ def api_metrics(db, q):
     counters = rows(db, f"""
         SELECT DISTINCT cp.joker_key k FROM joker_counter_peaks cp
           JOIN runs r USING (run_id)
-         WHERE cp.contributed_value IS NOT NULL{w} ORDER BY k""", p)
+         WHERE COALESCE(cp.ambient_value, cp.contributed_value) IS NOT NULL{w}
+         ORDER BY k""", p)
     return {"jokers": [j["k"] for j in jokers], "hands": [h["k"] for h in hands],
             "counters": [{"key": c["k"],
-                          "metric": ingester.COUNTER_JOKERS[c["k"]][0],
+                          "metric": ingester.COUNTER_JOKERS[c["k"]].metric,
                           # What it contributes, so a reader can colour it
                           # the way the game does -- blue chips, red mult.
-                          "field": ingester.COUNTER_JOKERS[c["k"]][1]}
+                          "field": ingester.COUNTER_JOKERS[c["k"]].field,
+                          # Supernova has no "if you had held it" reading,
+                          # so a page must not offer one.
+                          "held_only": ingester.COUNTER_JOKERS[c["k"]].held_only}
                          for c in counters if c["k"] in ingester.COUNTER_JOKERS]}
 
 
@@ -599,6 +603,7 @@ COUNTER_LABEL = {
     "j_throwback":      ("Throwback",      "blinds skipped"),
     "j_fortune_teller": ("Fortune Teller", "tarots used"),
     "j_stone":          ("Stone Joker",    "stone cards in deck"),
+    "j_steel_joker":    ("Steel Joker",    "steel cards in deck"),
     "j_bull":           ("Bull",           "dollars held"),
     "j_bootstraps":     ("Bootstraps",     "dollars held"),
 }
@@ -637,7 +642,8 @@ def api_derived(db, q):
                 SELECT * FROM ranked WHERE rn = 1 AND value > 0""", p):
             key = r["joker_key"]
             name, what = COUNTER_LABEL.get(key, (key, ""))
-            field = ingester.COUNTER_JOKERS.get(key, (None, "chips"))[1]
+            spec = ingester.COUNTER_JOKERS.get(key)
+            field = spec.field if spec else "chips"
             counter = r["value"]
             # Converted once, in the ingester. Three call sites used to do
             # this arithmetic and two of them render side by side.
@@ -873,9 +879,12 @@ CHASE = {
     # Per joker, not per counter: Bull and Bootstraps read the same money
     # and are worth different things for it.
     "counter": """
-        SELECT joker_key k, MAX(ambient_ord) o, MAX(ambient_value) t
+        SELECT joker_key k,
+               MAX(COALESCE(ambient_ord, contributed_ord)) o,
+               MAX(COALESCE(ambient_value, contributed_value)) t
           FROM joker_counter_peaks
-         WHERE ambient_value IS NOT NULL AND run_id {op} ?{scope}
+         WHERE COALESCE(ambient_value, contributed_value) IS NOT NULL
+           AND run_id {op} ?{scope}
          GROUP BY joker_key""",
 }
 
@@ -1211,7 +1220,7 @@ def attach_scaling(db, rid, jokers):
             scale = cur.get(j["card_id"])
             spec = ingester.COUNTER_JOKERS.get(j["key"])
             if scale is None and spec is not None:
-                c = cnt.get(spec[0])          # spec[0] is the counter it reads
+                c = cnt.get(spec.metric)
                 if c is not None:
                     field, v = ingester.counter_value(j["key"], c)
                     scale = {"field": field, "value": v, "ord": ord_of(v)}

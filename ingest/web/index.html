@@ -858,7 +858,13 @@ function buildMetricPickers() {
       // Three peaks, not two: what it added while you held it, what the
       // counter reached while you did not, and the larger of the two. The
       // seals say which; the maximum wears none, because it is either.
-      opts = opts.concat((METRICS.counters || []).flatMap(c => [
+      opts = opts.concat((METRICS.counters || []).flatMap(c => c.held_only
+        // Supernova counts every play of the hand, including the ones
+        // before you owned it, so only the plays it was there for are its
+        // own -- there is no second reading to offer.
+        ? [{ k: `counter:${c.key}`, n: nameOf(c.key),
+             art: sprite(c.key, "j", 30) }]
+        : [
         { k: `counter:${c.key}`, n: nameOf(c.key),
           art: `<span class="jart">${sprite(c.key, "j", 30)}${
             handIcon({ held: 1 })}</span>` },

@@ -118,6 +118,9 @@ CREATE TABLE IF NOT EXISTS rounds (
   -- behind them need not be stored as rows. Every statistic wanted from a
   -- deck sample is one of these.
   deck_stone       INTEGER,   -- Stone Joker reads this
+  -- Steel cards in the whole deck, counted in the same pass. Steel Joker
+  -- reads it the way Stone Joker reads the stone count.
+  deck_steel       INTEGER,
   deck_perma_max   REAL,      -- largest single Hiker bonus
   deck_perma_total REAL,      -- Hiker's accumulated bonus across the deck
   PRIMARY KEY (run_id, round_seq)
