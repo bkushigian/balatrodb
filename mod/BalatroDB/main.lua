@@ -13,7 +13,7 @@
 --- game playable.
 
 BalatroDB = {
-    VERSION = '0.4.2',
+    VERSION = '0.4.3',
     SCHEMA = 1,
     mod = SMODS.current_mod,
     ok = false,

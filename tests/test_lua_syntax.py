@@ -15,6 +15,7 @@ calls that do not exist in 5.1.
 """
 import pathlib
 import re
+import json
 import sys
 
 try:
@@ -76,6 +77,22 @@ for path in files:
             print("        " + b)
     else:
         print(f"  ok   {rel}  ({len(src.splitlines())} lines)")
+
+# ── the two version strings agree ─────────────────────────────────────────
+# BalatroDB.json is what Steamodded reads; main.lua's VERSION is what every
+# log line is stamped with, because env.lua deliberately reports the constant
+# the running code carries rather than the manifest. Nothing kept them in
+# step, so 0.4.3 shipped stamping its logs 0.4.2 -- which defeats the point
+# of bumping a version at all, since the stamp is how a reader tells which
+# runs were captured by which build.
+manifest = json.loads((MOD / "BalatroDB.json").read_text(encoding="utf-8"))["version"]
+m = re.search(r"VERSION\s*=\s*'([^']+)'", (MOD / "main.lua").read_text(encoding="utf-8"))
+lua = m.group(1) if m else None
+if lua == manifest:
+    print(f"  ok   version {manifest} in both BalatroDB.json and main.lua")
+else:
+    fails += 1
+    print(f"  FAIL BalatroDB.json says {manifest!r}, main.lua says {lua!r}")
 
 print("\nFAILURES:", fails)
 sys.exit(1 if fails else 0)
