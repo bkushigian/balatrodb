@@ -79,7 +79,7 @@ dressed as a fix.
 with the same suffix have opposite meanings, which is worse than either being
 wrong alone. Either rename to `hands_left_after` or add 1 in the hook.
 
-### ~~Card removals vanish after a resume~~ — FIXED, unverified in play
+### ~~Card removals vanish after a resume~~ — FIXED, VERIFIED in play
 `mod/BalatroDB/src/hooks.lua`, in the baseline emitter
 
 `bdb_owned` is set in the `add_to_deck` hook, and `Card:load()` never calls
@@ -111,10 +111,32 @@ condemned everything after it.
 Those two runs still fail, correctly: the events were never written and
 cannot be recovered.
 
-**Still not verified in play**, and the only capture fix left unconfirmed.
-Needs: Continue a saved run, then destroy a card that existed before the
-resume — shatter a Glass card, or Death/Hanged Man a base card — and
-check the log gains a `card.remove`.
+**Verified in play** on `1790322017-5WXFPBMB-aae4`. The run was suspended
+in the shop at ante 5 with a 49-card deck (ids 427-478, recorded before the
+resume), then continued and given a Hanged Man:
+
+    seg 1790323080  n=22  pack.pick    c_hanged_man  targets [430, 469]
+                    n=24  card.remove  id=469  reason=destroyed
+                    n=25  card.remove  id=430  reason=destroyed
+
+Both ids are in the pre-resume set and both removals landed in the resumed
+segment, which is exactly what the old build dropped. Rebaseline 49, +0
+adds, -2 removes.
+
+**And it exposed a false positive in the check itself.** The run still
+raised `deck_identity_fail`, not because anything was lost but because
+`end` is whichever `run.end` came last in the FILE — here the suspend,
+carrying `deck_size = 49`. The baseline had been re-anchored at the later
+`run.rebaseline`, so the identity compared a post-resume count against a
+pre-resume final: 49 + 0 - 2 = 47 against 49.
+
+A `run.rebaseline` now clears `end`, which is the whole fix: `write_run`
+already reports `no_run_end` for a missing one — the truth for a run
+still being played — and the identity is not checked without a final size
+to check against. Every resumed run that destroyed a card had been
+reporting a capture defect it did not have, and the two runs that fail
+today are the two that genuinely lost events. Pinned by
+`tests/test_defects.py`.
 
 ### `*_num` is NULL for every genuinely beyond-double value -- now DETECTED
 `ingest/ingest.py`, `as_num`

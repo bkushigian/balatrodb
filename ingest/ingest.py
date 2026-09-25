@@ -507,6 +507,17 @@ class Ingester:
                 if e == "run.rebaseline" and d.get("deck_cards") is not None:
                     baseline_deck = len(d.get("deck_cards") or [])
                     card_add = card_remove = 0
+                    # And whatever run.end we have seen describes a state the
+                    # run has now moved past: it was written when the save
+                    # was suspended, and play resumed after it. Dropping it
+                    # is the whole fix -- write_run reports `no_run_end` for
+                    # a missing one, which is the truth for a run still being
+                    # played, and the deck identity is not checked without a
+                    # final size to check against. Left in place, it compared
+                    # a pre-resume final against a post-resume baseline, so
+                    # every resumed run that destroyed a card reported a
+                    # capture defect it did not have.
+                    end = None
 
             elif e == "run.win":
                 saw_win = True
