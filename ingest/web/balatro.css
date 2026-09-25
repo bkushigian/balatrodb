@@ -763,3 +763,10 @@ tr.detail > td { padding: 0; border-top: 0; }
           padding: 8px 15px 10px; }
 .chmore:hover { color: var(--ink); }
 .chmore:active { transform: translateY(2px); --lip-h: 1px; }
+
+/* Three shop figures on one metadata tile. */
+.shopline { display: flex; gap: 4px; align-items: baseline; flex-wrap: wrap;
+            font-size: 19px; }
+.shopline b { font-weight: 700; }
+.shopline i { font-style: normal; color: var(--ink-mute); font-size: 12px;
+              margin-right: 7px; }

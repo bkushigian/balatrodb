@@ -246,6 +246,11 @@ const summaryTiles = s => [
    "one round", "money"],
   ["Largest deck", fmt(s.max_deck), "cards", "chips"],
   ["Runs", fmt(s.runs), `${s.won} won`, "purple"],
+  // Only when there is any. A "Deepest debt: $0" tile is a column of the
+  // page spent saying nothing happened.
+  ...(s.max_debt < 0
+      ? [["Deepest debt", "-$" + fmt(-s.max_debt), "below zero", "mult"]]
+      : []),
 ];
 
 // Renders them into `el`. The values are already formatted and escaped by

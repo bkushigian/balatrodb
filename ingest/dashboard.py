@@ -203,6 +203,11 @@ def api_summary(db, q):
     money = db.execute(
         f"""SELECT MAX(m.balance) v FROM money m JOIN runs r USING (run_id)
             WHERE 1=1{mw}""", mp).fetchone()
+    # The other end of the same series. Balatro lets the balance go under,
+    # and how far under is its own small achievement.
+    debt = db.execute(
+        f"""SELECT MIN(m.balance) v FROM money m JOIN runs r USING (run_id)
+            WHERE 1=1{mw}""", mp).fetchone()
 
     dw, dp = where(q, endless_col="ro.endless")
     deck = db.execute(
@@ -230,6 +235,7 @@ def api_summary(db, q):
         "best_hand_name": best["hand"] if best else None,
         "best_hand_deck": best["deck_name"] if best else None,
         "max_money": money["v"] if money else None,
+        "max_debt": debt["v"] if debt else None,
         "max_deck": deck["v"] if deck else None,
         "max_ante": ante["v"] if ante else None,
         "max_cashout": cash["v"] if cash else None,
@@ -789,6 +795,14 @@ def api_run(db, q):
         "rounds_won": db.execute(
             "SELECT COUNT(*) FROM rounds WHERE run_id=? AND cashout_total IS NOT NULL",
             (rid,)).fetchone()[0],
+        # What the shop took, and gave back.
+        "shop": {r["action"]: {"n": r["n"], "amount": r["amount"]}
+                 for r in rows(db, """SELECT action, COUNT(*) n,
+                                             SUM(amount) amount
+                                        FROM shop WHERE run_id = ?
+                                       GROUP BY action""", (rid,))},
+        "debt": db.execute(
+            "SELECT MIN(balance) FROM money WHERE run_id=?", (rid,)).fetchone()[0],
     }
 
 

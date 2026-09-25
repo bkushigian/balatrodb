@@ -383,6 +383,34 @@ CREATE TABLE IF NOT EXISTS joker_counter_peaks (
   PRIMARY KEY (run_id, joker_key, endless)
 );
 
+-- What you did in the shop. The mod has logged buys, sells and rerolls
+-- from the start; nothing read them, so `money.cause = 'shop.buy'` pointed
+-- at rows that did not exist. One table for the three because they share a
+-- shape -- an action, a thing, and an amount -- and the questions worth
+-- asking ("what do I spend on", "how many rerolls a shop", "what do I
+-- sell") all want them side by side.
+CREATE TABLE IF NOT EXISTS shop (
+  run_id  TEXT    NOT NULL,
+  seg     INTEGER NOT NULL,
+  n       INTEGER NOT NULL,
+  ante    INTEGER,
+  round_seq INTEGER,
+  endless INTEGER NOT NULL,
+  action  TEXT    NOT NULL,          -- buy | sell | reroll
+  -- Absent for a reroll, which buys nothing.
+  key     TEXT,
+  set_    TEXT,
+  name    TEXT,
+  -- The cost of a buy or a reroll, the proceeds of a sell. Always positive:
+  -- `action` says which direction it went.
+  amount  INTEGER,
+  -- A buy that was used on the spot rather than carried.
+  and_use INTEGER,
+  PRIMARY KEY (run_id, seg, n)
+);
+
+CREATE INDEX IF NOT EXISTS shop_run ON shop(run_id, action);
+
 CREATE TABLE IF NOT EXISTS money (
   run_id  TEXT    NOT NULL,
   seg     INTEGER NOT NULL,

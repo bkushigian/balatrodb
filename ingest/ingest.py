@@ -571,6 +571,23 @@ class Ingester:
                     "INSERT OR REPLACE INTO consumable_uses VALUES (?,?,?,?,?,?,?)",
                     (run_id, seg, n, ante, el, c.get("key"), c.get("set")))
 
+            elif e in ("shop.buy", "shop.sell", "shop.reroll"):
+                c = d.get("card") or {}
+                self.db.execute(
+                    "INSERT OR REPLACE INTO shop (run_id, seg, n, ante,"
+                    " round_seq, endless, action, key, set_, name, amount,"
+                    " and_use) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    # Shopping happens between rounds, when open_round has
+                    # already been cleared, so it is filed under the round
+                    # just finished -- which is the shop you were in.
+                    (run_id, seg, n, ante, open_round or round_seq, el,
+                     e.split(".", 1)[1],
+                     c.get("key"), c.get("set"), c.get("name"),
+                     # A buy costs, a sell pays, a reroll costs. One column,
+                     # since `action` already says which way it went.
+                     as_int(d.get("cost") if e != "shop.sell" else d.get("value")),
+                     1 if d.get("and_use") else 0))
+
             elif e == "card.add":
                 card_add += 1
             elif e == "card.remove":

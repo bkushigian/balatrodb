@@ -294,6 +294,21 @@ const seedCell = r => r.seed
   : `<span class="muted">—</span>`;
 const shortRun = r => (r || "").split("-")[1] || r;
 
+// What the shop took and gave back, in one line: spent on cards, spent on
+// rerolls, taken in sales. Three numbers rather than a net, because a run
+// that churns $1,700 through rerolls is not the same as one that spends
+// nothing, and a net would hide both.
+const shopCell = sh => {
+  const at = k => (sh && sh[k]) || { n: 0, amount: 0 };
+  const buy = at("buy"), rer = at("reroll"), sel = at("sell");
+  if (!buy.n && !rer.n && !sel.n) return `<span class="muted">—</span>`;
+  return `<span class="shopline"
+      title="${buy.n} bought, ${rer.n} rerolls, ${sel.n} sold"
+    ><b class="sc-money">$${fmt(buy.amount)}</b><i>cards</i
+    ><b class="sc-mult">$${fmt(rer.amount)}</b><i>rerolls</i
+    ><b class="sc-level">$${fmt(sel.amount)}</b><i>sold</i></span>`;
+};
+
 // Which build of the mod wrote this run. It is per SEGMENT, so a run
 // resumed after an update legitimately carries two -- and that matters,
 // because what the log captures has changed between versions.
@@ -570,6 +585,7 @@ async function openRun(id) {
       ${mt("Best hand", fmtScore(r.best_hand_txt), "chips")}
       ${mt("Final", r.final_dollars === null ? "—" : "$" + fmt(r.final_dollars), "money")}
       ${mt("Deck size", fmt(r.deck_size), "")}
+      ${mt("Shop", shopCell(d.shop), "", true)}
       ${mt("Sessions", fmt(d.segments.length), "")}
       ${mt("Logged by", modVersions(d.segments), "", true)}
       ${mt("Seed", seedCell(r), "", true)}

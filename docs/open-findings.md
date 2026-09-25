@@ -145,10 +145,12 @@ Cheap, and it makes every future live test faster.
 
 All present in the logs today; each needs only an ingest branch.
 
-- **`shop.buy` / `shop.sell` / `shop.reroll`** — `hooks.lua:643/660/669` carry
-  cost and value. `money.cause='shop.buy'` rows exist with no shop table to
-  join to. "What do I spend on", "how many rerolls per shop", "what do I sell"
-  are all unanswerable. **Biggest single gap.**
+- ~~**`shop.buy` / `shop.sell` / `shop.reroll`**~~ — **fixed.** They land in
+  a `shop` table now, filed under the round just played, since shopping
+  happens after a round's cash-out when `open_round` has been cleared. The
+  whole corpus re-derived: 603 buys ($2,206), 1,011 rerolls ($7,179), 488
+  sells ($1,024). Buying a *booster* does not emit `shop.buy` — it comes
+  through as `pack.open`, which `consumable_uses` already holds (480).
 - **`hand.discard.forced`** (The Hook, `hooks.lua:466`) — without it, forced
   discards pollute every discard statistic.
 - **`consumable_uses` conflates three events** — `consumable.use`, `pack.open`
