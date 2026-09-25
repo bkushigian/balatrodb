@@ -15,7 +15,7 @@ wrong today cannot be repaired later — the log is the system of record.
 These produce a plausible number rather than an obvious failure, which is the
 worst kind. Fix before collecting a corpus you intend to keep.
 
-### ~~`money.change.before` is the post-change balance for five sources~~ -- FIXED in 0.4.3
+### ~~`money.change.before` is the post-change balance for five sources~~ -- FIXED in 0.4.3, VERIFIED in play
 `mod/BalatroDB/src/hooks.lua`
 
 Now a `hook_around` reading `G.GAME.dollars` in the BEFORE observer, which
@@ -23,6 +23,24 @@ is correct on both paths: the queued one has not run yet either way, and
 the instant one has not reached its own assignment. Logs written before
 0.4.3 still carry the wrong `before` at these five sites, and cannot be
 repaired -- the true balance was never written down.
+
+**Both paths confirmed against `1790322017-5WXFPBMB-aae4`.** The Hermit is
+one of the five instant sites, and it doubles the balance capped at +$20,
+which makes it a clean discriminator: under the old after-hook `before`
+would have been the doubled figure, so `delta` would read as exactly half
+of it.
+
+| | `before` | `delta` | what 0.4.2 would have logged |
+|---|---|---|---|
+| `n=249` | 19 | 19 | `before=38` -- delta exactly half |
+| `n=561` | 82 | 20 (capped) | `before=102` |
+
+Both agree with a ledger accumulated from `delta` alone since the run's
+first money event, so the check does not lean on the values it is
+testing. The queued path is covered by the same run: 83 money events in
+as many frames with 0 inconsistencies -- several calls inside one frame
+correctly share a `before`, since none of their mutations has run yet --
+and the ledger lands on 71 against the game's own `G.GAME.dollars` of 71.
 
 The hook was after-only, on the assumption that no gameplay call site passes
 `instant` to `ease_dollars`. Five do, and they apply the change synchronously:
@@ -43,7 +61,7 @@ never existed**. Confirmed in `1790055560-CX8GHTIX-574a.jsonl`:
 Fix: `hook_around`, capture `G.GAME.dollars` in the *before* observer. Correct
 for both the instant and the queued path.
 
-### ~~`hand.play.hands_left_before` is the value *after* the decrement~~ -- FIXED in 0.4.3
+### ~~`hand.play.hands_left_before` is the value *after* the decrement~~ -- FIXED in 0.4.3, VERIFIED in play
 `mod/BalatroDB/src/hooks.lua`
 
 Renamed, not adjusted: the field is `hands_left_after` in the event, the
@@ -93,9 +111,10 @@ condemned everything after it.
 Those two runs still fail, correctly: the events were never written and
 cannot be recovered.
 
-**Not verified in play.** Needs: Continue a saved run, then destroy a card
-that existed before the resume — shatter a Glass card, or Death/Hanged Man
-a base card — and check the log gains a `card.remove`.
+**Still not verified in play**, and the only capture fix left unconfirmed.
+Needs: Continue a saved run, then destroy a card that existed before the
+resume — shatter a Glass card, or Death/Hanged Man a base card — and
+check the log gains a `card.remove`.
 
 ### `*_num` is NULL for every genuinely beyond-double value -- now DETECTED
 `ingest/ingest.py`, `as_num`
