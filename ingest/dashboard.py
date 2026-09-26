@@ -19,6 +19,7 @@ import glob
 import json
 import math
 import os
+import pathlib
 import zlib
 import sqlite3
 import threading
@@ -1236,8 +1237,27 @@ def api_live(db, q):
     }
 
 
+# When this process loaded its own code. Static files are read from disk on
+# every request but the Python is not, so editing the server while it runs
+# leaves a NEW page talking to an OLD API -- and the page fails silently,
+# because a field the server has never heard of arrives as undefined and
+# `d.whatever || []` renders nothing at all. That cost a round trip to
+# diagnose once; the page can say it instead.
+SOURCE = sorted(pathlib.Path(__file__).resolve().parent.glob("*.py"))
+LOADED_AT = max((p.stat().st_mtime for p in SOURCE), default=0.0)
+
+
+def source_changed():
+    """Whether any server module on disk is newer than the one running."""
+    try:
+        return max((p.stat().st_mtime for p in SOURCE), default=0.0) > LOADED_AT + 1
+    except OSError:
+        return False
+
+
 def api_version(db, q):
-    return {"generation": generation, "last_sync": last_sync}
+    return {"generation": generation, "last_sync": last_sync,
+            "stale": source_changed()}
 
 
 def api_round(db, q):

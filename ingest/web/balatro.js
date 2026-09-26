@@ -284,6 +284,25 @@ const summaryLine = s =>
   `${s.runs} runs · ${s.won} won` +
   (s.win_pct !== null ? ` · ${s.win_pct}% win rate` : "");
 
+// Shown when the server is running code older than what is on disk. Both
+// pages poll /api/version already, so this only needs somewhere to appear.
+//
+// A server too old to KNOW it is old reports no `stale` field at all, which
+// is itself the older case -- so an absent field is not treated as false
+// forever; the banner simply cannot help until the first restart after this
+// shipped.
+function showStale(on) {
+  let el = $("#stalebar");
+  if (!on) { if (el) el.remove(); return; }
+  if (el) return;
+  el = document.createElement("div");
+  el.id = "stalebar";
+  el.className = "stalebar";
+  el.textContent = "The dashboard server is running older code than the "
+    + "files on disk. Restart it to pick up the changes.";
+  document.body.prepend(el);
+}
+
 // ── talking to the API ──────────────────────────────────────────────────
 
 const qs = () => {

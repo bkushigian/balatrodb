@@ -544,6 +544,10 @@ tr.detail > td { padding: 0; border-top: 0; }
    views kept showing their panel headings above an empty box. */
 .view[hidden] { display: none; }
 
+/* Only ever present when something is wrong, so it is allowed to be loud. */
+.stalebar { background: var(--gold); color: #2a1a00; font-weight: 700;
+            padding: 9px 18px; text-align: center; font-size: 14px; }
+
 /* The bars stop where the plotted area of the charts below stops, so the
    two halves of a page read as the same width rather than the bars running
    on past every graph. */

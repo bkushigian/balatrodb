@@ -1046,6 +1046,7 @@ setInterval(async () => {
   if (document.hidden) return;
   try {
     const v = await fetch("/api/version").then(r => r.json());
+    showStale(v.stale);
     if (seenGeneration === null) { seenGeneration = v.generation; return; }
     if (v.generation !== seenGeneration) {
       seenGeneration = v.generation;
