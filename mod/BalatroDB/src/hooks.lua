@@ -358,6 +358,10 @@ util.hook(Game, 'update', function()
     end
 
     watch_offers()
+    -- Bounds how far behind the game the log can fall while you are reading
+    -- a shop or a pack -- the moments that emit too little to trip the
+    -- volume thresholds.
+    log.tick()
 end)
 
 --------------------------------------------------------------------------

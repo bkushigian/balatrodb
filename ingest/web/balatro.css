@@ -716,6 +716,13 @@ tr.detail > td { padding: 0; border-top: 0; }
 .chase { display: flex; align-items: center; gap: 11px;
          background: rgba(0, 0, 0, .22); border-radius: .35rem;
          padding: 8px 12px; }
+/* Stands in for the card art on a whole-run record, which has none. Same
+   footprint as a joker sprite so the rows line up either way. */
+.runbadge { width: 34px; height: 45px; flex: none; display: grid;
+            place-items: center; border-radius: .3rem;
+            background: rgba(255, 255, 255, .05);
+            border: 1px solid rgba(255, 255, 255, .09);
+            font-size: 19px; font-weight: 700; }
 .chase .cb { flex: 1; min-width: 0; }
 .chase .cl { font-size: 16px; white-space: nowrap; overflow: hidden;
              text-overflow: ellipsis; }

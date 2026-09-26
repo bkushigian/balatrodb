@@ -29,6 +29,17 @@ local seq = 0
 -- flushes are kept deliberately rare and are never tied to frame events.
 local FLUSH_BYTES = 16 * 1024
 local FLUSH_EVENTS = 128
+-- ...and a ceiling on AGE, because the other two are thresholds on volume
+-- and the quiet moments are exactly the ones that produce none. Browsing a
+-- shop emits a handful of small events and then nothing while you think, so
+-- the dashboard could sit minutes behind the game with everything it needed
+-- already in memory. Two seconds is under the dashboard's own 3s poll, so
+-- the log stops being the slow part.
+--
+-- This does NOT make scoring bursts flush more often: those trip the volume
+-- thresholds long before two seconds are up. It only catches the trickle.
+local FLUSH_SECONDS = 2
+local last_flush = 0
 
 -- A failed append is retried on the next flush rather than dropped, but the
 -- backlog is capped so a permanently unwritable path cannot grow without
@@ -98,6 +109,9 @@ function log.flush()
     local chunk = table.concat(buffer)
 
     local ok, err = NFS.append(path, chunk)
+    -- Stamped whether or not the write succeeded: a failing path should be
+    -- retried on the same cadence, not hammered once a frame.
+    last_flush = love.timer and love.timer.getTime() or 0
     if ok then
         buffer, buffer_bytes = {}, 0
         return
@@ -188,6 +202,22 @@ function log.emit(etype, data)
     buffer_bytes = buffer_bytes + #encoded
 
     if buffer_bytes >= FLUSH_BYTES or #buffer >= FLUSH_EVENTS then
+        log.flush()
+    end
+end
+
+--- Called once a frame. Writes anything that has been waiting too long.
+---
+--- Kept here rather than in the update hook so the policy lives with the
+--- writer, and so a caller cannot accidentally flush every frame: the age
+--- test is the whole of it.
+function log.tick()
+    if not path or #buffer == 0 then return end
+    local now = love.timer and love.timer.getTime() or 0
+    -- A backwards clock (a restart resets love.timer) must not wedge this
+    -- shut, so a negative age counts as due.
+    local age = now - last_flush
+    if age >= FLUSH_SECONDS or age < 0 then
         log.flush()
     end
 end

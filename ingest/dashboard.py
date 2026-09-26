@@ -852,6 +852,9 @@ def api_run(db, q):
 
 # How far along counts as worth mentioning. Below this it is not news.
 CHASE_AT = 0.5
+# The order the whole-run records are shown in -- the same order the summary
+# tiles use, so the two pages read the same way round.
+RUN_ORDER = ["score", "money", "ante", "cashout", "deck", "debt"]
 # All of them are returned -- the page shows a few and expands the rest, so
 # cutting the list here would leave it with nothing to expand. The cap is
 # only a ceiling on an absurd answer.
@@ -917,6 +920,50 @@ CHASE = {
                     WHERE is_reset = 0 AND to_ord IS NOT NULL
                       AND key NOT IN {decaying} AND run_id {op} ?{scope})
         SELECT k, o, t FROM r WHERE rn = 1""",
+    # The whole-run records, which had no chase family at all: the panel
+    # could tell you a Fortune Teller was at 80% of its best and never that
+    # the run itself was closing on the highest score ever played. Six
+    # subjects, one per figure the summary tiles already report, read from
+    # the same tables those tiles read so the two cannot disagree.
+    #
+    # One CTE so `run_id` binds once however many branches there are; a
+    # UNION of six correlated subqueries would need six copies of it and
+    # break the one-parameter convention the other families use.
+    "run": """
+        WITH me AS (SELECT run_id FROM runs WHERE run_id {op} ?{scope})
+        SELECT 'score' k,
+               (SELECT score_ord FROM hands WHERE run_id IN (SELECT * FROM me)
+                 AND score_ord IS NOT NULL ORDER BY {best_score} LIMIT 1) o,
+               (SELECT score_txt FROM hands WHERE run_id IN (SELECT * FROM me)
+                 AND score_ord IS NOT NULL ORDER BY {best_score} LIMIT 1) t
+        UNION ALL
+        SELECT 'money', MAX(balance), MAX(balance) FROM money
+         WHERE run_id IN (SELECT * FROM me)
+        UNION ALL
+        -- Carried as a positive depth so it compares and fills like every
+        -- other bar; the page puts the minus sign back.
+        SELECT 'debt', -MIN(balance), -MIN(balance) FROM money
+         WHERE run_id IN (SELECT * FROM me) AND balance < 0
+        UNION ALL
+        SELECT 'deck', MAX(deck_size), MAX(deck_size) FROM rounds
+         WHERE run_id IN (SELECT * FROM me)
+        UNION ALL
+        -- runs.furthest_ante, not MAX(rounds.ante): Hieroglyph and
+        -- Petroglyph call ease_ante(-n), so the per-round maximum is not
+        -- how far the run got. Same column the tile and the Runs list use.
+        --
+        -- It is only written at run.end, though, so the run being played
+        -- has none -- which is the one run this panel is about. The rounds
+        -- fall back for exactly that case and never fire for a finished
+        -- run, where the game's own high-water mark is already there.
+        SELECT 'ante', v, v FROM (SELECT COALESCE(
+                 (SELECT MAX(COALESCE(furthest_ante, ended_ante)) FROM runs
+                   WHERE run_id IN (SELECT * FROM me)),
+                 (SELECT MAX(ante) FROM rounds
+                   WHERE run_id IN (SELECT * FROM me))) v)
+        UNION ALL
+        SELECT 'cashout', MAX(cashout_total), MAX(cashout_total) FROM rounds
+         WHERE run_id IN (SELECT * FROM me)""",
     # Per joker, not per counter: Bull and Bootstraps read the same money
     # and are worth different things for it.
     "counter": """
@@ -930,12 +977,22 @@ CHASE = {
 }
 
 
-def _progress(mine, rec):
+def _progress(mine, rec, base=0):
     """How far along, as a fraction. Falls back to the ordering keys when
     the values are past what a double holds -- 10**(a-b) is the ratio,
-    since the key is log10(1+v)."""
+    since the key is log10(1+v).
+
+    `base` is where the quantity starts rather than zero. Deck size is the
+    case that forced it: every run begins at 52, so a 54-card deck against a
+    record of 68 is not 79% of the way there, it is 2 cards into a 16-card
+    climb -- 13%. Measured from zero the bar sat near full from the first
+    round of every run and said nothing.
+
+    Only applies to the arithmetic path. A base is a small integer and the
+    fallback exists for values past a double, so the two never meet.
+    """
     try:
-        a, b = float(mine[1]), float(rec[1])
+        a, b = float(mine[1]) - base, float(rec[1]) - base
         if math.isfinite(a) and math.isfinite(b) and b > 0:
             return a / b
     except (TypeError, ValueError, OverflowError):
@@ -946,6 +1003,14 @@ def _progress(mine, rec):
         return 10 ** (mine[0] - rec[0])
     except OverflowError:
         return None
+
+
+# Where each whole-run figure starts, so a bar measures the climb rather
+# than the absolute number. Only deck size has a floor that is not zero, and
+# it is the run's own starting size rather than a flat 52 -- a challenge deck
+# or an Erratic reroll does not have to begin where the others do.
+def run_bases(run):
+    return {"deck": ingester.as_int(run["starting_deck_size"]) or 52}
 
 
 # Runs at one stake, as a clause the chase queries can append. A record at
@@ -975,12 +1040,12 @@ def chase_tables(db, rid, stake_key):
     return out
 
 
-def chase_entry(kind, subject, cur, rec, at_stake, stake_key):
+def chase_entry(kind, subject, cur, rec, at_stake, stake_key, base=0):
     """One comparison, against the corpus and against this stake."""
     # Counter jokers are filed under their own key now, so the subject IS
     # the art for every kind.
     art = subject
-    pct = _progress(cur, rec) if (cur and rec) else (1.0 if cur else 0.0)
+    pct = _progress(cur, rec, base) if (cur and rec) else (1.0 if cur else 0.0)
     return {
         "kind": kind, "subject": subject, "key": art,
         "value_txt": None if cur is None else str(cur[1]),
@@ -990,7 +1055,7 @@ def chase_entry(kind, subject, cur, rec, at_stake, stake_key):
         # Beating the stake's best is a smaller thing than beating the
         # corpus, and it happens first, so it is said separately.
         "beats_stake": bool(cur and at_stake
-                            and (_progress(cur, at_stake) or 0) > 1),
+                            and (_progress(cur, at_stake, base) or 0) > 1),
         "pct": pct,
         "first": cur is not None and rec is None,
     }
@@ -1127,18 +1192,25 @@ def api_live(db, q):
     holding.sort(key=lambda c: -(c["pct"] or 0))
     on_board = {(c["kind"], c["subject"]) for c in holding}
 
-    # What else is within reach: hand scores, levels and counts, and the
-    # jokers this run scaled but is no longer holding.
-    chasing = []
+    # What else is within reach: the run's own figures, plus hand scores,
+    # levels and counts, and the jokers this run scaled but is no longer
+    # holding.
+    bases = run_bases(run)
+    chasing, run_chasing = [], []
     for kind, (mine, rest, at) in tables.items():
         for subject, cur in mine.items():
             if (kind, subject) in on_board:
                 continue
+            base = bases.get(subject, 0) if kind == "run" else 0
             e = chase_entry(kind, subject, cur, rest.get(subject),
-                            at.get(subject), stake_key)
+                            at.get(subject), stake_key, base)
             # Nobody has ever done it, or you are at least halfway there.
             if e["first"] or (e["pct"] or 0) >= CHASE_AT:
-                chasing.append(e)
+                (run_chasing if kind == "run" else chasing).append(e)
+    # The run's own records lead, in a fixed order rather than by progress:
+    # they are the same six every time, and a list that reshuffles itself
+    # every three seconds is hard to read at a glance.
+    run_chasing.sort(key=lambda c: RUN_ORDER.index(c["subject"]))
     chasing.sort(key=lambda c: (-(c["pct"] or 0), c["kind"]))
 
     return {
@@ -1155,6 +1227,7 @@ def api_live(db, q):
         "round": where_now["round_seq"] if where_now else None,
         "blind": where_now["blind_name"] if where_now else None,
         "is_boss": where_now["is_boss"] if where_now else None,
+        "run_chasing": run_chasing,
         "chasing": chasing[:CHASE_MAX],
         "chasing_n": len(chasing),
         "holding": holding,

@@ -35,7 +35,8 @@ L.execute("""
     return realrequire(n)
   end
   love = { filesystem = { getSaveDirectory = function() return '/save' end },
-           timer = { getTime = function() return 0 end } }
+           timer = { getTime = function() return NOW end } }
+  NOW = 0
   BalatroDB = { SCHEMA = 1 }
 """)
 
@@ -127,6 +128,51 @@ log.flush()
 check("the retained events are written once it recovers",
       files()[list(files())[0]].count("\n") == 1,
       f"got {files()[list(files())[0]]!r}")
+
+print("\na trickle of events is written on a timer, not only on volume")
+# The volume thresholds are 16 KB and 128 events, which a quiet moment never
+# reaches: reading a shop emits a few small events and then nothing at all
+# while you decide. Those sat in memory indefinitely, so the dashboard could
+# be minutes behind a game that had already recorded everything it needed.
+g.NOW = 1000
+log.open("tick-1", False)
+log.commit()
+# One event written for real, so the writer's "last flushed" stamp is a
+# known point on the clock. It is only set by a write that happened -- so a
+# long-idle logger flushes its next event at once, which is what you want.
+log.emit("run.start", None)
+log.flush()
+base = files()["/save/BalatroDB/runs/tick-1.jsonl"].count(chr(10))
+
+log.emit("shop.offer", None)
+log.tick()
+check("an event just emitted is not flushed on its own",
+      files()["/save/BalatroDB/runs/tick-1.jsonl"].count(chr(10)) == base)
+
+g.NOW = 1001          # under the threshold
+log.tick()
+check("nor one second later",
+      files()["/save/BalatroDB/runs/tick-1.jsonl"].count(chr(10)) == base)
+
+g.NOW = 1003          # past it
+log.tick()
+check("but it is written once it has waited",
+      files()["/save/BalatroDB/runs/tick-1.jsonl"].count(chr(10)) == base + 1)
+
+g.NOW = 1004
+log.tick()
+check("an empty buffer writes nothing at all",
+      files()["/save/BalatroDB/runs/tick-1.jsonl"].count(chr(10)) == base + 1)
+
+# love.timer restarts from zero when the game does, so an age computed
+# across that boundary is negative. Treated as due rather than as "not yet",
+# which would wedge the timer flush shut for the rest of the session.
+log.emit("shop.offer", None)
+g.NOW = 5
+log.tick()
+check("a clock that went backwards does not wedge it shut",
+      files()["/save/BalatroDB/runs/tick-1.jsonl"].count(chr(10)) == base + 2)
+log.close()
 
 print("\nFAILURES:", fails)
 raise SystemExit(1 if fails else 0)

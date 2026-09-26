@@ -255,7 +255,7 @@ const nameOf = (key, fallback) =>
 // game would use for that quantity: scores in mult red, money in gold,
 // counts in purple.
 const summaryTiles = s => [
-  ["Best hand", fmtScore(s.best_hand), esc(s.best_hand_name || ""), "mult"],
+  ["Best score", fmtScore(s.best_hand), esc(s.best_hand_name || ""), "mult"],
   ["Most money", s.max_money !== null ? "$" + fmt(s.max_money) : "—",
    "peak balance", "money"],
   ["Furthest ante", fmt(s.max_ante), "", "gold"],

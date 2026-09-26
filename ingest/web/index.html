@@ -467,7 +467,7 @@ const RUNS_COLS = () => [
   { label: "Rounds won", num: true, cls: "muted",
     title: "Blinds cleared. A round is only cashed out when its blind was beaten.",
     cell: r => r.rounds_won ?? "—", sort: r => r.rounds_won },
-  { label: "Best hand", num: true, cell: r => fmtScore(r.best_hand),
+  { label: "Best score", num: true, cell: r => fmtScore(r.best_hand),
     sort: r => r.bh_ord },
   { label: "Peak $", num: true,
     cell: r => r.peak_money !== null ? "$" + fmt(r.peak_money) : "—",
@@ -594,7 +594,7 @@ async function openRun(id) {
       ${mt("Ante", fmt(r.furthest_ante ?? r.ended_ante), "gold")}
       ${mt("Rounds won", fmt(cleared), "green")}
       ${mt("Hands", fmt(r.hands_played), "")}
-      ${mt("Best hand", fmtScore(r.best_hand_txt), "chips")}
+      ${mt("Best score", fmtScore(r.best_hand_txt), "chips")}
       ${mt("Final", r.final_dollars === null ? "—" : "$" + fmt(r.final_dollars), "money")}
       ${mt("Deck size", fmt(r.deck_size), "")}
       ${mt("Shop", shopCell(d.shop), "", true)}
@@ -720,17 +720,47 @@ const CHASE_ART = {
   hand_played: [h => sprite(planetOf(h), "j", 34), h => h, "sc-money", fmt],
   joker:       [k => sprite(k, "j", 34), k => nameOf(k), "sc-mult", fmt],
   counter:     [k => sprite(k, "j", 34), k => nameOf(k), "sc-chips", fmt],
+  // The run's own figures. There is no card to draw for "most money", so
+  // they wear a badge in the colour the game gives that quantity instead --
+  // same 34px square, so the rows keep their rhythm.
+  run:         [k => runBadge(k), k => RUN_REC[k][0], k => RUN_REC[k][2],
+                (v, k) => RUN_REC[k][3](v)],   // the only one that uses k
 };
+
+// label, glyph, colour class, formatter. The order and the wording match
+// the summary tiles, so the same number is called the same thing wherever
+// you meet it.
+const RUN_REC = {
+  score:   ["Best score",  "S", "sc-chips", fmtScore],
+  money:   ["Most money",  "$", "sc-money", v => "$" + fmt(v)],
+  ante:    ["Furthest ante", "A", "sc-level", fmt],
+  cashout: ["Biggest cash-out", "C", "sc-money", v => "$" + fmt(v)],
+  deck:    ["Largest deck", "D", "sc-mult", v => fmt(v) + " cards"],
+  // Carried as a positive depth so the bar fills the same way as the rest;
+  // the sign goes back on here, where it is read.
+  debt:    ["Deepest debt", "V", "sc-xmult", v => "-$" + fmt(v)],
+};
+const runBadge = k => `<span class="runbadge ${RUN_REC[k][2]}"
+  title="${esc(RUN_REC[k][0])}">${RUN_REC[k][1]}</span>`;
+
 const CHASE_WHAT = {
   hand_score: "score", hand_level: "level", hand_played: "plays",
   joker: "peak", counter: "counter",
+  // The label already says what it is; a second word would just repeat it.
+  run: "",
 };
 
 // Past the record it is no longer a percentage worth printing -- one run
 // sat at eleven million percent of the standing best. It is either beaten
 // or it is on the way.
 function chaseItem(c) {
-  const [art, name, cls, f] = CHASE_ART[c.kind] || CHASE_ART.joker;
+  const [art, name, clsOf, fmtOf] = CHASE_ART[c.kind] || CHASE_ART.joker;
+  // The run family formats and colours per metric -- dollars, cards, a
+  // score -- so both are functions of the subject there and constants
+  // everywhere else. The subject is passed to every formatter and simply
+  // ignored by the ones that do not need it.
+  const cls = typeof clsOf === "function" ? clsOf(c.key) : clsOf;
+  const f = v => fmtOf(v, c.key);
   const pct = Math.max(0, Math.min(1, c.pct));
   const ahead = c.pct >= 1;
   const head = c.first
@@ -817,6 +847,10 @@ function drawLive(d) {
   // and in the chases above; that is the two lists agreeing.
   const held = (d.holding || []).map(chaseItem).join("");
 
+  // The run's own records lead: they are about the run as a whole rather
+  // than about one card in it, and they are the same six every time.
+  const runchase = (d.run_chasing || []).map(chaseItem).join("");
+
   const all = d.chasing || [];
   const shown = chasesOpen ? all : all.slice(0, CHASES_SHOWN);
   const chases = shown.map(chaseItem).join("");
@@ -844,11 +878,13 @@ function drawLive(d) {
         ${stat("$" + fmt(d.money), "money")}
         ${stat("$" + fmt(d.spent), "spent")}
         ${stat(fmtScore(d.best_hand), d.best_hand_name
-          ? esc(d.best_hand_name) : "best hand")}
+          ? esc(d.best_hand_name) : "best score")}
         ${stat(fmt(d.hands_played), "hands")}
       </div>
     </div>
-    ${chases ? `<div class="chases">
+    ${runchase ? `<div class="chases">
+       <div class="chtitle">This run</div>${runchase}</div>` : ""}
+    ${chases ? `<div class="chases${runchase ? " held" : ""}">
        <div class="chtitle">On course to beat</div>${chases}${more}</div>` : ""}
     ${offers ? `<div class="chases offers">
        <div class="chtitle">${d.offer_kind === "pack"
