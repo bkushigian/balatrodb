@@ -284,6 +284,19 @@ const summaryLine = s =>
   `${s.runs} runs · ${s.won} won` +
   (s.win_pct !== null ? ` · ${s.win_pct}% win rate` : "");
 
+// The three numbers do not divide into each other and never could: the rate
+// is over runs that have been DECIDED, and a run still being played has not
+// been. Reading "34 runs, 16 won, 48.5%" and finding that 16/34 is 47.1%
+// looks like an arithmetic bug, so the divisor is one hover away rather
+// than something to reverse-engineer. A title rather than markup, so both
+// callers can go on setting textContent.
+const summaryTip = s => {
+  if (s.win_pct === null || s.win_pct === undefined) return "";
+  const open = s.runs - s.decided;
+  return `${s.won} of ${s.decided} decided run${s.decided === 1 ? "" : "s"}`
+    + (open > 0 ? `; ${open} still in progress` : "");
+};
+
 // Shown when the server is running code older than what is on disk. Both
 // pages poll /api/version already, so this only needs somewhere to appear.
 //

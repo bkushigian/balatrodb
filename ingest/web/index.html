@@ -533,6 +533,7 @@ async function refresh() {
   drawLive(live);
 
   $("#sub").textContent = summaryLine(s);
+  $("#sub").title = summaryTip(s);
   drawSummary($("#tiles"), s);
 
   setRows("jokers", jok);

@@ -205,10 +205,18 @@ def api_summary(db, q):
     # either won or ended; a run that won and was then suspended is decided
     # and won, so counting it in one and not the other produced "4 won" beside
     # an 18% rate that was really 2/11.
+    #
+    # `abandoned` counts as ended. Balatro keeps one save per profile, so a
+    # paused run whose save a later run overwrote can never be resumed -- it
+    # is over, and it did not win. The Runs table has always said so, marking
+    # those rows RESTARTED; only this divisor still held them open as though
+    # they might yet be played, which reported the rosier 16/30 = 53.3%
+    # against a true 16/33 = 48.5%. Two surfaces, one fact, different answers.
     won = db.execute(
         f"SELECT COUNT(*) FROM runs r WHERE r.won=1{w}", p).fetchone()[0]
     decided = db.execute(
-        f"SELECT COUNT(*) FROM runs r WHERE (r.terminal=1 OR r.won=1){w}", p).fetchone()[0]
+        f"SELECT COUNT(*) FROM runs r"
+        f" WHERE (r.terminal=1 OR r.won=1 OR r.abandoned=1){w}", p).fetchone()[0]
 
     ew, ep = where(q, endless_col="h.endless")
     best = db.execute(

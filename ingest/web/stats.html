@@ -736,6 +736,7 @@ async function refresh() {
     // just to count it.
     const summary = await get("/api/summary");
     $("#sub").textContent = summaryLine(summary);
+    $("#sub").title = summaryTip(summary);
     if (tab === "stats") {
       const [levels, counts, hands] = await Promise.all([
         get("/api/hand_levels"), get("/api/hand_counts"), get("/api/hands"),
