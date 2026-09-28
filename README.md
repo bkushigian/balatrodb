@@ -27,6 +27,7 @@ mod/BalatroDB/      the Steamodded mod (Lua)
   src/hooks.lua       every observation point
 ingest/             the database and dashboard (Python, stdlib only)
   schema.sql          authoritative DDL; sync_schema.py copies it into the docs
+  paths.py            where Balatro keeps things, per platform
   ingest.py           folds logs into SQLite, one run re-derived at a time
   dashboard.py        local web server + read-only JSON API
   web/index.html      the dashboard
@@ -36,20 +37,30 @@ tests/              runs the pure Lua logic under a host interpreter
 
 ## Install (development)
 
-Link the mod into Balatro's mod folder so edits take effect on next launch.
-Creating a symlink on Windows requires administrator rights (or Developer
-Mode), so a directory junction is the practical choice — Steamodded's scan
-accepts either:
-
-```powershell
-cmd /c mklink /J "$env:APPDATA\Balatro\Mods\BalatroDB" "$PWD\mod\BalatroDB"
+```
+python ingest/install.py
 ```
 
-A junction stores an absolute path, so moving this repo breaks it; recreate it
-if you do.
+Links the mod into Balatro's mod folder so edits take effect on next launch,
+and writes the launcher behind the **BalatroDB** button in the Options menu.
+Requires Lovely and Steamodded.
 
-Requires Lovely and Steamodded. Logs land in
-`%APPDATA%\Balatro\BalatroDB\runs\<run_id>.jsonl`.
+Windows, macOS and Linux. The link is a directory junction on Windows — a
+symlink there needs administrator rights or Developer Mode, and Steamodded's
+scan accepts either — and an ordinary symlink elsewhere. Either way it stores
+an absolute path, so moving this repo breaks it; re-run the installer if you
+do.
+
+Logs land beside the game's own saves, wherever LÖVE puts them:
+
+| | |
+|---|---|
+| Windows | `%APPDATA%\Balatro\BalatroDB\runs\` |
+| macOS | `~/Library/Application Support/Balatro/BalatroDB/runs/` |
+| Linux | `$XDG_DATA_HOME/Balatro/BalatroDB/runs/` (default `~/.local/share`) |
+
+`ingest/paths.py` is the one place that knows this; nothing else should
+hard-code a platform's answer.
 
 ## Dashboard
 

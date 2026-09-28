@@ -2,7 +2,8 @@
 
     python ingest/extract_assets.py [--game DIR]
 
-Balatro.exe is a LÖVE archive -- a zip with an executable stub -- so the
+Balatro ships as a LÖVE archive -- a zip, whether it wears a Windows
+.exe stub or sits as a .love inside the macOS .app -- so the
 textures and the lua that positions them can be read straight out of it.
 
 Writes into ingest/web/assets/ :
@@ -21,6 +22,8 @@ import re
 import struct
 import zipfile
 
+import paths
+
 try:
     from PIL import Image
 except ImportError:
@@ -28,8 +31,6 @@ except ImportError:
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "web", "assets")
-
-DEFAULT_GAME = r"C:\Program Files (x86)\Steam\steamapps\common\Balatro"
 
 # Which atlas each key prefix is drawn from, and the 2x cell size in pixels.
 # Balatro's card is 71x95 at 1x; chips are square.
@@ -264,12 +265,20 @@ def atlas_for(key: str) -> tuple[str, int, int] | None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--game", default=DEFAULT_GAME)
+    # A directory or the archive itself; omitted, the usual Steam
+    # locations for this platform are searched.
+    ap.add_argument("--game", default=None,
+                    help="Balatro install directory, or the archive")
     a = ap.parse_args()
 
-    exe = os.path.join(a.game, "Balatro.exe")
-    if not os.path.exists(exe):
-        raise SystemExit(f"Balatro.exe not found at {exe}\nPass --game <install dir>.")
+    # Every platform's build is a plain zip -- a Windows .exe with a
+    # stub, a .love inside the mac .app -- so only finding it differs.
+    exe, tried = paths.game_archive(a.game)
+    if not exe:
+        raise SystemExit("Balatro not found. Looked in:\n  "
+                         + "\n  ".join(tried)
+                         + "\nPass --game <install dir>.")
+    print(f"reading {exe}")
 
     os.makedirs(OUT, exist_ok=True)
     z = zipfile.ZipFile(exe)

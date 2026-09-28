@@ -33,7 +33,14 @@ from typing import NamedTuple
 import sys
 import time
 
-DEFAULT_LOGS = os.path.expandvars(r"%APPDATA%\Balatro\BalatroDB\runs")
+import paths
+
+# Windows, macOS and Linux put the save directory in three different
+# places; paths.py knows all three. This was %APPDATA% expanded, which
+# on POSIX expands to nothing at all -- os.path.expandvars only
+# understands $VAR there, so the literal string came straight back and
+# every command needed an explicit --logs.
+DEFAULT_LOGS = paths.LOGS_DIR
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DB = os.path.join(HERE, "balatro.db")
 
