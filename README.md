@@ -31,6 +31,7 @@ ingest/             the database and dashboard (Python, stdlib only)
   dashboard.py        local web server + read-only JSON API
   web/index.html      the dashboard
 docs/               schema, designs and API references
+tools/              shop prediction: the game's RNG, reproduced in Python
 tests/              runs the pure Lua logic under a host interpreter
 ```
 
@@ -122,6 +123,32 @@ straight out of it. The extracted art is gitignored -- it is
 the game's own, not ours to redistribute -- and the dashboard falls back to
 plain text if it is absent.
 
+## Shop prediction
+
+Balatro's randomness is a set of named streams (`cdt17`, `Joker2sho17`, ...)
+derived from the seed, and the save file records where each one has got to.
+`tools/` reproduces them outside the game -- LuaJIT's `math.random` and the
+game's stream functions, ported bit for bit -- and simulates the shop on top:
+
+```
+python tools/shopsim.py predict --find Mime      # the run in your save
+python tools/shopsim.py streams --explain        # every stream in the save
+python tools/shopsim.py validate                 # replay every logged shop
+python tools/shopsim.py calibrate                # re-learn the joker order
+```
+
+`predict` shows the coming rerolls, where a card appears this ante and in the
+next few, and where it falls in this ante's Buffoon packs. Mid-shop the save
+lags behind by however many rerolls you have made, so it catches up from the
+run log first. A prediction assumes your jokers stay as they are: a joker you
+hold cannot be offered, so buying or selling one changes the picks after it.
+
+The one input that cannot be derived is the order of each joker rarity list,
+which the game builds from a hash table and never sorts. `calibrate` learns it
+from the logs and writes `tools/joker_pools.json`; rerun it if a mod adds or
+removes jokers. `validate` is the evidence: it replays every logged shop from
+its seed, through resumes, vouchers, tags and Gros Michel's extinction.
+
 ## Tests
 
 ```
@@ -129,6 +156,7 @@ pip install lupa
 python tests/test_util.py    # serialization, numbers, hook wrapper
 python tests/test_log.py     # what reaches disk, and what is deliberately dropped
 python tests/test_web.py     # the dashboard's inline JS parses (needs node)
+python tests/test_balarng.py # the RNG port, against values LuaJIT printed
 ```
 
 Checks over the parts that are pure logic and easy to get subtly wrong:
