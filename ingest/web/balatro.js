@@ -194,7 +194,7 @@ const recordArt = (rec, px) => {
 const recordText = rec => {
   const [, name, what] = RECORD_KIND[rec.kind] || ["", x => x, ""];
   return `${name(rec.subject)} ${what} ${recFmt(rec)(rec.value_txt)}`
-    + (rec.endless ? " (endless)" : "");
+    + (rec.contest === "all" ? " (all)" : " (standard)");
 };
 const RECORDS_SHOWN = 2;
 
@@ -214,7 +214,7 @@ function tipHTML(rec) {
       (rec.prev_ts ? ` · ${ago(rec.prev_ts)}` : "") + `</div>`;
   return `<div class="row">${recordArt(rec, 44)}<div>
       <div class="ttl">${esc(name(rec.subject))}</div>
-      <div class="sub">${esc(what)}${rec.endless ? " · endless" : ""}</div>
+      <div class="sub">${esc(what)} · ${rec.contest === "all" ? "all" : "standard"}</div>
       <div class="big ${cls}">${recPre(rec)}${f(rec.value_txt)}</div>
     </div></div>${beat}`;
 }

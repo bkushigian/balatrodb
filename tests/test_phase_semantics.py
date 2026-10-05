@@ -77,8 +77,7 @@ def records(letter):
     out = set()
     for r in d.run_records_for(db, R[letter]):
         if r["kind"].startswith("hand_"):
-            out.add((r["kind"], r["subject"], "all" if r["endless"] else "standard",
-                     r["value_txt"]))
+            out.add((r["kind"], r["subject"], r["contest"], r["value_txt"]))
     return out
 
 
@@ -112,8 +111,10 @@ check("standard", tuple(s_std[k] for k in tiles) == (7, 3, 42.9, "1000000", 19, 
       str(tuple(s_std[k] for k in tiles)))
 
 print("PINNED: records")
-check("B: the pre-win rows are standard, the post-win ones survive as 'endless'",
+check("B: standard records from its pre-win play, all records from the whole run",
       records("B") == {("hand_played", "Pair", "standard", "3"),
+                       ("hand_played", "Pair", "all", "6"),
+                       ("hand_played", "Flush", "all", "2"),
                        ("hand_score", "Flush", "standard", "50000"),
                        ("hand_score", "Flush", "all", "9000000000"),
                        ("hand_score", "Pair", "standard", "3000"),
@@ -280,12 +281,7 @@ INVARIANTS = [
     ("narrowing the slice never raises a maximum", narrowing_never_raises),
 ]
 
-KNOWN = {
-    "records are two contests over per-run figures":
-        "records are stored per disjoint part (pre-win / post-win) and "
-        "endless_union() keeps the larger, so a pre-win value is never also an "
-        "all record and no record holds a count's whole total",
-}
+KNOWN = {}
 
 print("\nINVARIANTS")
 for name, holds in INVARIANTS:

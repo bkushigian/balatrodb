@@ -120,7 +120,7 @@ const recordsCell = r => {
     // Endless records are a separate contest, so they are marked -- with no
     // phase filter on, a row can carry one of each for the same subject.
     const i = TIPS.push(rec) - 1;
-    return `<span class="bj${rec.endless ? " rec-endless" : ""}" data-tip="${i}">` +
+    return `<span class="bj" data-tip="${i}">` +
       (recordArt(rec) || `<span class="jv">${esc(rec.subject)}</span>`) +
       `<span class="sc ${cls}">${recPre(rec)}${recFmt(rec)(rec.value_txt)}</span></span>`;
   }).join("");
@@ -613,11 +613,11 @@ async function openRun(id) {
       ? `<span class="muted">first of its kind</span>`
       : `beat <b>${f(rec.prev_txt)}</b>` +
         (rec.prev_deck ? ` <span class="muted">· ${esc(rec.prev_deck)}</span>` : "");
-    return `<div class="rec${rec.endless ? " rec-endless" : ""}">
+    return `<div class="rec${rec.contest === "all" ? " rec-all" : ""}">
       ${recordArt(rec, 44)}
       <div class="recmain">
         <div class="recttl">${esc(name(rec.subject))}</div>
-        <div class="recsub">${esc(what)}${rec.endless ? " · endless" : ""}</div>
+        <div class="recsub">${esc(what)} · ${rec.contest === "all" ? "all" : "standard"}</div>
       </div>
       <div class="recval ${cls}">${recPre(rec)}${f(rec.value_txt)}</div>
       <div class="recbeat">${beat}</div>

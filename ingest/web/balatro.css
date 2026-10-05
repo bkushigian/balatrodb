@@ -507,14 +507,9 @@ tr.detail > td { padding: 0; border-top: 0; }
 .recbeat { grid-column: 1 / -1; color: var(--ink-dim); font-size: 14px;
            border-top: 2px solid #2b3638; padding-top: 7px; }
 .recbeat b { color: var(--ink); }
-.rec.rec-endless { box-shadow: inset 3px 0 0 var(--purple); }
-.rec.rec-endless::after { content: none; }
-
-.rec-endless { position: relative; }
-.rec-endless::after {
-  content: ""; position: absolute; left: 2px; right: 2px; bottom: -3px;
-  height: 3px; background: var(--purple);
-}
+/* In the run dialog, which lists both contests, an all record wears a
+   purple edge so the two read apart at a glance. */
+.rec.rec-all { box-shadow: inset 3px 0 0 var(--purple); }
 .sc-other { color: var(--ink-dim); }
 .bjn { font-size: 13px; color: var(--ink-dim); max-width: 74px; text-align: center;
        line-height: 1.15; margin-top: 2px; overflow-wrap: anywhere; }

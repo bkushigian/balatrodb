@@ -80,6 +80,16 @@ def ord_num(v):
     return None, None, str(v)
 
 
+def _rank(o, txt):
+    """A record comparison key: the ordering key, then the exact value.
+    `ord` collides for distinct values, so it cannot decide a tie alone."""
+    try:
+        exact = float(txt)
+    except (TypeError, ValueError):
+        exact = float("-inf")
+    return (o, exact if exact == exact else float("-inf"))
+
+
 def triple(v):
     return ord_num(v)
 
@@ -899,10 +909,12 @@ class Ingester:
     def derive_records(self):
         """Work out what each run held a record for at the time it was played.
 
-        Endless and non-endless are separate contests and are derived
-        independently -- continuing past the win ante changes the scale of
-        everything, so a value reached there is not competing with one
-        reached before it. A run can hold both for the same subject.
+        Two contests, each a running maximum over runs of their own figures:
+        `standard` reads each run up to the moment it was won, `all` the
+        whole run. Both figures start at the beginning of the run, so for a
+        count the all figure is the whole total -- 3 plays before the win and
+        3 after is 6, not the larger 3 -- and a value reached before the win
+        is in both. A standard record never has to beat an all figure.
 
         Cross-run and order-dependent, so it is recomputed wholesale rather
         than per run: inserting an older log changes what every later run was
@@ -911,7 +923,8 @@ class Ingester:
         Strictly greater, so the run that first reached a value keeps the
         moment; a later run that merely equals it does not take it away.
         Comparison is on the ordering key, never the text -- an 8,293,927,041
-        Pair sorts below 998 as a string.
+        Pair sorts below 998 as a string -- with the exact value breaking a
+        tie, since distinct values can share an ordering key.
         """
         self.db.execute("DELETE FROM run_records")
         order = {r[0]: i for i, r in enumerate(self.db.execute(
@@ -923,17 +936,17 @@ class Ingester:
         sources = {
             "joker": f"""
                 SELECT run_id, key subject, to_txt v, to_ord o, field FROM joker_scale
-                 WHERE is_reset = 0 AND to_ord IS NOT NULL AND endless = ?
+                 WHERE is_reset = 0 AND to_ord IS NOT NULL AND endless <= ?
                    AND key NOT IN {DECAYING_SQL}""",
             "hand_score": """
                 SELECT run_id, hand subject, score_txt v, score_ord o, 'score' FROM hands
-                 WHERE hand IS NOT NULL AND score_ord IS NOT NULL AND endless = ?""",
+                 WHERE hand IS NOT NULL AND score_ord IS NOT NULL AND endless <= ?""",
             "hand_level": """
                 SELECT run_id, hand subject, lvl_to v, lvl_to o, 'level' FROM hand_levels
-                 WHERE hand IS NOT NULL AND lvl_to IS NOT NULL AND endless = ?""",
+                 WHERE hand IS NOT NULL AND lvl_to IS NOT NULL AND endless <= ?""",
             "hand_played": """
                 SELECT run_id, hand subject, COUNT(*) v, COUNT(*) o, 'played' FROM hands
-                 WHERE hand IS NOT NULL AND endless = ? GROUP BY run_id, hand""",
+                 WHERE hand IS NOT NULL AND endless <= ? GROUP BY run_id, hand""",
         }
 
         # Counter jokers never scale, so joker_scale has nothing for them and
@@ -953,7 +966,8 @@ class Ingester:
         # The values are read rather than reconverted. The table stores what
         # each joker was worth at each moment precisely so no reader has to
         # apply the formula a second time.
-        counter_rows = {0: [], 1: []}
+        # A peak before the win is in both contests; one after it only in all.
+        counter_rows = {"standard": [], "all": []}
         for run_id, joker_key, el, held_value, ambient_value, field in                 self.db.execute(
                     "SELECT run_id, joker_key, endless, contributed_value,"
                     "       ambient_value, field FROM joker_counter_peaks"):
@@ -966,13 +980,18 @@ class Ingester:
                 # chips or mult, but X-mult is inert at 1, so Steel Joker
                 # with no steel cards was filing "X1" as an achievement.
                 if value is not None and value != INERT_FIELD.get(field, 0):
-                    counter_rows[el].append((run_id, joker_key, value, field, held))
+                    row = (run_id, joker_key, value, field, held)
+                    if not el:
+                        counter_rows["standard"].append(row)
+                    counter_rows["all"].append(row)
 
         out = []
-        for el in (0, 1):
+        # `upto` is the highest `endless` a contest reads: standard stops
+        # before the win, all takes everything.
+        for contest, upto in (("standard", 0), ("all", 1)):
             for want_held in (1, 0):
                 best, fields = {}, {}
-                for run_id, key, value, field, held in counter_rows.get(el, []):
+                for run_id, key, value, field, held in counter_rows[contest]:
                     if held != want_held or run_id not in order:
                         continue
                     if value > best.get((run_id, key), float("-inf")):
@@ -985,7 +1004,7 @@ class Ingester:
                     if prior is None or value > prior[0]:
                         prev_txt, prev_run = (None, None) if prior is None                             else (f"{prior[0]:g}", prior[1])
                         high[key] = (value, run_id)
-                        out.append((run_id, "joker", key, el, fields[key],
+                        out.append((run_id, "joker", key, contest, fields[key],
                                     want_held, f"{value:g}", ord_num(value)[0],
                                     prev_txt, prev_run))
 
@@ -993,23 +1012,23 @@ class Ingester:
                 # Best value per (run, subject) first, then walk the runs in
                 # the order they were played.
                 best = {}
-                for run_id, subject, v, o, field in self.db.execute(sql, (el,)):
+                for run_id, subject, v, o, field in self.db.execute(sql, (upto,)):
                     if run_id not in order or o is None:
                         continue
                     cur = best.get((run_id, subject))
-                    if cur is None or o > cur[1]:
+                    if cur is None or _rank(o, v) > _rank(cur[1], cur[0]):
                         best[(run_id, subject)] = (v, o, field)
                 high = {}
                 for (run_id, subject), (v, o, field) in sorted(
                         best.items(), key=lambda kv: order[kv[0][0]]):
                     held = high.get(subject)
-                    if held is None or o > held[0]:
+                    if held is None or _rank(o, v) > _rank(held[0], held[1]):
                         # The displaced holder, captured while we still know
                         # it -- a later query cannot tell which run it was
                         # without redoing this whole walk.
                         prev_txt, prev_run = (None, None) if held is None                             else (held[1], held[2])
                         high[subject] = (o, str(v), run_id)
-                        out.append((run_id, kind, subject, el, field, None,
+                        out.append((run_id, kind, subject, contest, field, None,
                                     str(v), o, prev_txt, prev_run))
         if out:
             self.db.executemany(

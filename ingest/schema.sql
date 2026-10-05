@@ -346,15 +346,19 @@ CREATE INDEX IF NOT EXISTS cards_key ON cards(key, role, endless);
 --
 -- Derived over the whole corpus in run order, so it is rebuilt wholesale
 -- rather than per run: adding an OLD log would shift what came after it.
--- Endless and non-endless records are separate contests, so the two are
--- derived independently and stored side by side: a run can hold the
--- non-endless best for a hand and a different, higher endless best for the
--- same hand, and both are true. Nothing here is computed at query time.
+-- Two contests, stored side by side, both over figures counted from the start
+-- of each run: `standard` compares runs' figures up to the moment each was
+-- won, `all` their whole-run figures. A standard record is judged against
+-- standard figures only -- a run that never beat anyone's overall best can
+-- still hold one -- and an all record against all figures only. A value
+-- reached before the win counts in both, so a run can hold both records for
+-- one subject with the same value, or with different ones. Nothing here is
+-- computed at query time.
 CREATE TABLE IF NOT EXISTS run_records (
   run_id    TEXT NOT NULL,
   kind      TEXT NOT NULL,   -- joker | hand_score | hand_level | hand_played
   subject   TEXT NOT NULL,   -- joker key, or poker hand
-  endless   INTEGER NOT NULL,
+  contest   TEXT NOT NULL,   -- standard | all
   -- What the value IS: chips, mult or x_mult for a joker, and for a hand
   -- whichever of score/level/played it is. Without it a record cannot be
   -- shown in its own unit and every one rendered as Mult, including chips.
@@ -372,12 +376,12 @@ CREATE TABLE IF NOT EXISTS run_records (
   prev_txt  TEXT,
   prev_run  TEXT,
   -- `held` belongs in the key: a counter joker genuinely has two records
-  -- for one (run, subject, endless), and without it the two collided and
+  -- for one (run, subject, contest), and without it the two collided and
   -- INSERT OR REPLACE kept whichever pass ran last -- the not-held one, so
   -- every counter joker lost its held record. (NULL never conflicts in
   -- SQLite, so this constrains only the counter rows; the other kinds
   -- produce one row per key by construction.)
-  PRIMARY KEY (run_id, kind, subject, endless, held)
+  PRIMARY KEY (run_id, kind, subject, contest, held)
 );
 CREATE INDEX IF NOT EXISTS run_records_run ON run_records(run_id);
 

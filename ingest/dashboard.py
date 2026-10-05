@@ -463,71 +463,12 @@ def api_runs(db, q):
 RECORD_ORDER = {"joker": 0, "hand_score": 1, "hand_level": 2, "hand_played": 3}
 
 
-def endless_union(db):
-    """Which stored endless records are records with the restriction lifted.
-
-    The two contests are stored disjoint: non-endless rows come from events
-    before the win ante, endless rows from after. That answers "what did I
-    do after the win, on its own terms", and it is worth keeping.
-
-    But the contest a player means by "endless" is the one with the
-    restriction LIFTED -- anything managed before the win also counts,
-    because endless only removes a limit. Derived in isolation the endless
-    contest announces records that never were: a Pair of 228 is stored as an
-    endless record although the standard record was six figures by then.
-
-    That contest can be read off the two stored ones without deriving
-    anything new. Every record in the union is already a record in whichever
-    contest it came from -- if a run's best is its non-endless value, that
-    value beat every earlier value including every earlier non-endless one,
-    so the run already holds a non-endless row carrying exactly it; likewise
-    for endless. So merging the stored rows in run order and keeping those
-    that beat the running best gives the union exactly.
-
-    Returns the endless rows that survive, as
-    {(run_id, kind, subject): (prev_txt, prev_run)} -- with `prev` recomputed
-    against the union, so "beat X" names what was really standing.
-    """
-    per_subject = {}
-    for r in db.execute("""SELECT rr.run_id, rr.kind, rr.subject, rr.endless,
-                                  rr.value_txt, rr.value_ord
-                             FROM run_records rr JOIN runs u USING (run_id)
-                            ORDER BY u.started_ts, rr.run_id"""):
-        per_subject.setdefault((r["kind"], r["subject"]), []).append(r)
-
-    keep = {}
-    for (kind, subject), recs in per_subject.items():
-        # A run is one competitor, so its two stored rows compete as one:
-        # the better of them is what it did with the restriction lifted.
-        best = {}
-        for r in recs:
-            cur = best.get(r["run_id"])
-            if cur is None or (r["value_ord"] or 0) > (cur["value_ord"] or 0):
-                best[r["run_id"]] = r
-
-        top, prev_txt, prev_run = None, None, None
-        for run_id in dict.fromkeys(r["run_id"] for r in recs):
-            r = best[run_id]
-            if top is not None and (r["value_ord"] or 0) <= top:
-                continue
-            if r["endless"]:
-                keep[(run_id, kind, subject)] = (prev_txt, prev_run)
-            top = r["value_ord"] or 0
-            prev_txt, prev_run = r["value_txt"], run_id
-    return keep
-
-
 def attach_records(db, runs, q=None):
     """Give each run what it was the first to achieve, at the time it ran.
 
-    Endless and non-endless are separate contests, so the phase toggle picks
-    between them; with no phase filter both are returned, and a run may hold
-    one of each for the same subject.
-
-    An endless row is shown only when it is also a record with the
-    restriction lifted -- see endless_union. Otherwise a run announces an
-    "endless record" that a standard run had already beaten, which is the
-    one thing the endless flag should never do.
+    The records shown are the contest the phase names: standard records
+    under Standard, all records under All. They are separate contests (see
+    run_records), so a run can hold one of each for the same subject.
     """
     for r in runs:
         r["records"] = []
@@ -535,19 +476,8 @@ def attach_records(db, runs, q=None):
     if not by_id:
         return
     marks = ",".join("?" * len(by_id))
-    params = list(by_id)
-    union = endless_union(db)
-    # The run a recomputed `prev` points at is any run, not only a listed
-    # one, so its label comes from the whole table.
-    prev_ts, prev_deck = {}, {}
-    for u in db.execute("SELECT run_id, started_ts, deck_name FROM runs"):
-        prev_ts[u["run_id"]] = u["started_ts"]
-        prev_deck[u["run_id"]] = u["deck_name"]
-    ew = ""
-    # Standard shows standard records only. (Records become two contests,
-    # standard and all, in the next step; until then all shows both kinds.)
-    if standard(q or {}):
-        ew += " AND rr.endless = 0"
+    params = list(by_id) + ["standard" if standard(q or {}) else "all"]
+    ew = " AND rr.contest = ?"
     # `held` is the same distinction run_records carries, so the page-wide
     # toggle belongs here too. Without it the Jokers panel moved between 14
     # and 16 rows while the 183 record badges on the Runs table ignored the
@@ -561,26 +491,16 @@ def attach_records(db, runs, q=None):
         ew += " AND (rr.held IS NULL OR rr.held = ?)"
         params.append(int(q["held"]))
     for rec in rows(db, f"""
-            SELECT rr.run_id, rr.kind, rr.subject, rr.endless, rr.field, rr.held,
+            SELECT rr.run_id, rr.kind, rr.subject, rr.contest, rr.field, rr.held,
                    rr.value_txt, rr.value_ord, rr.prev_txt,
                    pr.started_ts prev_ts, pr.deck_name prev_deck
               FROM run_records rr
               LEFT JOIN runs pr ON pr.run_id = rr.prev_run
              WHERE rr.run_id IN ({marks}){ew}""", params):
-        if rec["endless"]:
-            hit = union.get((rec["run_id"], rec["kind"], rec["subject"]))
-            if hit is None:
-                continue                       # beaten before it was set
-            rec = dict(rec)
-            rec["prev_txt"], prev_run = hit
-            rec["prev_ts"] = prev_ts.get(prev_run)
-            rec["prev_deck"] = prev_deck.get(prev_run)
         by_id[rec["run_id"]]["records"].append(rec)
     for r in runs:
-        # Endless records after non-endless ones of the same kind: the
-        # ordering keys are not comparable across the two contests.
         r["records"].sort(key=lambda x: (RECORD_ORDER.get(x["kind"], 9),
-                                         x["endless"], -(x["value_ord"] or 0)))
+                                         -(x["value_ord"] or 0)))
 
 
 def api_all_jokers(db, q):
@@ -784,27 +704,14 @@ def api_hand_counts(db, q):
 
 
 def run_records_for(db, rid):
-    """One run's records, with the endless ones filtered as attach_records
-    filters them -- one rule, read from one place."""
-    union = endless_union(db)
-    label = {u["run_id"]: (u["started_ts"], u["deck_name"])
-             for u in db.execute("SELECT run_id, started_ts, deck_name FROM runs")}
-    out = []
-    for rec in rows(db, """SELECT rr.kind, rr.subject, rr.endless, rr.field, rr.held,
-                                  rr.value_txt, rr.value_ord, rr.prev_txt,
-                                  pr.started_ts prev_ts, pr.deck_name prev_deck
-                             FROM run_records rr
-                             LEFT JOIN runs pr ON pr.run_id = rr.prev_run
-                            WHERE rr.run_id = ?""", (rid,)):
-        if rec["endless"]:
-            hit = union.get((rid, rec["kind"], rec["subject"]))
-            if hit is None:
-                continue
-            rec = dict(rec)
-            rec["prev_txt"], prev_run = hit
-            rec["prev_ts"], rec["prev_deck"] = label.get(prev_run, (None, None))
-        out.append(rec)
-    return out
+    """One run's records, both contests: the dialog is about the run, not
+    about the slice you arrived from, so it shows what it set in each."""
+    return rows(db, """SELECT rr.kind, rr.subject, rr.contest, rr.field, rr.held,
+                              rr.value_txt, rr.value_ord, rr.prev_txt,
+                              pr.started_ts prev_ts, pr.deck_name prev_deck
+                         FROM run_records rr
+                         LEFT JOIN runs pr ON pr.run_id = rr.prev_run
+                        WHERE rr.run_id = ?""", (rid,))
 
 
 def api_run(db, q):
@@ -831,11 +738,10 @@ def api_run(db, q):
         # Every record this run set, both contests, whatever the page is
         # currently filtered to -- the dialog is about this run, not about
         # the slice you arrived from.
-        # Same rule as the Runs column: an endless row counts only when it
-        # is also a record with the restriction lifted.
         "records": sorted(
             run_records_for(db, rid),
-            key=lambda x: (RECORD_ORDER.get(x["kind"], 9), x["endless"],
+            # Standard before all: the stronger claim first.
+            key=lambda x: (RECORD_ORDER.get(x["kind"], 9), x["contest"] != "standard",
                            -(x["value_ord"] or 0))),
         "defects": rows(db, "SELECT defect, detail FROM run_defects WHERE run_id=?", (rid,)),
         # The whole run, like everything else in this dialog -- the Runs

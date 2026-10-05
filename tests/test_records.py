@@ -6,8 +6,10 @@ impossible to notice by looking at one run. The rules being pinned:
   * the run that first reaches a value keeps the moment, even after a later
     run beats it -- that is the whole point of "at the time";
   * a later run that merely EQUALS it does not take it away;
-  * endless and non-endless are separate contests, so the same run can hold
-    one of each for the same subject with different values;
+  * standard and all are separate contests over figures that both start at
+    the beginning of the run: standard up to the win, all the whole run --
+    so a pre-win value counts in both, and a standard record never has to
+    beat an all figure;
   * comparison is on the ordering key, never the text.
 
     python tests/test_records.py
@@ -64,39 +66,45 @@ hand("C", "Pair", 5000)          # equal, not greater
 hand("A", "Flush", 998)
 hand("B", "Flush", 8293927041)
 
-# Endless is its own contest: A's endless best is lower than B's
-# non-endless best, and must still count as an endless record.
+# After the win. A's all figure for Pair is then 2000; B's is still its
+# pre-win 5000 -- the larger of everything it did -- even though its
+# post-win Pair is only 1500.
 hand("A", "Pair", 2000, el=1)
-hand("B", "Pair", 1500, el=1)    # lower than A's endless -> no record
+hand("B", "Pair", 1500, el=1)
 
 Ingester(db).derive_records()
 
 got = {(r[0], r[1], r[2], r[3]): r[4] for r in db.execute(
-    "SELECT run_id, kind, subject, endless, value_txt FROM run_records")}
+    "SELECT run_id, kind, subject, contest, value_txt FROM run_records")}
+S, ALL = "standard", "all"
 
 print("the first run to reach a value keeps the moment")
-check("A holds the early Pair", got.get(("A", "hand_score", "Pair", 0)) == "1000")
-check("B holds it once it beats A", got.get(("B", "hand_score", "Pair", 0)) == "5000")
+check("A holds the early Pair", got.get(("A", "hand_score", "Pair", S)) == "1000")
+check("B holds it once it beats A", got.get(("B", "hand_score", "Pair", S)) == "5000")
 
 print("\nequalling a record does not take it")
-check("C gets nothing for matching B", ("C", "hand_score", "Pair", 0) not in got,
+check("C gets nothing for matching B", ("C", "hand_score", "Pair", S) not in got,
       str([k for k in got if k[0] == "C"]))
 
 print("\nbig numbers compare on the ordering key, not as text")
 # "8293927041" < "998" as a string; only the ord makes B the record holder.
-check("A holds the small Flush", got.get(("A", "hand_score", "Flush", 0)) == "998")
+check("A holds the small Flush", got.get(("A", "hand_score", "Flush", S)) == "998")
 check("B holds the huge Flush",
-      got.get(("B", "hand_score", "Flush", 0)) == "8293927041",
-      str(got.get(("B", "hand_score", "Flush", 0))))
+      got.get(("B", "hand_score", "Flush", S)) == "8293927041",
+      str(got.get(("B", "hand_score", "Flush", S))))
 
-print("\nendless is a separate contest")
-check("A's endless Pair is its own record",
-      got.get(("A", "hand_score", "Pair", 1)) == "2000")
-check("B does not take it with a lower endless value",
-      ("B", "hand_score", "Pair", 1) not in got)
-check("and A holds both contests at once for the same hand",
-      got.get(("A", "hand_score", "Pair", 0)) == "1000"
-      and got.get(("A", "hand_score", "Pair", 1)) == "2000")
+print("\nstandard and all are two contests")
+check("A's pre-win Pair (1000) is a standard record", got.get(("A", "hand_score", "Pair", S)) == "1000")
+check("A's all figure (2000, after the win) is an all record",
+      got.get(("A", "hand_score", "Pair", ALL)) == "2000")
+check("B's all figure is its pre-win 5000, which beats A's 2000",
+      got.get(("B", "hand_score", "Pair", ALL)) == "5000", str(got.get(("B", "hand_score", "Pair", ALL))))
+check("a pre-win value is in both contests: B's Flush",
+      got.get(("B", "hand_score", "Flush", S)) == got.get(("B", "hand_score", "Flush", ALL))
+      == "8293927041")
+check("plays are counted over the whole run for all: A played Pair twice",
+      got.get(("A", "hand_played", "Pair", ALL)) == "2"
+      and got.get(("A", "hand_played", "Pair", S)) == "1")
 
 print("\nrederiving is idempotent")
 before = sorted(db.execute("SELECT * FROM run_records").fetchall())
