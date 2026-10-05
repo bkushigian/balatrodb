@@ -171,6 +171,16 @@ const niceTicks = (lo, hi, n) => {
   for (let t = Math.ceil(lo / step) * step; t <= hi + step * 1e-9; t += step) out.push(t);
   return out.length > 1 ? out : [lo, hi];
 };
+// A log axis ticks on whole exponents, at a round step: 1, 2, 5, 10, 20,
+// 25, 50, 100... Dividing the range into six equal parts gave 1e54, 1e106,
+// 1e158 once a naneinf score stretched the axis to 1e308.
+const logStep = (span, n) => {
+  const raw = span / n;
+  for (let mag = 1; ; mag *= 10) {
+    const m = [1, 2, 2.5, 5].find(f => f * mag >= raw && Number.isInteger(f * mag));
+    if (m) return m * mag;
+  }
+};
 // On a log axis the tick is an exponent; label it as the power of ten it is.
 const logTick = o => {
   const e = Math.round(o);
@@ -214,9 +224,9 @@ function dotRows(host, title, note, rows, opts) {
 
   // Thinned when the range is wide: nine labels in a 200px track is one
   // long smear of digits.
-  const step = Math.max(1, Math.ceil((hi - lo) / 5));
+  const step = logStep(hi - lo, 5);
   const ticks = [];
-  for (let e = Math.ceil(lo); e <= hi; e += step) ticks.push(e);
+  for (let e = Math.ceil(lo / step) * step; e <= hi; e += step) ticks.push(e);
   const gl = ticks.map(e => `<span class="gl" style="left:${at(e).toFixed(2)}%"></span>`).join("");
 
   const body = rows.map(r => `<div class="pbar dots">
@@ -301,9 +311,9 @@ function seriesChart(host, title, note, series, opts) {
   if (o.log) {
     // Every whole exponent, thinned when there are more than about six so
     // the labels do not collide.
-    const step = Math.max(1, Math.ceil((hi - lo) / 6));
+    const step = logStep(hi - lo, 6);
     ticks = [];
-    for (let e = Math.ceil(lo); e <= hi; e += step) ticks.push(e);
+    for (let e = Math.ceil(lo / step) * step; e <= hi; e += step) ticks.push(e);
   } else {
     ticks = niceTicks(lo, hi, 4);
   }

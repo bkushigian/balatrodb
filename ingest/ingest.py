@@ -44,6 +44,11 @@ DEFAULT_DB = paths.db_path()
 # The wire delivers a number plainly, or as {"s": exact, "l": signed log10}
 # when it cannot round-trip through the encoder's %.14g.
 
+# log10 of the largest double is 308.2547; an infinite score sits a hair
+# above it, so it still outranks every finite one.
+INF_ORD = 308.26
+
+
 def ord_num(v):
     """(ord, num, txt). `ord` is sign(x)*log10(1+|x|).
 
@@ -57,7 +62,15 @@ def ord_num(v):
         s, l = v.get("s"), v.get("l")
         if l is None:
             return None, None, None if s is None else str(s)
-        return float(l), as_num(v), str(s)
+        l = float(l)
+        # The mod writes infinity as l = +-1e308: "bigger than anything".
+        # As an ORD that is not log10 of anything -- it put a naneinf hand
+        # 1e308 orders of magnitude up a log axis, flattening every real
+        # score against the floor. Infinity ranks just past the largest
+        # double instead, which is where a log axis can still draw it.
+        if math.isinf(l) or abs(l) >= 1e300:
+            l = math.copysign(INF_ORD, l)
+        return l, as_num(v), str(s)
     if isinstance(v, bool):
         return None, None, str(v)
     if isinstance(v, (int, float)):

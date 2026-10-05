@@ -4,6 +4,12 @@
 -- This file is authoritative. `python ingest/sync_schema.py` copies it into
 -- the DDL block of docs/db-schema.md so the document cannot drift from it.
 
+-- Every `_ord` column is sign(x) * log10(1 + |x|): an ordering key that
+-- still works when the value overflows a double. An infinite value (the
+-- game's "naneinf") is 308.26, just past log10 of the largest double, so it
+-- outranks every finite value and stays drawable on a log axis. NaN has no
+-- order and stays NULL.
+
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = OFF;   -- projections are purged and re-derived per run
 

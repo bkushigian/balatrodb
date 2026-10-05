@@ -54,6 +54,9 @@ const fmtNum = (v, whole) => {
   if (v === null || v === undefined || v === "") return "—";
   const str = String(v).trim();
   const n = Number(str);
+  // The game shows an overflowed score as "naneinf", whether it went to
+  // infinity or to NaN; the log keeps which, the page says what you saw.
+  if (/^[+-]?(inf|infinity|nan)$/i.test(str)) return str.startsWith("-") ? "-naneinf" : "naneinf";
   if (!isFinite(n)) {
     // Escaped: fmt is handed TEXT columns straight out of the log
     // (score_txt, to_txt, required_txt), and a modded joker can put
