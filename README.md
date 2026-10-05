@@ -157,6 +157,7 @@ python tests/test_util.py    # serialization, numbers, hook wrapper
 python tests/test_log.py     # what reaches disk, and what is deliberately dropped
 python tests/test_web.py     # the dashboard's inline JS parses (needs node)
 python tests/test_balarng.py # the RNG port, against values LuaJIT printed
+python tests/test_phase_semantics.py  # standard vs endless: pinned, and the model's invariants
 ```
 
 Checks over the parts that are pure logic and easy to get subtly wrong:
