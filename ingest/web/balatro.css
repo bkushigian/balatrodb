@@ -551,6 +551,30 @@ tr.detail > td { padding: 0; border-top: 0; }
 /* Only ever present when something is wrong, so it is allowed to be loud. */
 .stalebar { background: var(--gold); color: #2a1a00; font-weight: 700;
             padding: 9px 18px; text-align: center; font-size: 14px; }
+.stalego { font: inherit; font-weight: 700; margin-left: 10px; cursor: pointer;
+           background: #2a1a00; color: var(--gold); border: 0;
+           border-radius: .25rem; padding: 3px 10px; }
+/* The server menu: after the page links, and smaller than them -- it is
+   housekeeping, not somewhere to go. Opens to the left so it stays on
+   screen at the header's right edge. */
+.srvmenu > button { padding: 7px 13px 9px; font-size: 15px; color: var(--ink-dim); }
+.srvmenu .menu { left: auto; right: 0; min-width: 250px; }
+.srvmenu .menu button { flex-direction: column; align-items: flex-start; gap: 1px; }
+.srvmenu .menu button[data-do="stop"] { color: var(--mult); }
+.srvhint { font-size: 13px; color: var(--ink-mute); font-weight: 400; }
+.srvstat { font-size: 13px; color: var(--ink-mute); padding: 6px 11px 8px;
+           border-bottom: 1px solid rgba(255, 255, 255, .08); margin-bottom: 2px;
+           white-space: normal; }
+.srvstat b { color: var(--ink-dim); font-weight: 400; }
+/* Narrow screens: the header wraps, and the menu takes its own line at the
+   right rather than hanging off the edge. */
+@media (max-width: 640px) { .srvmenu { margin-left: auto; } }
+.srvdot { width: 9px; height: 9px; border-radius: 50%; background: var(--green);
+          display: inline-block; flex: none; }
+.srvdot.stale { background: var(--gold); }
+.stopped { max-width: 560px; margin: 18vh auto; padding: 0 16px;
+           text-align: center; font-size: 22px; color: var(--ink); }
+.stopped p { font-size: 15px; color: var(--ink-mute); }
 
 /* The bars stop where the plotted area of the charts below stops, so the
    two halves of a page read as the same width rather than the bars running

@@ -2,6 +2,8 @@
 
     python ingest/dashboard.py            # http://localhost:8611
     python ingest/dashboard.py --port 9000 --no-open
+    python ingest/dashboard.py --stop     # stop the one that is running
+    python ingest/dashboard.py --restart  # stop it, then start this one
 
 Serves `web/index.html` plus a small read-only JSON API. It queries the SQLite
 database directly, so it is always as current as the last ingest; run
@@ -20,10 +22,14 @@ import json
 import math
 import os
 import pathlib
+import signal
+import socket
+import sys
 import zlib
 import sqlite3
 import threading
 import time
+import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -1556,6 +1562,31 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_POST(self):
+        # Stop and restart, from the page's own buttons and from --stop.
+        #
+        # Anything that changes the server has to be safe against other
+        # websites: a page you happen to have open could otherwise POST to
+        # localhost and shut the dashboard down. A custom header cannot be
+        # sent cross-origin without a CORS preflight, which this server never
+        # answers, so requiring one is enough; the Origin check is the belt
+        # to that pair of braces.
+        u = urlparse(self.path)
+        if u.path not in CONTROL:
+            self.send_bytes(b"not found", "text/plain", 404)
+            return
+        origin = self.headers.get("Origin")
+        host = self.headers.get("Host", "")
+        if (self.headers.get(CONTROL_HEADER) != "1"
+                or (origin and urlparse(origin).netloc != host)):
+            self.send_bytes(b"forbidden", "text/plain", 403)
+            return
+        self.send_bytes(json.dumps({"ok": True}).encode(), "application/json")
+        # Not from this thread: shutdown() waits for serve_forever to notice,
+        # and serve_forever is waiting for this request to finish.
+        threading.Thread(target=CONTROL[u.path], args=(self.server,),
+                         daemon=True).start()
+
     def do_GET(self):
         u = urlparse(self.path)
         if u.path in ROUTES:
@@ -1585,12 +1616,107 @@ class Handler(BaseHTTPRequestHandler):
             self.send_bytes(fh.read(), ctype)
 
 
+# ─── stopping and restarting ─────────────────────────────────────────────
+# Started from the in-game button the server runs in the background with no
+# terminal to Ctrl-C, so it has to be stoppable some other way: from the page,
+# or with --stop.
+
+CONTROL_HEADER = "X-BalatroDB"
+# What --stop falls back on when the server will not answer: which process
+# is serving which port. Removed on a clean exit; a stale one is harmless,
+# because it is only acted on while that port is still taken.
+PIDFILE = os.path.join(os.path.dirname(DB), "dashboard.pid")
+
+
+def _stop(srv):
+    srv.shutdown()
+
+
+def _restart(srv):
+    """Replace this process with a fresh copy of itself, same arguments.
+
+    exec rather than spawning a child: the PID stays the same, so the pid
+    file stays true, and there is no window where two servers want the port.
+    """
+    srv.shutdown()
+    srv.server_close()
+    # Never exec in the middle of a sync -- the watcher would lose a
+    # half-folded run. Holding the lock until exec means it never resumes.
+    _sync_lock.acquire()
+    argv = [a for a in sys.argv if a != "--restart"]
+    # The page that asked is already open; do not open another.
+    if "--no-open" not in argv:
+        argv.append("--no-open")
+    os.execv(sys.executable, [sys.executable] + argv)
+
+
+CONTROL = {"/api/stop": _stop, "/api/restart": _restart}
+
+
+def port_taken(port):
+    probe = socket.socket()
+    probe.settimeout(0.4)
+    try:
+        return probe.connect_ex(("127.0.0.1", port)) == 0
+    finally:
+        probe.close()
+
+
+def stop_running(port, wait=8.0):
+    """Stop whatever dashboard holds `port`. True once the port is free.
+
+    Asks it politely first. A server from before these endpoints existed, or
+    one too wedged to answer, is killed by the PID it recorded -- but only if
+    that record is for this port, so a stale file never kills a stranger.
+    """
+    if not port_taken(port):
+        print(f"no dashboard running on port {port}")
+        return True
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/stop",
+                                     data=b"", method="POST",
+                                     headers={CONTROL_HEADER: "1"})
+        urllib.request.urlopen(req, timeout=3).read()
+    except Exception:
+        try:
+            with open(PIDFILE) as fh:
+                pid, at = (int(x) for x in fh.read().split())
+        except (OSError, ValueError):
+            pid = at = None
+        if at != port:
+            print(f"port {port} is taken, but not by a dashboard this can stop"
+                  " -- one started before --stop existed, or not a dashboard."
+                  " Kill it by hand.")
+            return False
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        if not port_taken(port):
+            print(f"stopped the dashboard on port {port}")
+            return True
+        time.sleep(0.2)
+    print(f"the dashboard on port {port} did not stop")
+    return False
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8611)
     ap.add_argument("--logs", default=ingester.DEFAULT_LOGS)
     ap.add_argument("--no-open", action="store_true")
+    ap.add_argument("--stop", action="store_true",
+                    help="stop the dashboard running on --port, then exit")
+    ap.add_argument("--restart", action="store_true",
+                    help="stop the dashboard running on --port, then start")
     a = ap.parse_args()
+
+    if a.stop:
+        return 0 if stop_running(a.port) else 1
+    if a.restart and not stop_running(a.port):
+        return 1
 
     # No database yet is the normal first run, not an error: connect()
     # creates the tables and sync() below folds in every log there is.
@@ -1598,12 +1724,7 @@ def main():
 
     # Launching twice -- from the in-game button, say, while one is already
     # running -- should open the dashboard, not crash on the bound port.
-    import socket
-    probe = socket.socket()
-    probe.settimeout(0.4)
-    already = probe.connect_ex(("127.0.0.1", a.port)) == 0
-    probe.close()
-    if already:
+    if port_taken(a.port):
         url = f"http://localhost:{a.port}"
         print(f"already running at {url}")
         if not a.no_open:
@@ -1621,14 +1742,23 @@ def main():
     n = Handler.db.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
     print(f"BalatroDB dashboard: {url}   ({n} runs)")
     print(f"watching {a.logs} -- new runs appear automatically")
-    print("Ctrl-C to stop.")
+    print("Ctrl-C, --stop or the page's Server menu to stop.")
     if not a.no_open:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+    with open(PIDFILE, "w") as fh:
+        fh.write(f"{os.getpid()} {a.port}\n")
+    # A plain kill should leave as cleanly as Ctrl-C does.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         print("\nstopped")
+    finally:
+        try:
+            os.remove(PIDFILE)
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -91,6 +91,18 @@ play, because the mod appends to its log throughout.
 `python ingest/ingest.py` does the same fold as a one-off, for scripting or a
 first build.
 
+Started from the in-game button the server runs in the background, with no
+terminal to Ctrl-C. Stop or restart it from the **Server** menu at the right
+of the page header, or from a shell:
+
+```
+python ingest/dashboard.py --stop       # stop the one on port 8611
+python ingest/dashboard.py --restart    # stop it, then start fresh
+```
+
+Restart after editing the server's Python; the page also offers it when it
+notices the server is running older code than what is on disk.
+
 A local, Balatro-themed web dashboard over the database: record tiles, per-joker
 maxima, best hand by type, how far runs get, and a filterable run list that
 drills into a single run. Filters are deck, stake and endless phase, and they

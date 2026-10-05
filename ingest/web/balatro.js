@@ -305,6 +305,7 @@ const summaryTip = s => {
 // forever; the banner simply cannot help until the first restart after this
 // shipped.
 function showStale(on) {
+  setServerStale(on);
   let el = $("#stalebar");
   if (!on) { if (el) el.remove(); return; }
   if (el) return;
@@ -312,9 +313,108 @@ function showStale(on) {
   el.id = "stalebar";
   el.className = "stalebar";
   el.textContent = "The dashboard server is running older code than the "
-    + "files on disk. Restart it to pick up the changes.";
+    + "files on disk. ";
+  const b = document.createElement("button");
+  b.className = "stalego";
+  b.textContent = "Restart it now";
+  b.onclick = () => serverControl("restart");
+  el.appendChild(b);
   document.body.prepend(el);
 }
+
+// Stop and Restart, in the header of both pages. Started from the in-game
+// button the server has no terminal to Ctrl-C, so this is the off switch.
+// The header is what the server insists on before it will act: another
+// website cannot send it without a preflight the server never answers.
+async function serverControl(what) {
+  if (what === "stop" && !confirm("Stop the dashboard server? "
+      + "Start it again from Balatro, or with python ingest/dashboard.py.")) return;
+  try {
+    await fetch(`/api/${what}`, { method: "POST", headers: { "X-BalatroDB": "1" } });
+  } catch { /* it may go down before it answers; that is the point */ }
+  if (what === "stop") {
+    document.body.innerHTML = `<div class="stopped">The dashboard server is stopped.
+      <p>Start it again from Balatro's dashboard button, or with
+      <code>python ingest/dashboard.py</code>.</p></div>`;
+    return;
+  }
+  // A restart re-reads every log before it listens again, so wait for it
+  // to answer rather than reloading into a connection error.
+  const bar = $("#stalebar");
+  if (bar) bar.textContent = "Restarting…";
+  for (let i = 0; i < 120; i++) {
+    await new Promise(r => setTimeout(r, 500));
+    try {
+      if ((await fetch("/api/version")).ok) { location.reload(); return; }
+    } catch { /* not up yet */ }
+  }
+  if (bar) bar.textContent = "The server did not come back. Start it again from Balatro.";
+}
+
+// The server's controls live in one menu at the end of the header, apart
+// from the page links: they act on the process, not on what you are
+// looking at. A status dot on the button says whether the server is
+// current, so the menu earns its place even when nothing needs doing.
+function serverMenu() {
+  const header = document.querySelector("header");
+  if (!header) return;
+  const root = document.createElement("div");
+  root.className = "pick srvmenu";
+  root.innerHTML =
+    `<button class="seg pixel-pill" aria-haspopup="menu" aria-expanded="false"
+      title="Dashboard server"><span class="srvdot"></span>Server<span class="caret">▾</span></button>
+     <div class="menu" role="menu">
+       <div class="srvstat">Checking…</div>
+       <button role="menuitem" data-do="restart">Restart
+         <span class="srvhint">pick up code changes</span></button>
+       <button role="menuitem" data-do="stop">Stop
+         <span class="srvhint">start again from Balatro</span></button>
+     </div>`;
+  header.appendChild(root);
+  const btn = root.querySelector("button");
+  const stat = root.querySelector(".srvstat");
+  const close = () => {
+    root.classList.remove("open");
+    btn.setAttribute("aria-expanded", "false");
+  };
+  btn.onclick = async ev => {
+    ev.stopPropagation();
+    const open = !root.classList.contains("open");
+    document.querySelectorAll(".pick.open").forEach(o => {
+      o.classList.remove("open");
+      o.firstElementChild.setAttribute("aria-expanded", "false");
+    });
+    root.classList.toggle("open", open);
+    btn.setAttribute("aria-expanded", open);
+    if (!open) return;
+    try {
+      const v = await fetch("/api/version").then(r => r.json());
+      setServerStale(v.stale);
+      stat.innerHTML = `<b>${v.stale ? "Running older code than the files on disk"
+                                     : "Running, up to date"}</b>`
+        + (v.last_sync ? `<br>logs last read ${esc(ago(v.last_sync))}` : "");
+    } catch {
+      stat.textContent = "Not answering";
+    }
+  };
+  root.querySelector(".menu").onclick = ev => {
+    const b = ev.target.closest("button[data-do]");
+    if (!b) return;
+    ev.stopPropagation();
+    close();
+    serverControl(b.dataset.do);
+  };
+  root.onkeydown = ev => { if (ev.key === "Escape") { close(); btn.focus(); } };
+}
+
+// The dot on the Server button: green when current, gold when the code on
+// disk is newer than what is running.
+function setServerStale(on) {
+  const dot = document.querySelector(".srvdot");
+  if (dot) dot.classList.toggle("stale", !!on);
+}
+
+serverMenu();
 
 // ── talking to the API ──────────────────────────────────────────────────
 
