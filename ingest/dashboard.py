@@ -248,7 +248,9 @@ def api_summary(db, q):
         f"""SELECT MIN(m.balance) v FROM money m JOIN runs r USING (run_id)
             WHERE 1=1{mw}""", mp).fetchone()
 
-    dw, dp = where(q, endless_col="ro.endless")
+    # The deck sample and the cash-out are taken at round.end, so they take
+    # its phase: the winning round's are paid after the win.
+    dw, dp = where(q, endless_col="ro.end_endless")
     deck = db.execute(
         f"""SELECT MAX(ro.deck_size) v FROM rounds ro JOIN runs r USING (run_id)
             WHERE 1=1{dw}""", dp).fetchone()

@@ -478,7 +478,14 @@ class Ingester:
         for ev in events:
             e, d = ev.get("e"), ev.get("d") or {}
             seg, n = ev.get("seg", 0), ev.get("n")
-            el = 1 if ev.get("el") else 0
+            # Standard play ends the moment the run is won. run.win fires at
+            # ROUND_EVAL, before the winning round's cash-out, before a
+            # planet used on that screen, before the shop -- all of which the
+            # mod's latch (flipped at the next blind select) still stamps
+            # standard. So the latch says when a run went endless, and the win
+            # says where standard stops: everything after run.win is not
+            # standard, whatever its stamp.
+            el = 1 if (ev.get("el") or saw_win) else 0
             ante = as_int(ev.get("a"))
             ts = ev.get("t") if isinstance(ev.get("t"), (int, float)) else None
 
@@ -556,9 +563,9 @@ class Ingester:
                     o, nu, t = triple(d.get("score"))
                     self.db.execute(
                         "UPDATE rounds SET score_ord=?,score_num=?,score_txt=?,cashout_total=?,"
-                        "dollars_before=?,deck_size=? WHERE run_id=? AND round_seq=?",
+                        "dollars_before=?,deck_size=?,end_endless=? WHERE run_id=? AND round_seq=?",
                         (o, nu, t, as_int(d.get("total")), as_int(d.get("dollars_before")),
-                         as_int(d.get("deck_size")), run_id, rs))
+                         as_int(d.get("deck_size")), el, run_id, rs))
                     self.db.executemany(
                         "INSERT OR REPLACE INTO cashout_items VALUES (?,?,?,?,?,?,?)",
                         [(run_id, rs, i, it.get("name"), as_int(it.get("dollars")),
@@ -1046,13 +1053,13 @@ class Ingester:
             -- start_n, not round_seq: this column is joker_derived.n, an
             -- event sequence. round_seq happens to be a valid n for some
             -- other event in the run, so the error is invisible at rest.
-            SELECT run_id, seg, start_n, endless, 'stone_cards', NULL, deck_stone
+            SELECT run_id, seg, start_n, end_endless, 'stone_cards', NULL, deck_stone
               FROM rounds WHERE deck_stone IS NOT NULL AND start_n IS NOT NULL
         """)
         # Steel Joker: steel cards in the deck, from the per-round scalar.
         self.db.execute("""
             INSERT INTO joker_derived (run_id, seg, n, endless, metric, subject, value)
-            SELECT run_id, seg, start_n, endless, 'steel_cards', NULL, deck_steel
+            SELECT run_id, seg, start_n, end_endless, 'steel_cards', NULL, deck_steel
               FROM rounds WHERE deck_steel IS NOT NULL AND start_n IS NOT NULL
         """)
         # Fortune Teller: tarots used so far.

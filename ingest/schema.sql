@@ -4,6 +4,10 @@
 -- This file is authoritative. `python ingest/sync_schema.py` copies it into
 -- the DDL block of docs/db-schema.md so the document cannot drift from it.
 
+-- Every `endless` column means "after the run was won": standard play is
+-- everything before run.win. The mod's own latch flips later, at the next
+-- blind select, so the ingester stamps the win, not the latch.
+--
 -- Every `_ord` column is sign(x) * log10(1 + |x|): an ordering key that
 -- still works when the value overflows a double. An infinite value (the
 -- game's "naneinf") is 308.26, just past log10 of the largest double, so it
@@ -131,6 +135,11 @@ CREATE TABLE IF NOT EXISTS rounds (
   deck_steel       INTEGER,
   deck_perma_max   REAL,      -- largest single Hiker bonus
   deck_perma_total REAL,      -- Hiker's accumulated bonus across the deck
+  -- The phase at round.end, where `endless` is the phase at round.start.
+  -- They differ for exactly one round: the winning one, beaten before run.win
+  -- but cashed out after it. Its cash-out and its deck sample belong to the
+  -- whole run, not to standard play, so those read this column.
+  end_endless      INTEGER,
   PRIMARY KEY (run_id, round_seq)
 );
 CREATE INDEX IF NOT EXISTS rounds_slice ON rounds(endless, cashout_total DESC);

@@ -100,15 +100,15 @@ check("standard: B's ante is the max of its pre-win rounds (1, 5, 4, 8), not the
       col("standard", "ante")["B"] == 8)
 check("standard: B's hands and best are its pre-win ones",
       (col("standard", "hands_played")["B"], col("standard", "best_hand")["B"]) == (4, "50000"))
-check("standard: B's peak money includes the shop after the win (the latch boundary)",
-      col("standard", "peak_money")["B"] == 529)
+check("standard: B's peak money stops at the win, before its cash-out and the shop",
+      col("standard", "peak_money")["B"] == 19)
 
 print("PINNED: the summary")
 s_all, s_std = summary("all"), summary("standard")
 tiles = ("runs", "won", "win_pct", "best_hand", "max_money", "max_ante", "max_cashout")
 check("all", tuple(s_all[k] for k in tiles) == (7, 3, 42.9, "9000000000", 1076, 12, 20),
       str(tuple(s_all[k] for k in tiles)))
-check("standard", tuple(s_std[k] for k in tiles) == (7, 3, 42.9, "1000000", 529, 9, 10),
+check("standard", tuple(s_std[k] for k in tiles) == (7, 3, 42.9, "1000000", 19, 9, 5),
       str(tuple(s_std[k] for k in tiles)))
 
 print("PINNED: records")
@@ -281,10 +281,6 @@ INVARIANTS = [
 ]
 
 KNOWN = {
-    "standard money stops at run.win":
-        "the boundary is the latch, which flips at the next blind select",
-    "standard cash-outs stop at run.win":
-        "same boundary; the winning cash-out is paid between run.win and the latch",
     "ante is the highest ante played":
         "the ante comes from runs.furthest_ante, which the win moves to 9",
     "a live run has every figure":

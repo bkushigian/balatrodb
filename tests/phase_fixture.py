@@ -5,8 +5,8 @@ and folded in by the real ingester.
     A  never wins; dies in ante 2
     B  wins, goes endless. Hieroglyph drops its ante before the win; the
        winning cash-out ($10) and the shop after it ($500 spike) come after
-       run.win but before the latch, so today they count as standard; Pair
-       is played three times on each side
+       run.win, so they belong to the whole run and not to standard play;
+       Pair is played three times on each side
     C  wins and stops at the win screen
     D  seeded Plasma deck, one big hand, dies in ante 1
     E  restarted before a hand was played
