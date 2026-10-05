@@ -15,17 +15,26 @@ const $ = s => document.querySelector(s);
 // are escaped at the point of interpolation rather than trusted.
 const esc = v => String(v ?? "").replace(/[&<>"']/g,
   c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-// Two independent toggles rather than three exclusive options. Both on (or
-// both off) means no phase filter at all -- which is what "all runs" should
-// mean, and is not expressible with mutually exclusive buttons.
-const phase = { "0": true, "1": true };
-const state = { deck: "", stake: "", endless: "", noplasma: "", played: "", metric: "",
+// The phase is one choice of two, and both start at the beginning of the
+// run: "standard" is each run up to the moment it was won, "" (all) is each
+// whole run. Sent as `phase=standard`; all is the absence of it.
+const state = { deck: "", stake: "", phase: "", noplasma: "", played: "", metric: "",
                 seeded: "", held: "" };
 
-function syncPhase() {
-  const on = Object.keys(phase).filter(k => phase[k]);
-  // exactly one selected -> filter to it; otherwise include everything
-  state.endless = on.length === 1 ? on[0] : "";
+// Both pages draw the choice the same way: one pressed button of two.
+function wirePhase(onChange) {
+  const group = document.querySelector("#phase");
+  if (!group) return;
+  const paint = () => group.querySelectorAll("button[data-v]").forEach(b =>
+    b.setAttribute("aria-pressed", b.dataset.v === state.phase));
+  group.onclick = e => {
+    const b = e.target.closest("button[data-v]");
+    if (!b || b.dataset.v === state.phase) return;
+    state.phase = b.dataset.v;
+    paint();
+    onChange();
+  };
+  paint();
 }
 
 // ── formatting numbers the game's way ───────────────────────────────────

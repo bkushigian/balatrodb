@@ -39,12 +39,12 @@
     <span><label>Runs</label>
       <button class="seg pixel-pill" id="played" aria-pressed="false"
         title="Hide runs restarted or abandoned before a single hand was played">Played only</button></span>
-    <span><label>Include</label>
-      <span class="seggroup" id="phase" role="group" aria-label="Which phases to include">
-        <button class="seg pixel-pill" data-v="0" aria-pressed="true"
-          title="Everything up to the point a run continued past the win ante">Non-endless</button>
-        <button class="seg pixel-pill" data-v="1" aria-pressed="true"
-          title="Only what happened after continuing past the win ante">Endless</button>
+    <span><label>Count</label>
+      <span class="seggroup" id="phase" role="group" aria-label="Which part of each run counts">
+        <button class="seg pixel-pill" data-v="standard" aria-pressed="false"
+          title="Each run up to the moment it was won -- endless play left out">Standard</button>
+        <button class="seg pixel-pill" data-v="" aria-pressed="true"
+          title="Each whole run, endless play included">All</button>
       </span></span>
   </section>
 
@@ -635,9 +635,9 @@ async function openRun(id) {
   $("#dbody").innerHTML = `
     <h3>Run</h3>
     <div class="runmeta">
-      ${mt("Ante", fmt(r.furthest_ante ?? r.ended_ante), "gold")}
+      ${mt("Ante", fmt(d.ante), "gold")}
       ${mt("Rounds won", fmt(cleared), "green")}
-      ${mt("Hands", fmt(r.hands_played), "")}
+      ${mt("Hands", fmt(d.hands_played), "")}
       ${mt("Best score", fmtScore(r.best_hand_txt), "chips")}
       ${mt("Final", r.final_dollars === null ? "—" : "$" + fmt(r.final_dollars), "money")}
       ${mt("Deck size", fmt(r.deck_size), "")}
@@ -1085,13 +1085,7 @@ $("#played").onclick = e => {
   state.played = on ? "1" : "";
   refresh();
 };
-$("#phase").onclick = e => {
-  const b = e.target.closest("button.seg"); if (!b) return;
-  phase[b.dataset.v] = !phase[b.dataset.v];
-  b.setAttribute("aria-pressed", phase[b.dataset.v]);
-  syncPhase(); refresh();
-};
-syncPhase();
+wirePhase(refresh);
 
 // #run=<id> opens that run, optionally with #round=<n> expanded. Makes a run
 // linkable, and means the dialog survives a reload.

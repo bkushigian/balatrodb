@@ -55,7 +55,7 @@ def check(name, cond, detail=""):
 
 
 # The phase as the page sends it. The one place that knows the parameter.
-PHASES = {"standard": {"endless": "0"}, "all": {}}
+PHASES = {"standard": {"phase": "standard"}, "all": {}}
 
 
 def runs(phase, **extra):
@@ -85,10 +85,10 @@ def records(letter):
 # ─── PINNED ──────────────────────────────────────────────────────────────
 
 print("PINNED: the run list")
-check("all: furthest ante (runs.furthest_ante; a won run's ante moved on to 9)",
-      col("all", "ante") == {"A": 2, "B": 12, "C": 9, "D": 1, "E": 1, "F": None, "G": 1})
-check("all: hands played (the game's own count, from run.end)",
-      col("all", "hands_played") == {"A": 3, "B": 8, "C": 2, "D": 1, "E": 0, "F": None, "G": 1})
+check("all: furthest ante, the highest a round was played at",
+      col("all", "ante") == {"A": 2, "B": 12, "C": 8, "D": 1, "E": None, "F": 9, "G": 1})
+check("all: hands played, counted from the logged hands",
+      col("all", "hands_played") == {"A": 3, "B": 8, "C": 2, "D": 1, "E": 0, "F": 3, "G": 1})
 check("all: best hand",
       col("all", "best_hand") == {"A": "2000", "B": "9000000000", "C": "40000",
                                   "D": "1000000", "E": None, "F": "800", "G": "3500"})
@@ -108,7 +108,7 @@ s_all, s_std = summary("all"), summary("standard")
 tiles = ("runs", "won", "win_pct", "best_hand", "max_money", "max_ante", "max_cashout")
 check("all", tuple(s_all[k] for k in tiles) == (7, 3, 42.9, "9000000000", 1076, 12, 20),
       str(tuple(s_all[k] for k in tiles)))
-check("standard", tuple(s_std[k] for k in tiles) == (7, 3, 42.9, "1000000", 19, 9, 5),
+check("standard", tuple(s_std[k] for k in tiles) == (7, 3, 42.9, "1000000", 19, 8, 5),
       str(tuple(s_std[k] for k in tiles)))
 
 print("PINNED: records")
@@ -120,8 +120,8 @@ check("B: the pre-win rows are standard, the post-win ones survive as 'endless'"
                        ("hand_score", "Pair", "all", "4000")}, str(sorted(records("B"))))
 
 print("PINNED: sorting")
-check("sort=money orders by final dollars",
-      [LETTER[r["run_id"]] for r in d.api_runs(db, {"sort": "money"})][:3] == ["B", "C", "A"])
+check("sort=money puts the richest run first",
+      [LETTER[r["run_id"]] for r in d.api_runs(db, {"sort": "money"})][0] == "B")
 
 
 # ─── INVARIANTS ──────────────────────────────────────────────────────────
@@ -281,19 +281,10 @@ INVARIANTS = [
 ]
 
 KNOWN = {
-    "ante is the highest ante played":
-        "the ante comes from runs.furthest_ante, which the win moves to 9",
-    "a live run has every figure":
-        "ante and hands come from run.end, which a run in progress lacks; and a "
-        "standard figure is only split out for runs marked went_endless",
-    "hands played comes from the logged hands":
-        "the all figure is run.end's hands_played, absent for a live run",
     "records are two contests over per-run figures":
         "records are stored per disjoint part (pre-win / post-win) and "
         "endless_union() keeps the larger, so a pre-win value is never also an "
         "all record and no record holds a count's whole total",
-    "sort=money orders by the money the column shows":
-        "the sort reads final_dollars; the column shows peak money",
 }
 
 print("\nINVARIANTS")

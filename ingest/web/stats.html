@@ -32,12 +32,12 @@
     <span><label>Runs</label>
       <button class="seg pixel-pill" id="played" aria-pressed="false"
         title="Hide runs restarted or abandoned before a single hand was played">Played only</button></span>
-    <span><label>Include</label>
-      <span class="seggroup" id="phase" role="group" aria-label="Which phases to include">
-        <button class="seg pixel-pill" data-v="0" aria-pressed="true"
-          title="Everything up to the point a run continued past the win ante">Non-endless</button>
-        <button class="seg pixel-pill" data-v="1" aria-pressed="true"
-          title="Only what happened after continuing past the win ante">Endless</button>
+    <span><label>Count</label>
+      <span class="seggroup" id="phase" role="group" aria-label="Which part of each run counts">
+        <button class="seg pixel-pill" data-v="standard" aria-pressed="false"
+          title="Each run up to the moment it was won -- endless play left out">Standard</button>
+        <button class="seg pixel-pill" data-v="" aria-pressed="true"
+          title="Each whole run, endless play included">All</button>
       </span></span>
   </section>
 
@@ -454,43 +454,30 @@ const sel = { joker: "", hand: "", held: "held" };
 const fetchRuns = o => {
   const p = new URLSearchParams(qs());
   if (o && o.metric) p.set("metric", o.metric);
-  if (o && o.endless !== undefined) p.set("endless", o.endless);
-  // Without this the phase filter also drops the runs that went endless,
-  // and every one of them then looks like a run with no standard reading.
-  if (o && o.scope) p.set("scope", o.scope);
+  if (o && o.phase !== undefined) {
+    if (o.phase) p.set("phase", o.phase); else p.delete("phase");
+  }
   return fetch("/api/runs?" + p).then(r => r.json())
     .then(d => (d && d.error ? Promise.reject(new Error(d.error)) : d));
 };
 const fetchMetric = m => fetchRuns({ metric: m });
 
-// Standard play and endless are not two halves of a run, they are two
-// CATEGORIES, and one contains the other. Anything you managed before the
-// win ante you also managed under endless rules -- endless only drops the
-// restriction. So a run's endless best is the best of everything in it,
-// and it can never sit below its standard best.
+// Every run has two figures, both counted from the start: standard, up to
+// the moment it was won, and all, the whole run. One contains the other, so
+// a run's all figure can never sit below its standard one -- and where the
+// two agree (a run that never won, or never beat its pre-win best) it is one
+// dot, drawn as the stronger claim: that you did it before the win.
 //
-// Which is why a run is one dot and not two whenever the readings agree: a
-// run that never went endless, or that went and never beat what it had
-// already done, has a single value, and it is drawn as the stronger claim
-// -- that you did it under the restriction.
-//
-// Undivided these still do not compare: across this corpus the standard
-// best and the endless best sit five and a half orders of magnitude apart,
-// so a handful of endless runs flattens everything else into a line along
-// the bottom.
+// Undivided these do not compare: across this corpus the standard best and
+// the all best sit five and a half orders of magnitude apart, so a handful
+// of endless runs flattens everything else into a line along the bottom.
 async function phasePair(metric) {
-  const [ne, all] = await Promise.all([
-    // scope=event keeps every run in the answer and filters only its
-    // events, so a run that went endless still reports what it did before.
-    fetchRuns({ metric, endless: 0, scope: "event" }),
-    // The unrestricted reading: every run, every event -- unless only
-    // Endless is chosen, which is about the runs that went endless. It must
-    // not inherit Non-endless from the page, or the pairs would only ever
-    // hold runs whose two readings are the same.
-    fetchRuns({ metric, endless: state.endless === "1" ? "1" : "" }),
+  const [std, all] = await Promise.all([
+    fetchRuns({ metric, phase: "standard" }),
+    fetchRuns({ metric, phase: "" }),
   ]);
-  const std = new Map(ne.map(r => [r.run_id, r]));
-  return all.map(r => ({ all: r, ne: std.get(r.run_id) || null }));
+  const byRun = new Map(std.map(r => [r.run_id, r]));
+  return all.map(r => ({ all: r, std: byRun.get(r.run_id) || null }));
 }
 
 // Turns those pairs into the one or two series a chart draws. `val` reads a
@@ -507,26 +494,24 @@ function phaseSeries(pairs, val, color, title) {
     };
   };
 
-  // One category chosen under Include: one series. "Endless" there means
-  // the unrestricted category, not only the part played after the win.
-  if (state.endless === "0" || state.endless === "1") {
-    const pick = state.endless === "0" ? x => x.ne : x => x.all;
-    return [{ color, label: title,
-              pts: asc.map(x => read(pick(x))).filter(Boolean) }];
+  // Standard chosen: the standard figures alone.
+  if (state.phase === "standard") {
+    return [{ color, label: title, pts: asc.map(x => read(x.std)).filter(Boolean) }];
   }
 
-  const std = [], end = [];
+  // All chosen: both lines, since the gap between them is the point.
+  const std = [], all = [];
   for (const x of asc) {
-    const a = read(x.ne, "standard"), b = read(x.all, "endless");
+    const a = read(x.std, "standard"), b = read(x.all, "all");
     if (a) std.push(a);
-    if (b) { b.beat = !a || b.y > a.y + 1e-9; end.push(b); }
+    if (b) { b.beat = !a || b.y > a.y + 1e-9; all.push(b); }
   }
-  // Endless is listed FIRST so the standard line draws over the top of it:
-  // where the two coincide you see the stronger claim, and the endless line
-  // only emerges once it has actually beaten something.
+  // All is listed FIRST so the standard line draws over the top of it: where
+  // the two coincide you see the stronger claim, and the all line only
+  // emerges once a run beat its own pre-win best.
   return [
-    { color, dim: true, ring: color, label: "endless",
-      stair: end, pts: end.filter(p => p.beat) },
+    { color, dim: true, ring: color, label: "all",
+      stair: all, pts: all.filter(p => p.beat) },
     { color, label: "standard", pts: std },
   ];
 }
@@ -658,15 +643,14 @@ async function drawRuns() {
   draw("c_money", "Peak money", "The most you held at once.",
     plain(r => r.peak_money, v => "$" + fmt(v)), "var(--money)", { zero: true });
 
-  // Whole-run facts: the game keeps one number each, so unlike a score
-  // they have no standard reading distinct from an endless one and the
-  // chart is always a single series.
+  // Counted from the logged events like everything else, so these have a
+  // standard figure too: the hands and the ante up to the win.
   draw("c_played", "Hands played",
-    "How many hands each run took — in the part of it chosen under Include.",
+    "How many hands each run took.",
     plain(r => r.hands_played, fmt), "var(--purple)", { zero: true });
 
   draw("c_ante", "Ante reached",
-    "How far each run got — in the part of it chosen under Include.",
+    "The highest ante each run played a round at.",
     plain(r => r.ante, fmt), "var(--green)", { zero: true });
 }
 
@@ -804,14 +788,7 @@ $("#seeded").onclick = e => {
   syncSeeded();
   refresh();
 };
-$("#phase").onclick = e => {
-  const b = e.target.closest("button[data-v]");
-  if (!b) return;
-  phase[b.dataset.v] = !phase[b.dataset.v];
-  syncPhase();
-  paint("#phase", phase);
-  refresh();
-};
+wirePhase(refresh);
 $("#noplasma").onclick = () => {
   state.noplasma = state.noplasma === "1" ? "" : "1";
   $("#noplasma").setAttribute("aria-pressed", state.noplasma === "1");

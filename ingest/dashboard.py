@@ -125,14 +125,29 @@ def watch(db, logs, every=3.0):
 
 
 # ─── filters ──────────────────────────────────────────────────────────────
-# Every query slices the same way: deck, stake, and endless phase.
+# Every query slices the same way: which runs (deck, stake, seeded, Plasma,
+# played), and which part of each run -- the PHASE.
 #
-# `endless` is absent when both phases are wanted -- the page sends it only
-# when exactly one toggle is on. For leaderboards the flag is per EVENT, so
-# "non-endless" still includes the pre-win portion of a run that later went
-# endless, which is the whole reason the flag is stamped per event. For the run
-# LIST it is necessarily per run (did this run ever go endless), which is a
-# different question with the same name.
+# There are two phases, and both start at the beginning of the run:
+#
+#   standard  the run up to the moment it was won (run.win). A run that
+#             never wins is all standard.
+#   all       the whole run.
+#
+# `?phase=standard` asks for standard; anything else is all. The phase never
+# removes a run -- every run has a standard part -- it only decides which of
+# a run's events count. Every event table carries `endless`, "after the win",
+# so standard is `endless = 0` and all is no clause at all.
+
+def standard(q):
+    return q.get("phase") == "standard"
+
+
+def phase_sql(q, col):
+    """The phase as a clause on one table's `endless` column. A literal, not a
+    parameter: it is one of two constants, and keeping it out of the binding
+    list is what lets the subqueries below be composed freely."""
+    return f" AND {col} = 0" if standard(q) else ""
 
 def top(ord_col, txt_col):
     """ORDER BY that picks the true maximum, not merely the top `ord`.
@@ -154,9 +169,8 @@ def where(q, prefix="r.", endless_col=None):
     if q.get("stake"):
         clauses.append(f"{prefix}stake_key = ?")
         params.append(q["stake"])
-    if q.get("endless") in ("0", "1") and endless_col:
-        clauses.append(f"{endless_col} = ?")
-        params.append(int(q["endless"]))
+    if standard(q) and endless_col:
+        clauses.append(f"{endless_col} = 0")
     # Seeded runs are practice, not records -- you chose the seed. Kept as
     # its own filter rather than folded into the deck/stake ones, since
     # excluding them is a different question from picking what to look at.
@@ -204,14 +218,9 @@ def api_meta(db, q):
 
 
 def api_summary(db, q):
-    # The run counts follow api_runs: the phase toggle chooses which PART of
-    # each run counts, so it only removes a run that has no such part. Every
-    # run has a standard part -- Non-endless alone keeps them all, endless
-    # ones included -- but only a run that went endless has an endless part.
-    # Without this the header claimed "15 runs" over a slice holding one.
+    # Run outcomes are facts about runs, not figures, so the phase leaves
+    # them alone: every run has a standard part.
     w, p = where(q)
-    if q.get("endless") == "1":
-        w += " AND r.went_endless = 1"
 
     total = db.execute(f"SELECT COUNT(*) FROM runs r WHERE 1=1{w}", p).fetchone()[0]
     # Numerator and denominator must be the same population, and it must be
@@ -297,26 +306,26 @@ METRICS = {
         + top("js.to_ord", "js.to_txt") + " LIMIT 1)",
         "(SELECT MAX(js.to_ord) FROM joker_scale js WHERE js.run_id = r.run_id"
         "   AND js.key = ? AND js.is_reset = 0{el})",
-        " AND js.endless = ?"),
+        "js.endless"),
     "hand_score": (
         "(SELECT score_txt FROM hands h WHERE h.run_id = r.run_id"
         "   AND h.hand = ?{el} ORDER BY "
         + top("h.score_ord", "h.score_txt") + " LIMIT 1)",
         "(SELECT MAX(h.score_ord) FROM hands h WHERE h.run_id = r.run_id"
         "   AND h.hand = ?{el})",
-        " AND h.endless = ?"),
+        "h.endless"),
     "hand_level": (
         "(SELECT MAX(hl.lvl_to) FROM hand_levels hl WHERE hl.run_id = r.run_id"
         "   AND hl.hand = ?{el})",
         "(SELECT MAX(hl.lvl_to) FROM hand_levels hl WHERE hl.run_id = r.run_id"
         "   AND hl.hand = ?{el})",
-        " AND hl.endless = ?"),
+        "hl.endless"),
     "hand_played": (
         "(SELECT COUNT(*) FROM hands h WHERE h.run_id = r.run_id"
         "   AND h.hand = ?{el})",
         "(SELECT COUNT(*) FROM hands h WHERE h.run_id = r.run_id"
         "   AND h.hand = ?{el})",
-        " AND h.endless = ?"),
+        "h.endless"),
     # A counter joker has no joker_scale rows at all -- its value is a
     # function of game state -- so it could not be picked here, and Bull was
     # missing from every per-joker view. The contribution is what is
@@ -326,7 +335,7 @@ METRICS = {
         "   WHERE cp.run_id = r.run_id AND cp.joker_key = ?{el})",
         "(SELECT MAX(cp.contributed_ord) FROM joker_counter_peaks cp"
         "   WHERE cp.run_id = r.run_id AND cp.joker_key = ?{el})",
-        " AND cp.endless = ?"),
+        "cp.endless"),
     # The other half of the same joker: what the counter reached whether or
     # not anyone held it. A Fortune Teller record set without ever owning
     # one is this, and for most runs it is the only one that exists.
@@ -336,13 +345,13 @@ METRICS = {
         "   WHERE cp.run_id = r.run_id AND cp.joker_key = ?{el})",
         "(SELECT MAX(cp.unheld_ord) FROM joker_counter_peaks cp"
         "   WHERE cp.run_id = r.run_id AND cp.joker_key = ?{el})",
-        " AND cp.endless = ?"),
+        "cp.endless"),
     "counter_ambient": (
         "(SELECT MAX(cp.ambient_value) FROM joker_counter_peaks cp"
         "   WHERE cp.run_id = r.run_id AND cp.joker_key = ?{el})",
         "(SELECT MAX(cp.ambient_ord) FROM joker_counter_peaks cp"
         "   WHERE cp.run_id = r.run_id AND cp.joker_key = ?{el})",
-        " AND cp.endless = ?"),
+        "cp.endless"),
 }
 
 
@@ -379,82 +388,45 @@ def api_metrics(db, q):
 def phase_figures(q):
     """SQL for a run's furthest ante and hands played, in the chosen phase.
 
-    Both are whole-run counters in `runs`, which is right when both phases
-    are included and for a run that never went endless. For one that did,
-    choosing a phase means counting that part of it: Non-endless is
-    "everything up to the point a run continued past the win ante", which
-    never reaches ante 30. The int() makes the literal safe to inline.
+    Both come from the logged events, never from run.end: a run still being
+    played has no run.end, and the game's furthest_ante moves on to the next
+    ante at the win although no round of it was played. The ante is the
+    highest one a round was played at -- a maximum, so Hieroglyph moving it
+    back down does not lower it.
     """
-    whole_ante = "COALESCE(r.furthest_ante, r.ended_ante)"
-    if q.get("endless") not in ("0", "1"):
-        return whole_ante, "r.hands_played"
-    el = int(q["endless"])
-    ante = (f"(CASE WHEN r.went_endless = 1 THEN (SELECT MAX(ro.ante) FROM rounds ro"
-            f" WHERE ro.run_id = r.run_id AND ro.endless = {el}) ELSE {whole_ante} END)")
-    hands = (f"(CASE WHEN r.went_endless = 1 THEN (SELECT COUNT(*) FROM hands hc"
-             f" WHERE hc.run_id = r.run_id AND hc.endless = {el}) ELSE r.hands_played END)")
+    ante = ("(SELECT MAX(ro.ante) FROM rounds ro WHERE ro.run_id = r.run_id"
+            + phase_sql(q, "ro.endless") + ")")
+    hands = ("(SELECT COUNT(*) FROM hands hc WHERE hc.run_id = r.run_id"
+             + phase_sql(q, "hc.endless") + ")")
     return ante, hands
 
 
 def api_runs(db, q):
     w, p = where(q)
     ante_sql, hands_sql = phase_figures(q)
+    # Each per-run figure, in the chosen phase. Literals, so the columns and
+    # the sorts below can share them without any bindings to keep in order.
+    hw, mw, rw = (phase_sql(q, c) for c in ("h.endless", "m.endless", "ro.endless"))
+    peak_sql = f"(SELECT MAX(balance) FROM money m WHERE m.run_id = r.run_id{mw})"
+    # Every sort orders by the figure its column shows.
     sort = {
         "recent": "r.started_ts DESC",
-        # Sort by the same thing the column displays. best_hand_ord is only
-        # set on terminal runs, so sorting by it buried a 221,539 hand beneath
-        # runs showing 348.
-        "score": "(SELECT MAX(score_ord) FROM hands h WHERE h.run_id = r.run_id) DESC",
+        "score": f"(SELECT MAX(score_ord) FROM hands h WHERE h.run_id = r.run_id{hw}) DESC",
         "ante": f"{ante_sql} DESC",
-        "money": "r.final_dollars DESC",
+        "money": f"{peak_sql} DESC",
         "hands": f"{hands_sql} DESC",
     }.get(q.get("sort"), "r.started_ts DESC")
-    # The phase filter applies twice, differently: to which runs are listed
-    # (a run-level flag) and to the per-run figures derived from events. The
-    # subquery params bind BEFORE the outer ones, since they appear first.
-    hw = mw = rw = ""
-    sub, tail = [], []
-    if q.get("endless") in ("0", "1"):
-        el = int(q["endless"])
-        # `scope=event` keeps the per-EVENT filter and drops the per-run one,
-        # so every run reports what it did in that phase instead of dropping
-        # out of the list entirely. A chart needs this: to show a run's
-        # standard best beside its overall best, the run has to appear in
-        # both answers. The run LIST still filters both ways by default,
-        # which is the question that page is asking.
-        #
-        # And only Endless removes runs. Non-endless means "everything up to
-        # the point a run continued past the win ante", which every run has:
-        # dropping the runs that went endless there hid the pre-win play of
-        # exactly the runs that got furthest.
-        if q.get("scope") != "event" and el == 1:
-            w += " AND r.went_endless = 1"
-        hw, mw = " AND h.endless = ?", " AND m.endless = ?"
-        rw = " AND ro.endless = ?"
-        sub = [el, el, el, el]       # bh_ord, best_hand, peak_money, rounds_won
-        # Sorting by score has to see the same slice as the column it sorts.
-        # Its placeholder is in the ORDER BY, so it binds last of all.
-        if q.get("sort") == "score":
-            sort = ("(SELECT MAX(score_ord) FROM hands h "
-                    f"WHERE h.run_id = r.run_id{hw}) DESC")
-            tail = [el]
+    sub = []
     # A metric sort replaces the column sort entirely -- the two are
     # alternatives, never combined.
     metric_txt = metric_ord = "NULL"
     metric = (q.get("metric") or "").split(":", 1)
     if len(metric) == 2 and metric[0] in METRICS:
-        # ...which means dropping whatever the column sort had queued for
-        # the ORDER BY. `sort=score` with a phase filter puts a placeholder
-        # there; overwriting `sort` without clearing `tail` left the binding
-        # with nothing to bind to, and ?sort=score&metric=hand_score:Pair&
-        # endless=0 raised "Incorrect number of bindings".
-        tail = []
-        val_sql, ord_sql, el_clause = METRICS[metric[0]]
-        el = el_clause if q.get("endless") in ("0", "1") else ""
+        val_sql, ord_sql, el_col = METRICS[metric[0]]
+        el = phase_sql(q, el_col)
         metric_txt = val_sql.format(el=el)
         metric_ord = ord_sql.format(el=el)
-        args = [metric[1]] + ([int(q["endless"])] if el else [])
-        sub = args + args + sub          # both appear before the outer WHERE
+        sub = [metric[1], metric[1]]     # both appear before the outer WHERE
         sort = "metric_ord IS NULL, metric_ord DESC"
 
     best = top("score_ord", "score_txt")
@@ -473,15 +445,14 @@ def api_runs(db, q):
                (SELECT score_txt FROM hands h
                  WHERE h.run_id = r.run_id{hw}
                  ORDER BY {best} LIMIT 1) best_hand,
-               (SELECT MAX(balance) FROM money m
-                 WHERE m.run_id = r.run_id{mw}) peak_money,
+               {peak_sql} peak_money,
                -- A round only gets a cash-out when its blind was beaten, so
                -- this counts blinds cleared rather than blinds faced.
                (SELECT COUNT(*) FROM rounds ro
                  WHERE ro.run_id = r.run_id AND ro.cashout_total IS NOT NULL{rw})
                  rounds_won,
                (SELECT COUNT(*) FROM run_defects d WHERE d.run_id = r.run_id) defects
-          FROM runs r WHERE 1=1{w} ORDER BY {sort} LIMIT 300""", sub + p + tail)
+          FROM runs r WHERE 1=1{w} ORDER BY {sort} LIMIT 300""", sub + p)
     attach_records(db, out, q)
     return out
 
@@ -573,9 +544,10 @@ def attach_records(db, runs, q=None):
         prev_ts[u["run_id"]] = u["started_ts"]
         prev_deck[u["run_id"]] = u["deck_name"]
     ew = ""
-    if (q or {}).get("endless") in ("0", "1"):
-        ew += " AND rr.endless = ?"
-        params.append(int(q["endless"]))
+    # Standard shows standard records only. (Records become two contests,
+    # standard and all, in the next step; until then all shows both kinds.)
+    if standard(q or {}):
+        ew += " AND rr.endless = 0"
     # `held` is the same distinction run_records carries, so the page-wide
     # toggle belongs here too. Without it the Jokers panel moved between 14
     # and 16 rows while the 183 record badges on the Runs table ignored the
@@ -871,6 +843,12 @@ def api_run(db, q):
         # differ for a run that went endless. What they must not do is
         # disagree about what "won" means, which is why the rule lives
         # here rather than being reimplemented over the rounds array.
+        # The same ante the Runs column shows: the highest a round was played
+        # at, not runs.furthest_ante, which a win moves on to the next ante.
+        "ante": db.execute("SELECT MAX(ante) FROM rounds WHERE run_id=?",
+                           (rid,)).fetchone()[0],
+        "hands_played": db.execute("SELECT COUNT(*) FROM hands WHERE run_id=?",
+                                   (rid,)).fetchone()[0],
         "rounds_won": db.execute(
             "SELECT COUNT(*) FROM rounds WHERE run_id=? AND cashout_total IS NOT NULL",
             (rid,)).fetchone()[0],
@@ -1073,19 +1051,13 @@ CHASE = {
         SELECT 'deck', MAX(deck_size), MAX(deck_size) FROM rounds
          WHERE run_id IN (SELECT * FROM me)
         UNION ALL
-        -- runs.furthest_ante, not MAX(rounds.ante): Hieroglyph and
-        -- Petroglyph call ease_ante(-n), so the per-round maximum is not
-        -- how far the run got. Same column the tile and the Runs list use.
-        --
-        -- It is only written at run.end, though, so the run being played
-        -- has none -- which is the one run this panel is about. The rounds
-        -- fall back for exactly that case and never fire for a finished
-        -- run, where the game's own high-water mark is already there.
-        SELECT 'ante', v, v FROM (SELECT COALESCE(
-                 (SELECT MAX(COALESCE(furthest_ante, ended_ante)) FROM runs
-                   WHERE run_id IN (SELECT * FROM me)),
-                 (SELECT MAX(ante) FROM rounds
-                   WHERE run_id IN (SELECT * FROM me))) v)
+        -- The highest ante a round was played at, as the tile and the Runs
+        -- list read it (phase_figures). A maximum, so Hieroglyph moving the
+        -- ante back down does not lower it; and from the rounds, not from
+        -- run.end's furthest_ante, which the run being played -- the one
+        -- this panel is about -- does not have yet.
+        SELECT 'ante', MAX(ante), MAX(ante) FROM rounds
+         WHERE run_id IN (SELECT * FROM me)
         UNION ALL
         SELECT 'cashout', MAX(cashout_total), MAX(cashout_total) FROM rounds
          WHERE run_id IN (SELECT * FROM me)""",
