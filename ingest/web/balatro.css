@@ -386,8 +386,12 @@ tr.detail > td { padding: 0; border-top: 0; }
 .step .what .jv { display: block; font-weight: 400; }
 .step.play .what { color: var(--chips); }
 .step.discard .what { color: var(--ink-mute); }
-.hand { display: flex; gap: 3px; align-items: center; flex-wrap: wrap;
-        min-width: 0; }
+/* Not `.hand`: that is the held/unheld seal on a counter joker, which is
+   absolutely positioned and 30px square. When the two pages' styles were
+   merged into this file the seal's rule landed later and won, and every
+   round's cards collapsed into a 30px box off to one side. */
+.handcards { display: flex; gap: 3px; align-items: center; flex-wrap: wrap;
+             min-width: 0; }
 
 /* ── playing cards ────────────────────────────────────────────────────────
    A card is two atlas cells stacked: the base (plain white c_base, or an

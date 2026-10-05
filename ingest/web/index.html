@@ -703,14 +703,14 @@ async function toggleRound(runId, tr) {
     if (s.kind === "play") {
       return `<div class="step play">
         <span class="what">${esc(s.hand) || "hand"}${s.level ? `<span class="jv">lvl ${s.level}</span>` : ""}</span>
-        <span class="hand">${cards}${moved}</span>
+        <span class="handcards">${cards}${moved}</span>
         <span class="score"><b>+${fmtScore(s.score_txt)}</b><br>
           <span>${fmtScore(s.total_after)} total</span>${cash}</span></div>`;
     }
     const nc = s.cards_n ?? (s.cards || []).length;
     return `<div class="step discard">
       <span class="what">discard</span>
-      <span class="hand">${cards}${moved}</span>
+      <span class="handcards">${cards}${moved}</span>
       <span class="score"><span>${nc} card${nc === 1 ? "" : "s"}</span>${cash}</span></div>`;
   }).join("") + `</div>`;
 }
