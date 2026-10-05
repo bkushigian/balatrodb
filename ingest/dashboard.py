@@ -163,6 +163,12 @@ def where(q, prefix="r.", endless_col=None):
     # deck, so it is its own filter.
     if q.get("noplasma") == "1":
         clauses.append(f"{prefix}deck_key IS NOT 'b_plasma'")
+    # A run restarted before its first hand -- a reroll, a seed search, a
+    # deck you backed out of -- has nothing in it but its start. Asked of the
+    # hands table rather than runs.hands_played, which only run.end fills in,
+    # so a run still in progress counts from its first hand onward.
+    if q.get("played") == "1":
+        clauses.append(f"EXISTS (SELECT 1 FROM hands hp WHERE hp.run_id = {prefix}run_id)")
     return (" AND " + " AND ".join(clauses) if clauses else ""), params
 
 

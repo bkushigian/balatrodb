@@ -29,6 +29,9 @@
         <button class="seg pixel-pill" data-v="1" aria-pressed="true"
           title="Runs you entered a seed for -- practice, not records">Seeded</button>
       </span></span>
+    <span><label>Runs</label>
+      <button class="seg pixel-pill" id="played" aria-pressed="false"
+        title="Hide runs restarted or abandoned before a single hand was played">Played only</button></span>
     <span><label>Include</label>
       <span class="seggroup" id="phase" role="group" aria-label="Which phases to include">
         <button class="seg pixel-pill" data-v="0" aria-pressed="true"
@@ -798,6 +801,11 @@ $("#phase").onclick = e => {
 $("#noplasma").onclick = () => {
   state.noplasma = state.noplasma === "1" ? "" : "1";
   $("#noplasma").setAttribute("aria-pressed", state.noplasma === "1");
+  refresh();
+};
+$("#played").onclick = () => {
+  state.played = state.played === "1" ? "" : "1";
+  $("#played").setAttribute("aria-pressed", state.played === "1");
   refresh();
 };
 

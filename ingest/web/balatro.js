@@ -19,7 +19,7 @@ const esc = v => String(v ?? "").replace(/[&<>"']/g,
 // both off) means no phase filter at all -- which is what "all runs" should
 // mean, and is not expressible with mutually exclusive buttons.
 const phase = { "0": true, "1": true };
-const state = { deck: "", stake: "", endless: "", noplasma: "", metric: "",
+const state = { deck: "", stake: "", endless: "", noplasma: "", played: "", metric: "",
                 seeded: "", held: "" };
 
 function syncPhase() {
