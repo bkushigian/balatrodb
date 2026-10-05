@@ -846,6 +846,79 @@ def api_run(db, q):
                                        GROUP BY action""", (rid,))},
         "debt": db.execute(
             "SELECT MIN(balance) FROM money WHERE run_id=?", (rid,)).fetchone()[0],
+        "shop_seen": shop_stats(db, rid),
+    }
+
+
+def shop_stats(db, rid):
+    """What the shop showed you over the run, and what you spent to see it.
+
+    Counted off the card instances rather than off the offers: an offer is
+    re-emitted whenever the shop's contents change, so buying one card
+    re-reports the other one, and counting offer rows counted it twice. A
+    card's id (its sort_id) is minted when the shop creates it, so the
+    distinct ids are the cards that were actually put in front of you. Keyed
+    by segment and key as well: a resumed run rebuilds its cards from the
+    save, and those take ids the game hands out again later in the same
+    session, so an id alone can name two different cards.
+
+    Packs are kept apart from the shop: a Buffoon pack is jokers you were
+    shown, but not ones a reroll paid for.
+    """
+    rerolls = db.execute("""
+        SELECT COUNT(*) n, COALESCE(SUM(amount), 0) spent
+          FROM shop WHERE run_id = ? AND action = 'reroll'""", (rid,)).fetchone()
+    # Rerolls are filed under the round whose shop they were in, which makes
+    # "the worst shop" one GROUP BY.
+    worst = db.execute("""
+        SELECT round_seq, ante, COUNT(*) n FROM shop
+         WHERE run_id = ? AND action = 'reroll'
+         GROUP BY round_seq ORDER BY n DESC, round_seq LIMIT 1""", (rid,)).fetchone()
+    shops = db.execute("""
+        SELECT COUNT(DISTINCT round_seq) FROM offers
+         WHERE run_id = ? AND source = 'shop'""", (rid,)).fetchone()[0]
+
+    by_set = {r["set_"] or "Other": r["n"] for r in rows(db, """
+        SELECT set_, COUNT(DISTINCT seg || ':' || card_id || ':' || key) n FROM cards
+         WHERE run_id = ? AND event = 'shop.offer' AND role = 'cards'
+         GROUP BY set_""", (rid,))}
+
+    # Every joker you were offered, how often, and whether it ever became
+    # yours: bought, or on the board at a sample -- which also catches one
+    # taken from a pack, and one you already held when the shop showed it.
+    jokers = rows(db, """
+        SELECT key,
+               COUNT(DISTINCT CASE WHEN event = 'shop.offer'
+                                   THEN seg || ':' || card_id || ':' || key END) shop,
+               COUNT(DISTINCT CASE WHEN event = 'pack.offer'
+                                   THEN seg || ':' || card_id || ':' || key END) pack
+          FROM cards
+         WHERE run_id = ? AND role = 'cards' AND set_ = 'Joker'
+           AND event IN ('shop.offer', 'pack.offer') AND key IS NOT NULL
+         GROUP BY key""", (rid,))
+    bought = {r["key"]: r["n"] for r in rows(db, """
+        SELECT key, COUNT(*) n FROM shop
+         WHERE run_id = ? AND action = 'buy' AND key IS NOT NULL
+         GROUP BY key""", (rid,))}
+    held = {r["key"] for r in rows(db, """
+        SELECT DISTINCT key FROM joker_state WHERE run_id = ?""", (rid,))}
+    for j in jokers:
+        j["bought"] = bought.get(j["key"], 0)
+        j["taken"] = bool(j["bought"]) or j["key"] in held
+    jokers.sort(key=lambda j: (-(j["shop"] + j["pack"]), j["key"]))
+
+    return {
+        "shops": shops,
+        "rerolls": rerolls["n"],
+        "reroll_spent": rerolls["spent"],
+        "most_rerolls": worst["n"] if worst else 0,
+        "most_rerolls_ante": worst["ante"] if worst else None,
+        "cards_seen": sum(by_set.values()),
+        "by_set": by_set,
+        "jokers_seen": by_set.get("Joker", 0),
+        "jokers_in_packs": sum(j["pack"] for j in jokers),
+        "joker_kinds": len(jokers),
+        "jokers": jokers,
     }
 
 
@@ -1249,6 +1322,7 @@ def api_live(db, q):
         "holding": holding,
         "offered": offered,
         "offer_kind": (last_offer["source"] if last_offer else None),
+        "shop_seen": shop_stats(db, rid),
     }
 
 

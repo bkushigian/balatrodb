@@ -790,3 +790,23 @@ tr.detail > td { padding: 0; border-top: 0; }
 .offer .oc { font-size: 17px; line-height: 1.1; min-height: 1.1em; }
 .offer .orec { font-size: 12px; color: var(--ink-mute); white-space: nowrap; }
 .offer .orec .of { color: var(--ink-dim); }
+
+/* What the shop showed you over the run: figures, then every joker offered
+   with how often. Shared by the run dialog and the live panel. */
+.sfigs { display: flex; flex-wrap: wrap; gap: 8px 26px; margin: 4px 0 6px; }
+.sfig { display: flex; flex-direction: column; line-height: 1.15; }
+.sfig b { font-size: 23px; font-weight: 700; }
+.sfig i { font-style: normal; color: var(--ink-mute); font-size: 13px;
+          text-transform: uppercase; letter-spacing: .06em; }
+.sfig em { font-style: normal; color: var(--ink-dim); font-size: 13px; }
+.ssets { font-size: 13px; margin: 2px 0 8px; }
+.seenjokers { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 10px; }
+.seenj { display: inline-flex; flex-direction: column; align-items: center;
+         gap: 1px; opacity: .5; }
+.seenj.taken { opacity: 1; }
+.seenj .sn { font-size: 13px; color: var(--ink-dim);
+             font-variant-numeric: tabular-nums; }
+.seenj.taken .sn { color: var(--gold); }
+.chases.shopseen { padding-top: 0; }
+.chases.shopseen .chtitle { padding-top: 12px; }
+.sswrap { grid-column: 1 / -1; min-width: 0; }
