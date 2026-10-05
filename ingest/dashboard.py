@@ -29,9 +29,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 import ingest as ingester
+import paths
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DB = os.path.join(HERE, "balatro.db")
+DB = paths.db_path()
 WEB = os.path.join(HERE, "web")
 
 
@@ -1511,8 +1512,9 @@ def main():
     ap.add_argument("--no-open", action="store_true")
     a = ap.parse_args()
 
-    if not os.path.exists(DB):
-        raise SystemExit(f"no database at {DB}\nrun: python ingest/ingest.py --rebuild")
+    # No database yet is the normal first run, not an error: connect()
+    # creates the tables and sync() below folds in every log there is.
+    os.makedirs(os.path.dirname(DB), exist_ok=True)
 
     # Launching twice -- from the in-game button, say, while one is already
     # running -- should open the dashboard, not crash on the bound port.

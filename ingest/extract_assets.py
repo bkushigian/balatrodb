@@ -2,8 +2,10 @@
 
     python ingest/extract_assets.py [--game DIR]
 
-Balatro.exe is a LÖVE archive -- a zip with an executable stub -- so the
-textures and the lua that positions them can be read straight out of it.
+The game is a LÖVE archive -- Balatro.exe on Windows is a zip with an
+executable stub, and the macOS app carries the same zip as Balatro.love --
+so the textures and the lua that positions them can be read straight out of
+it.
 
 Writes into ingest/web/assets/ :
     Jokers.png, Enhancers.png, chips.png   the 2x atlases
@@ -21,6 +23,8 @@ import re
 import struct
 import zipfile
 
+import paths
+
 try:
     from PIL import Image
 except ImportError:
@@ -29,7 +33,7 @@ except ImportError:
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "web", "assets")
 
-DEFAULT_GAME = r"C:\Program Files (x86)\Steam\steamapps\common\Balatro"
+DEFAULT_GAME = paths.steam_game_dir()
 
 # Which atlas each key prefix is drawn from, and the 2x cell size in pixels.
 # Balatro's card is 71x95 at 1x; chips are square.
@@ -267,12 +271,13 @@ def main() -> int:
     ap.add_argument("--game", default=DEFAULT_GAME)
     a = ap.parse_args()
 
-    exe = os.path.join(a.game, "Balatro.exe")
-    if not os.path.exists(exe):
-        raise SystemExit(f"Balatro.exe not found at {exe}\nPass --game <install dir>.")
+    archive = paths.game_archive(a.game)
+    if not archive:
+        raise SystemExit(f"No Balatro.exe or Balatro.app in {a.game}\n"
+                         "Pass --game <install dir>.")
 
     os.makedirs(OUT, exist_ok=True)
-    z = zipfile.ZipFile(exe)
+    z = zipfile.ZipFile(archive)
 
     wanted = {name for name, _, _ in ATLASES.values()}
     sizes = {}

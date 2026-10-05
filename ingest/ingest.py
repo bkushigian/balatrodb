@@ -33,9 +33,11 @@ from typing import NamedTuple
 import sys
 import time
 
-DEFAULT_LOGS = os.path.expandvars(r"%APPDATA%\Balatro\BalatroDB\runs")
+import paths
+
+DEFAULT_LOGS = paths.logs_dir()
 HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_DB = os.path.join(HERE, "balatro.db")
+DEFAULT_DB = paths.db_path()
 
 
 # ─── numbers ──────────────────────────────────────────────────────────────
@@ -1242,6 +1244,7 @@ def main():
             if os.path.exists(p):
                 os.remove(p)
 
+    os.makedirs(os.path.dirname(os.path.abspath(a.db)), exist_ok=True)
     db = sqlite3.connect(a.db)
     db.executescript(ddl)
     db.execute(f"PRAGMA user_version = {want}")

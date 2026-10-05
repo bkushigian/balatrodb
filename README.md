@@ -36,20 +36,45 @@ tests/              runs the pure Lua logic under a host interpreter
 
 ## Install (development)
 
-Link the mod into Balatro's mod folder so edits take effect on next launch.
-Creating a symlink on Windows requires administrator rights (or Developer
-Mode), so a directory junction is the practical choice — Steamodded's scan
-accepts either:
+Requires Lovely and Steamodded. Then, once:
+
+```
+python ingest/install.py
+```
+
+That links this repo's mod into Balatro's `Mods` folder, so edits take effect
+on next launch, and writes the launcher behind the in-game dashboard button.
+
+Everything lives under the game's save folder, which LÖVE picks per OS
+(`ingest/paths.py` is the one place that knows):
+
+| OS      | Save folder                              |
+|---------|------------------------------------------|
+| Windows | `%APPDATA%\Balatro`                      |
+| macOS   | `~/Library/Application Support/Balatro`  |
+
+Mods go in `<save folder>/Mods`. BalatroDB keeps everything it owns in
+`<save folder>/BalatroDB`, outside this repo:
+
+```
+BalatroDB/
+  runs/<run_id>.jsonl    the event logs -- the only real data
+  balatro.db             SQLite, derived from the logs; delete it to rebuild
+  launch-dashboard.sh    written by install.py (.bat on Windows)
+```
+
+On Windows the link is a directory junction, because a symlink needs
+administrator rights (or Developer Mode) there; Steamodded's scan accepts
+either. A junction stores an absolute path, so moving this repo breaks it;
+delete it and rerun the installer if you do. By hand:
 
 ```powershell
 cmd /c mklink /J "$env:APPDATA\Balatro\Mods\BalatroDB" "$PWD\mod\BalatroDB"
 ```
 
-A junction stores an absolute path, so moving this repo breaks it; recreate it
-if you do.
-
-Requires Lovely and Steamodded. Logs land in
-`%APPDATA%\Balatro\BalatroDB\runs\<run_id>.jsonl`.
+On macOS it is a plain symlink. Note that Steam's Play button does not load
+Lovely on macOS -- start the game with `run_lovely_macos.sh` from the game
+folder instead, as Lovely's own instructions say.
 
 ## Dashboard
 
@@ -79,8 +104,9 @@ For joker, deck and stake sprites, extract the game's atlases once:
 python ingest/extract_assets.py
 ```
 
-`Balatro.exe` is a LÖVE archive, so the textures and the lua that positions
-them can be read straight out of it. The extracted art is gitignored -- it is
+The game is a LÖVE archive (`Balatro.exe` on Windows, `Balatro.love` inside
+the macOS app), so the textures and the lua that positions them can be read
+straight out of it. The extracted art is gitignored -- it is
 the game's own, not ours to redistribute -- and the dashboard falls back to
 plain text if it is absent.
 

@@ -4,9 +4,9 @@
 --- the menu, the way Steamodded adds its own buttons (smods/src/ui.lua:2025).
 ---
 --- The launcher is written by `python ingest/install.py`. The mod cannot work
---- out where the repo is: it sees itself through a junction at
---- Mods/BalatroDB, and on Windows `..` from a junction resolves against the
---- junction's own path rather than its target. Setup records the answer in the
+--- out where the repo is: it sees itself through a link at Mods/BalatroDB,
+--- and on Windows `..` from a junction resolves against the junction's own
+--- path rather than its target. Setup records the answer in the
 --- data directory instead, which the mod already knows how to find.
 
 local util = BalatroDB.util
@@ -14,12 +14,18 @@ local NFS = SMODS.NFS or require('nativefs')
 
 local menu = {}
 
-local LAUNCHER = 'BalatroDB/launch-dashboard.bat'   -- relative to the save dir
+local WINDOWS = love.system.getOS() == 'Windows'
+
+-- Relative to the save dir. install.py writes the one matching this OS.
+local LAUNCHER = 'BalatroDB/launch-dashboard.' .. (WINDOWS and 'bat' or 'sh')
 
 local function launcher_path()
-    local info = NFS.getInfo and NFS.getInfo(LAUNCHER)
+    -- Absolute, because nativefs resolves a relative path against the
+    -- process's working directory -- the game folder -- not the save dir.
+    local path = love.filesystem.getSaveDirectory() .. '/' .. LAUNCHER
+    local info = NFS.getInfo and NFS.getInfo(path)
     if not info then return nil end
-    return love.filesystem.getSaveDirectory() .. '/' .. LAUNCHER
+    return path
 end
 
 --- Launch detached, so the game never waits on it.
@@ -28,14 +34,18 @@ function menu.launch()
     if not path then
         return false, 'run: python ingest/install.py'
     end
-    -- The .bat itself uses `start`, so os.execute returns immediately. Quoted
-    -- because the path runs through %APPDATA% and will contain spaces.
+    -- The launcher detaches the server itself (`start` in the .bat, a
+    -- backgrounded nohup in the .sh), so os.execute returns immediately.
+    -- Quoted because the save dir contains spaces on macOS, and through
+    -- %APPDATA% may on Windows.
     --
     -- `cmd /c` is explicit because START runs a .BAT under `cmd /K`, which
     -- leaves the console open forever once the batch finishes. Those shells
     -- stay in Balatro's process tree, so Steam goes on reporting the game as
     -- running long after it has quit.
-    local ok = pcall(os.execute, ('start "" /MIN cmd /c "%s"'):format(path))
+    local cmd = WINDOWS and ('start "" /MIN cmd /c "%s"'):format(path)
+        or ('/bin/sh "%s" >/dev/null 2>&1'):format(path)
+    local ok = pcall(os.execute, cmd)
     if not ok then
         return false, 'could not start the dashboard'
     end
