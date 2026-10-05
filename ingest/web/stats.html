@@ -483,7 +483,11 @@ async function phasePair(metric) {
     // scope=event keeps every run in the answer and filters only its
     // events, so a run that went endless still reports what it did before.
     fetchRuns({ metric, endless: 0, scope: "event" }),
-    fetchRuns({ metric }),
+    // The unrestricted reading: every run, every event -- unless only
+    // Endless is chosen, which is about the runs that went endless. It must
+    // not inherit Non-endless from the page, or the pairs would only ever
+    // hold runs whose two readings are the same.
+    fetchRuns({ metric, endless: state.endless === "1" ? "1" : "" }),
   ]);
   const std = new Map(ne.map(r => [r.run_id, r]));
   return all.map(r => ({ all: r, ne: std.get(r.run_id) || null }));
@@ -658,11 +662,11 @@ async function drawRuns() {
   // they have no standard reading distinct from an endless one and the
   // chart is always a single series.
   draw("c_played", "Hands played",
-    "How many hands the whole run took — one number per run, endless included.",
+    "How many hands each run took — in the part of it chosen under Include.",
     plain(r => r.hands_played, fmt), "var(--purple)", { zero: true });
 
   draw("c_ante", "Ante reached",
-    "How far the run got — one number per run, endless antes included.",
+    "How far each run got — in the part of it chosen under Include.",
     plain(r => r.ante, fmt), "var(--green)", { zero: true });
 }
 

@@ -204,13 +204,14 @@ def api_meta(db, q):
 
 
 def api_summary(db, q):
-    # The run counts are run-level facts, so the phase toggle applies to them
-    # the same way it does in api_runs: whether the run went endless at all.
+    # The run counts follow api_runs: the phase toggle chooses which PART of
+    # each run counts, so it only removes a run that has no such part. Every
+    # run has a standard part -- Non-endless alone keeps them all, endless
+    # ones included -- but only a run that went endless has an endless part.
     # Without this the header claimed "15 runs" over a slice holding one.
     w, p = where(q)
-    if q.get("endless") in ("0", "1"):
-        w += " AND r.went_endless = ?"
-        p = p + [int(q["endless"])]
+    if q.get("endless") == "1":
+        w += " AND r.went_endless = 1"
 
     total = db.execute(f"SELECT COUNT(*) FROM runs r WHERE 1=1{w}", p).fetchone()[0]
     # Numerator and denominator must be the same population, and it must be
@@ -257,9 +258,11 @@ def api_summary(db, q):
     # and is what the Runs column and the run dialog already show -- this
     # tile was the one surface deriving it differently, and with the
     # non-endless filter on it printed 8 above a column reaching 9.
+    # The same per-run figure the Runs column shows, so the two agree --
+    # including what Non-endless means for a run that went endless.
+    ante_sql, _ = phase_figures(q)
     ante = db.execute(
-        f"""SELECT MAX(COALESCE(r.furthest_ante, r.ended_ante)) v
-              FROM runs r WHERE 1=1{w}""", p).fetchone()
+        f"""SELECT MAX({ante_sql}) v FROM runs r WHERE 1=1{w}""", p).fetchone()
     cash = db.execute(
         f"""SELECT MAX(ro.cashout_total) v FROM rounds ro JOIN runs r USING (run_id)
             WHERE 1=1{dw}""", dp).fetchone()
@@ -371,17 +374,38 @@ def api_metrics(db, q):
                          for c in counters if c["k"] in ingester.COUNTER_JOKERS]}
 
 
+def phase_figures(q):
+    """SQL for a run's furthest ante and hands played, in the chosen phase.
+
+    Both are whole-run counters in `runs`, which is right when both phases
+    are included and for a run that never went endless. For one that did,
+    choosing a phase means counting that part of it: Non-endless is
+    "everything up to the point a run continued past the win ante", which
+    never reaches ante 30. The int() makes the literal safe to inline.
+    """
+    whole_ante = "COALESCE(r.furthest_ante, r.ended_ante)"
+    if q.get("endless") not in ("0", "1"):
+        return whole_ante, "r.hands_played"
+    el = int(q["endless"])
+    ante = (f"(CASE WHEN r.went_endless = 1 THEN (SELECT MAX(ro.ante) FROM rounds ro"
+            f" WHERE ro.run_id = r.run_id AND ro.endless = {el}) ELSE {whole_ante} END)")
+    hands = (f"(CASE WHEN r.went_endless = 1 THEN (SELECT COUNT(*) FROM hands hc"
+             f" WHERE hc.run_id = r.run_id AND hc.endless = {el}) ELSE r.hands_played END)")
+    return ante, hands
+
+
 def api_runs(db, q):
     w, p = where(q)
+    ante_sql, hands_sql = phase_figures(q)
     sort = {
         "recent": "r.started_ts DESC",
         # Sort by the same thing the column displays. best_hand_ord is only
         # set on terminal runs, so sorting by it buried a 221,539 hand beneath
         # runs showing 348.
         "score": "(SELECT MAX(score_ord) FROM hands h WHERE h.run_id = r.run_id) DESC",
-        "ante": "COALESCE(r.furthest_ante, r.ended_ante) DESC",
+        "ante": f"{ante_sql} DESC",
         "money": "r.final_dollars DESC",
-        "hands": "r.hands_played DESC",
+        "hands": f"{hands_sql} DESC",
     }.get(q.get("sort"), "r.started_ts DESC")
     # The phase filter applies twice, differently: to which runs are listed
     # (a run-level flag) and to the per-run figures derived from events. The
@@ -396,9 +420,13 @@ def api_runs(db, q):
         # standard best beside its overall best, the run has to appear in
         # both answers. The run LIST still filters both ways by default,
         # which is the question that page is asking.
-        if q.get("scope") != "event":
-            w += " AND r.went_endless = ?"
-            p = p + [el]
+        #
+        # And only Endless removes runs. Non-endless means "everything up to
+        # the point a run continued past the win ante", which every run has:
+        # dropping the runs that went endless there hid the pre-win play of
+        # exactly the runs that got furthest.
+        if q.get("scope") != "event" and el == 1:
+            w += " AND r.went_endless = 1"
         hw, mw = " AND h.endless = ?", " AND m.endless = ?"
         rw = " AND ro.endless = ?"
         sub = [el, el, el, el]       # bh_ord, best_hand, peak_money, rounds_won
@@ -433,8 +461,8 @@ def api_runs(db, q):
                r.run_id, r.log_file, r.started_ts, r.deck_name, r.deck_key,
                r.stake_key, r.seed, r.seeded, r.won, r.result, r.terminal,
                r.abandoned,
-               r.went_endless, r.hands_played, r.final_dollars, r.deck_size,
-               COALESCE(r.furthest_ante, r.ended_ante) ante,
+               r.went_endless, {hands_sql} hands_played, r.final_dollars, r.deck_size,
+               {ante_sql} ante,
                -- Sliced by the phase filter like every other derived figure.
                -- Left unsliced, a row showed a 221,539 best hand next to a
                -- "Best hand" panel reporting 13,104 for the same selection.
