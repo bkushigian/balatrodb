@@ -4,6 +4,16 @@
 -- This file is authoritative. `python ingest/sync_schema.py` copies it into
 -- the DDL block of docs/db-schema.md so the document cannot drift from it.
 
+-- Every `endless` column means "after the run was won": standard play is
+-- everything before run.win. The mod's own latch flips later, at the next
+-- blind select, so the ingester stamps the win, not the latch.
+--
+-- Every `_ord` column is sign(x) * log10(1 + |x|): an ordering key that
+-- still works when the value overflows a double. An infinite value (the
+-- game's "naneinf") is 308.26, just past log10 of the largest double, so it
+-- outranks every finite value and stays drawable on a log axis. NaN has no
+-- order and stays NULL.
+
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = OFF;   -- projections are purged and re-derived per run
 
@@ -125,6 +135,11 @@ CREATE TABLE IF NOT EXISTS rounds (
   deck_steel       INTEGER,
   deck_perma_max   REAL,      -- largest single Hiker bonus
   deck_perma_total REAL,      -- Hiker's accumulated bonus across the deck
+  -- The phase at round.end, where `endless` is the phase at round.start.
+  -- They differ for exactly one round: the winning one, beaten before run.win
+  -- but cashed out after it. Its cash-out and its deck sample belong to the
+  -- whole run, not to standard play, so those read this column.
+  end_endless      INTEGER,
   PRIMARY KEY (run_id, round_seq)
 );
 CREATE INDEX IF NOT EXISTS rounds_slice ON rounds(endless, cashout_total DESC);
@@ -331,15 +346,19 @@ CREATE INDEX IF NOT EXISTS cards_key ON cards(key, role, endless);
 --
 -- Derived over the whole corpus in run order, so it is rebuilt wholesale
 -- rather than per run: adding an OLD log would shift what came after it.
--- Endless and non-endless records are separate contests, so the two are
--- derived independently and stored side by side: a run can hold the
--- non-endless best for a hand and a different, higher endless best for the
--- same hand, and both are true. Nothing here is computed at query time.
+-- Two contests, stored side by side, both over figures counted from the start
+-- of each run: `standard` compares runs' figures up to the moment each was
+-- won, `all` their whole-run figures. A standard record is judged against
+-- standard figures only -- a run that never beat anyone's overall best can
+-- still hold one -- and an all record against all figures only. A value
+-- reached before the win counts in both, so a run can hold both records for
+-- one subject with the same value, or with different ones. Nothing here is
+-- computed at query time.
 CREATE TABLE IF NOT EXISTS run_records (
   run_id    TEXT NOT NULL,
   kind      TEXT NOT NULL,   -- joker | hand_score | hand_level | hand_played
   subject   TEXT NOT NULL,   -- joker key, or poker hand
-  endless   INTEGER NOT NULL,
+  contest   TEXT NOT NULL,   -- standard | all
   -- What the value IS: chips, mult or x_mult for a joker, and for a hand
   -- whichever of score/level/played it is. Without it a record cannot be
   -- shown in its own unit and every one rendered as Mult, including chips.
@@ -357,12 +376,12 @@ CREATE TABLE IF NOT EXISTS run_records (
   prev_txt  TEXT,
   prev_run  TEXT,
   -- `held` belongs in the key: a counter joker genuinely has two records
-  -- for one (run, subject, endless), and without it the two collided and
+  -- for one (run, subject, contest), and without it the two collided and
   -- INSERT OR REPLACE kept whichever pass ran last -- the not-held one, so
   -- every counter joker lost its held record. (NULL never conflicts in
   -- SQLite, so this constrains only the counter rows; the other kinds
   -- produce one row per key by construction.)
-  PRIMARY KEY (run_id, kind, subject, endless, held)
+  PRIMARY KEY (run_id, kind, subject, contest, held)
 );
 CREATE INDEX IF NOT EXISTS run_records_run ON run_records(run_id);
 

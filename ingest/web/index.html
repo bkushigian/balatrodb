@@ -36,12 +36,15 @@
         <button class="seg pixel-pill" data-v="1" aria-pressed="true"
           title="Runs you entered a seed for -- practice, not records">Seeded</button>
       </span></span>
-    <span><label>Include</label>
-      <span class="seggroup" id="phase" role="group" aria-label="Which phases to include">
-        <button class="seg pixel-pill" data-v="0" aria-pressed="true"
-          title="Everything up to the point a run continued past the win ante">Non-endless</button>
-        <button class="seg pixel-pill" data-v="1" aria-pressed="true"
-          title="Only what happened after continuing past the win ante">Endless</button>
+    <span><label>Runs</label>
+      <button class="seg pixel-pill" id="played" aria-pressed="false"
+        title="Hide runs restarted or abandoned before a single hand was played">Played only</button></span>
+    <span><label>Count</label>
+      <span class="seggroup" id="phase" role="group" aria-label="Which part of each run counts">
+        <button class="seg pixel-pill" data-v="standard" aria-pressed="false"
+          title="Each run up to the moment it was won -- endless play left out">Standard</button>
+        <button class="seg pixel-pill" data-v="" aria-pressed="true"
+          title="Each whole run, endless play included">All</button>
       </span></span>
   </section>
 
@@ -117,7 +120,7 @@ const recordsCell = r => {
     // Endless records are a separate contest, so they are marked -- with no
     // phase filter on, a row can carry one of each for the same subject.
     const i = TIPS.push(rec) - 1;
-    return `<span class="bj${rec.endless ? " rec-endless" : ""}" data-tip="${i}">` +
+    return `<span class="bj" data-tip="${i}">` +
       (recordArt(rec) || `<span class="jv">${esc(rec.subject)}</span>`) +
       `<span class="sc ${cls}">${recPre(rec)}${recFmt(rec)(rec.value_txt)}</span></span>`;
   }).join("");
@@ -308,6 +311,46 @@ const shopCell = sh => {
     ><b class="sc-mult">$${fmt(rer.amount)}</b><i>rerolls</i
     ><b class="sc-level">$${fmt(sel.amount)}</b><i>sold</i></span>`;
 };
+
+// What the shop put in front of you over the run (shop_stats on the
+// server). Used by both the run dialog and the live panel, so the same
+// number is called the same thing in each.
+const SET_WORD = { Joker: "jokers", Tarot: "tarots", Planet: "planets",
+                   Spectral: "spectrals", Enhanced: "playing cards" };
+const hasShopSeen = s => !!s && (s.shops || s.rerolls || (s.jokers || []).length);
+
+function shopFigures(s) {
+  const fig = (v, k, sub, cls) => `<span class="sfig"><b class="${cls || ""}">${v}</b>
+    <i>${esc(k)}</i>${sub ? `<em>${sub}</em>` : ""}</span>`;
+  const sets = Object.entries(s.by_set || {})
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, n]) => `${fmt(n)} ${esc(SET_WORD[k] || k.toLowerCase())}`).join(" · ");
+  return `<div class="sfigs">
+    ${fig(fmt(s.shops), "shops")}
+    ${fig(fmt(s.rerolls), "rerolls", s.reroll_spent ? `$${fmt(s.reroll_spent)} spent` : "", "sc-mult")}
+    ${fig(fmt(s.most_rerolls), "most in one shop",
+          s.most_rerolls && s.most_rerolls_ante != null ? `ante ${fmt(s.most_rerolls_ante)}` : "")}
+    ${fig(fmt(s.cards_seen), "cards seen", "", "sc-chips")}
+    ${fig(fmt(s.jokers_seen), "jokers seen",
+          `${fmt(s.joker_kinds)} different` +
+          (s.jokers_in_packs ? ` · +${fmt(s.jokers_in_packs)} in packs` : ""), "sc-money")}
+  </div>${sets ? `<div class="ssets muted">In the shop: ${sets}</div>` : ""}`;
+}
+
+// Every joker you were offered, most often first. The ones that never
+// became yours are dimmed, so what you passed on stands apart from what
+// you took.
+function seenJokers(s) {
+  return `<div class="seenjokers">` + (s.jokers || []).map(j => {
+    const n = j.shop + j.pack;
+    const tip = `${nameOf(j.key)} — ${j.shop} in the shop` +
+      (j.pack ? `, ${j.pack} in packs` : "") +
+      (j.bought ? `, bought ${j.bought}` : j.taken ? ", taken" : ", never taken");
+    return `<span class="seenj${j.taken ? " taken" : ""}" title="${esc(tip)}">
+      ${sprite(j.key, "j", 40) || `<span class="jv">${esc(nameOf(j.key))}</span>`}
+      <span class="sn">×${fmt(n)}</span></span>`;
+  }).join("") + `</div>`;
+}
 
 // Which build of the mod wrote this run. It is per SEGMENT, so a run
 // resumed after an update legitimately carries two -- and that matters,
@@ -570,11 +613,11 @@ async function openRun(id) {
       ? `<span class="muted">first of its kind</span>`
       : `beat <b>${f(rec.prev_txt)}</b>` +
         (rec.prev_deck ? ` <span class="muted">· ${esc(rec.prev_deck)}</span>` : "");
-    return `<div class="rec${rec.endless ? " rec-endless" : ""}">
+    return `<div class="rec${rec.contest === "all" ? " rec-all" : ""}">
       ${recordArt(rec, 44)}
       <div class="recmain">
         <div class="recttl">${esc(name(rec.subject))}</div>
-        <div class="recsub">${esc(what)}${rec.endless ? " · endless" : ""}</div>
+        <div class="recsub">${esc(what)} · ${rec.contest === "all" ? "all" : "standard"}</div>
       </div>
       <div class="recval ${cls}">${recPre(rec)}${f(rec.value_txt)}</div>
       <div class="recbeat">${beat}</div>
@@ -592,9 +635,9 @@ async function openRun(id) {
   $("#dbody").innerHTML = `
     <h3>Run</h3>
     <div class="runmeta">
-      ${mt("Ante", fmt(r.furthest_ante ?? r.ended_ante), "gold")}
+      ${mt("Ante", fmt(d.ante), "gold")}
       ${mt("Rounds won", fmt(cleared), "green")}
-      ${mt("Hands", fmt(r.hands_played), "")}
+      ${mt("Hands", fmt(d.hands_played), "")}
       ${mt("Best score", fmtScore(r.best_hand_txt), "chips")}
       ${mt("Final", r.final_dollars === null ? "—" : "$" + fmt(r.final_dollars), "money")}
       ${mt("Deck size", fmt(r.deck_size), "")}
@@ -611,6 +654,11 @@ async function openRun(id) {
     <h3>Records set</h3>
     ${recs ? `<div class="recgrid">${recs}</div>`
            : `<div class="empty">This run set no records.</div>`}
+    ${hasShopSeen(d.shop_seen) ? `<h3>Shop</h3>
+      ${shopFigures(d.shop_seen)}
+      ${(d.shop_seen.jokers || []).length
+        ? `<div class="muted ssets">Jokers offered, most often first — dimmed if never taken</div>
+           ${seenJokers(d.shop_seen)}` : ""}` : ""}
     <h3>Rounds</h3>
     <div class="scroll"><table><thead><tr><th>#</th><th>Ante</th><th>Blind</th>
       <th class="num">Needed</th><th class="num">Scored</th><th class="num">Cash</th>
@@ -700,14 +748,14 @@ async function toggleRound(runId, tr) {
     if (s.kind === "play") {
       return `<div class="step play">
         <span class="what">${esc(s.hand) || "hand"}${s.level ? `<span class="jv">lvl ${s.level}</span>` : ""}</span>
-        <span class="hand">${cards}${moved}</span>
+        <span class="handcards">${cards}${moved}</span>
         <span class="score"><b>+${fmtScore(s.score_txt)}</b><br>
           <span>${fmtScore(s.total_after)} total</span>${cash}</span></div>`;
     }
     const nc = s.cards_n ?? (s.cards || []).length;
     return `<div class="step discard">
       <span class="what">discard</span>
-      <span class="hand">${cards}${moved}</span>
+      <span class="handcards">${cards}${moved}</span>
       <span class="score"><span>${nc} card${nc === 1 ? "" : "s"}</span>${cash}</span></div>`;
   }).join("") + `</div>`;
 }
@@ -809,6 +857,9 @@ const LIVE_PHASE = {
 // outside it or the list would shut again every three seconds.
 const CHASES_SHOWN = 6;
 let chasesOpen = false;
+// Same reason for the jokers-seen list: by the late antes it is a hundred
+// cards, so it starts shut.
+let shopSeenOpen = false;
 
 function drawLive(d) {
   const el = $("#live");
@@ -847,6 +898,18 @@ function drawLive(d) {
   // Every scaling joker in hand, however far off. A card can appear here
   // and in the chases above; that is the two lists agreeing.
   const held = (d.holding || []).map(chaseItem).join("");
+
+  // What the shop has shown you so far this run.
+  const ss = d.shop_seen;
+  const nseen = ss ? (ss.jokers || []).length : 0;
+  const shopseen = !hasShopSeen(ss) ? "" : `<div class="chases shopseen">
+       <div class="chtitle">Shop so far</div>
+       <div class="sswrap">${shopFigures(ss)}
+         ${shopSeenOpen ? seenJokers(ss) : ""}</div>
+       ${nseen ? `<button class="chmore pixel-pill" id="sstoggle" aria-expanded="${shopSeenOpen}"
+         >${shopSeenOpen ? "Hide jokers seen"
+                         : `Show the ${nseen} joker${nseen === 1 ? "" : "s"} seen`}</button>` : ""}
+     </div>`;
 
   // The run's own records lead: they are about the run as a whole rather
   // than about one card in it, and they are the same six every time.
@@ -893,6 +956,7 @@ function drawLive(d) {
        <div class="offerstrip">${offers}</div></div>` : ""}
     ${held ? `<div class="chases held">
        <div class="chtitle">On your board</div>${held}</div>` : ""}
+    ${shopseen}
    </div>`;
   el.querySelectorAll("button.seed").forEach(b => {
     b.onclick = ev => { ev.stopPropagation(); copySeed(b, b.dataset.seed); };
@@ -904,6 +968,14 @@ function drawLive(d) {
       ev.stopPropagation();
       chasesOpen = !chasesOpen;
       drawLive(d);                      // same payload, redrawn open
+    };
+  }
+  const sstog = el.querySelector("#sstoggle");
+  if (sstog) {
+    sstog.onclick = ev => {
+      ev.stopPropagation();
+      shopSeenOpen = !shopSeenOpen;
+      drawLive(d);
     };
   }
 }
@@ -1007,13 +1079,13 @@ $("#noplasma").onclick = e => {
   state.noplasma = on ? "1" : "";
   refresh();
 };
-$("#phase").onclick = e => {
-  const b = e.target.closest("button.seg"); if (!b) return;
-  phase[b.dataset.v] = !phase[b.dataset.v];
-  b.setAttribute("aria-pressed", phase[b.dataset.v]);
-  syncPhase(); refresh();
+$("#played").onclick = e => {
+  const on = e.currentTarget.getAttribute("aria-pressed") !== "true";
+  e.currentTarget.setAttribute("aria-pressed", on);
+  state.played = on ? "1" : "";
+  refresh();
 };
-syncPhase();
+wirePhase(refresh);
 
 // #run=<id> opens that run, optionally with #round=<n> expanded. Makes a run
 // linkable, and means the dialog survives a reload.

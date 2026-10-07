@@ -115,6 +115,16 @@ the schema for no benefit.
 Generated from `ingest/schema.sql`, which is authoritative.
 
 ```sql
+-- Every `endless` column means "after the run was won": standard play is
+-- everything before run.win. The mod's own latch flips later, at the next
+-- blind select, so the ingester stamps the win, not the latch.
+--
+-- Every `_ord` column is sign(x) * log10(1 + |x|): an ordering key that
+-- still works when the value overflows a double. An infinite value (the
+-- game's "naneinf") is 308.26, just past log10 of the largest double, so it
+-- outranks every finite value and stays drawable on a log axis. NaN has no
+-- order and stays NULL.
+
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = OFF;   -- projections are purged and re-derived per run
 
@@ -170,6 +180,12 @@ CREATE TABLE IF NOT EXISTS runs (
   final_dollars INTEGER,
   deck_size    INTEGER,
   went_endless INTEGER NOT NULL DEFAULT 0,
+  -- A `suspended` run that can never be resumed, because a later run on the
+  -- same profile overwrote the save. Balatro keeps one save per profile, so
+  -- starting a new run ends the paused one -- and nothing in the log says
+  -- so, since by then the paused run had already written its run.end and
+  -- stopped listening. Derived across runs, like run_records.
+  abandoned   INTEGER,
 
   best_hand_ord REAL, best_hand_num REAL, best_hand_txt TEXT,
   furthest_ante  INTEGER,
@@ -177,6 +193,8 @@ CREATE TABLE IF NOT EXISTS runs (
   final_round_score_ord REAL, final_round_score_num REAL, final_round_score_txt TEXT
 );
 CREATE INDEX IF NOT EXISTS runs_slice ON runs(deck_key, stake_key, went_endless);
+-- The run list's default order, and how the live panel finds the newest run.
+CREATE INDEX IF NOT EXISTS runs_recent ON runs(started_ts DESC);
 
 -- Environment lives here, not on runs: a run can span a mod update. Play,
 -- quit, update BalatroDB, resume -- and seg 0 was written by one build and
@@ -223,8 +241,16 @@ CREATE TABLE IF NOT EXISTS rounds (
   -- behind them need not be stored as rows. Every statistic wanted from a
   -- deck sample is one of these.
   deck_stone       INTEGER,   -- Stone Joker reads this
+  -- Steel cards in the whole deck, counted in the same pass. Steel Joker
+  -- reads it the way Stone Joker reads the stone count.
+  deck_steel       INTEGER,
   deck_perma_max   REAL,      -- largest single Hiker bonus
   deck_perma_total REAL,      -- Hiker's accumulated bonus across the deck
+  -- The phase at round.end, where `endless` is the phase at round.start.
+  -- They differ for exactly one round: the winning one, beaten before run.win
+  -- but cashed out after it. Its cash-out and its deck sample belong to the
+  -- whole run, not to standard play, so those read this column.
+  end_endless      INTEGER,
   PRIMARY KEY (run_id, round_seq)
 );
 CREATE INDEX IF NOT EXISTS rounds_slice ON rounds(endless, cashout_total DESC);
@@ -253,8 +279,14 @@ CREATE TABLE IF NOT EXISTS hands (
   oneshot    INTEGER,          -- this hand alone beat the blind
   score_ord  REAL, score_num REAL, score_txt TEXT,
   chips_before_ord REAL, chips_before_num REAL, chips_before_txt TEXT,
-  hands_left_after INTEGER,      -- after the decrement; see below
-  discards_left_before INTEGER,  -- genuinely before
+  -- After the decrement, not before: ease_hands_played(-1) is queued at
+  -- state_events.lua:491, ahead of the evaluate_play entry point the mod
+  -- observes, so the counter has already moved. Its neighbour genuinely IS
+  -- the before (state_events.lua:452 runs after that entry point), which is
+  -- why the two no longer share a suffix. Logs written before 0.4.3 call
+  -- this `hands_left_before` and hold the same quantity.
+  hands_left_after INTEGER,
+  discards_left_before INTEGER,
   -- Engine clock (love.timer) at the moment the event was emitted.
   -- Money is attributed to an action by comparing these: a play's
   -- money resolves in the SAME frame, a discard's a beat later.
@@ -334,9 +366,15 @@ CREATE TABLE IF NOT EXISTS joker_state (
   stone_tally REAL,
   perma_bonus REAL,
   state     TEXT,
+  -- card_id can be NULL, which never conflicts in SQLite, so this
+  -- constrains only the rows that have one. Writes are INSERT OR REPLACE
+  -- over a table the derive truncates, so it costs nothing today.
   PRIMARY KEY (run_id, seg, n, card_id)
 );
 CREATE INDEX IF NOT EXISTS joker_state_key ON joker_state(key, endless);
+-- The per-round joker view filters on this pair; without it every sample in
+-- the run is scanned.
+CREATE INDEX IF NOT EXISTS joker_state_round ON joker_state(run_id, round_seq);
 
 -- Game counters that certain jokers read INSTEAD of their own ability fields,
 -- so their value is a function of run history and can never come from a
@@ -350,12 +388,11 @@ CREATE TABLE IF NOT EXISTS joker_derived (
   metric  TEXT NOT NULL,      -- hand_plays | skips | stone_cards | tarots | dollars
   subject TEXT,               -- the poker hand, for hand_plays
   value   REAL,
-  -- Whether the joker that reads this counter was actually in hand at the
-  -- time. Without it the board credited a run with "Fortune Teller 83" when
-  -- that run never held one -- 83 tarots were simply used. Both readings are
-  -- worth having: held is the joker's real peak, and the counter regardless
-  -- is what it WOULD have been worth.
-  held    INTEGER NOT NULL DEFAULT 0,
+  -- `subject` is NULL for every metric but hand_plays, and NULL never
+  -- conflicts in SQLite, so this key does not actually constrain those
+  -- rows. derive_counters truncates the table before rebuilding it, so
+  -- nothing depends on the conflict -- but a reader should not believe the
+  -- key either. (The held/unheld reading lives in joker_counter_peaks.)
   PRIMARY KEY (run_id, seg, n, metric, subject)
 );
 CREATE INDEX IF NOT EXISTS joker_derived_metric ON joker_derived(metric, endless, value DESC);
@@ -420,15 +457,19 @@ CREATE INDEX IF NOT EXISTS cards_key ON cards(key, role, endless);
 --
 -- Derived over the whole corpus in run order, so it is rebuilt wholesale
 -- rather than per run: adding an OLD log would shift what came after it.
--- Endless and non-endless records are separate contests, so the two are
--- derived independently and stored side by side: a run can hold the
--- non-endless best for a hand and a different, higher endless best for the
--- same hand, and both are true. Nothing here is computed at query time.
+-- Two contests, stored side by side, both over figures counted from the start
+-- of each run: `standard` compares runs' figures up to the moment each was
+-- won, `all` their whole-run figures. A standard record is judged against
+-- standard figures only -- a run that never beat anyone's overall best can
+-- still hold one -- and an all record against all figures only. A value
+-- reached before the win counts in both, so a run can hold both records for
+-- one subject with the same value, or with different ones. Nothing here is
+-- computed at query time.
 CREATE TABLE IF NOT EXISTS run_records (
   run_id    TEXT NOT NULL,
   kind      TEXT NOT NULL,   -- joker | hand_score | hand_level | hand_played
   subject   TEXT NOT NULL,   -- joker key, or poker hand
-  endless   INTEGER NOT NULL,
+  contest   TEXT NOT NULL,   -- standard | all
   -- What the value IS: chips, mult or x_mult for a joker, and for a hand
   -- whichever of score/level/played it is. Without it a record cannot be
   -- shown in its own unit and every one rendered as Mult, including chips.
@@ -445,7 +486,13 @@ CREATE TABLE IF NOT EXISTS run_records (
   -- same chronology.
   prev_txt  TEXT,
   prev_run  TEXT,
-  PRIMARY KEY (run_id, kind, subject, endless)
+  -- `held` belongs in the key: a counter joker genuinely has two records
+  -- for one (run, subject, contest), and without it the two collided and
+  -- INSERT OR REPLACE kept whichever pass ran last -- the not-held one, so
+  -- every counter joker lost its held record. (NULL never conflicts in
+  -- SQLite, so this constrains only the counter rows; the other kinds
+  -- produce one row per key by construction.)
+  PRIMARY KEY (run_id, kind, subject, contest, held)
 );
 CREATE INDEX IF NOT EXISTS run_records_run ON run_records(run_id);
 
@@ -461,22 +508,20 @@ CREATE INDEX IF NOT EXISTS run_records_run ON run_records(run_id);
 --
 -- Peak dollars mid-shop is not a Bull score, which is why contributed is
 -- evaluated at plays rather than over the whole series.
---   unheld:      the highest it reached while the joker was NOT in your
---                hands. `ambient` is the maximum of this and `contributed`,
---                which is what makes it a maximum and not a synonym.
---
--- Keyed by JOKER, not by counter. One counter can feed several jokers that
--- read it differently: Bull takes 2 chips a dollar and Bootstraps 2 mult
--- per five, off the same balance.
 CREATE TABLE IF NOT EXISTS joker_counter_peaks (
   run_id      TEXT NOT NULL,
+  -- Per JOKER, not per counter. One counter can feed several jokers that
+  -- read it differently: Bull takes 2 chips a dollar, Bootstraps 2 mult per
+  -- five, off the same balance.
   joker_key   TEXT NOT NULL,
   metric      TEXT NOT NULL,
   endless     INTEGER NOT NULL,
+  -- The counter itself, in its own units, at three moments.
   contributed REAL,
   ambient     REAL,
   unheld      REAL,
-  -- And what that joker was worth at each, converted once here.
+  -- And what that joker was worth at each -- Bull's 189 dollars as the 378
+  -- chips it added. Converted once here so no reader has to.
   field             TEXT,
   contributed_value REAL,
   ambient_value     REAL,
@@ -486,6 +531,59 @@ CREATE TABLE IF NOT EXISTS joker_counter_peaks (
   unheld_ord        REAL,
   PRIMARY KEY (run_id, joker_key, endless)
 );
+
+-- What you did in the shop. The mod has logged buys, sells and rerolls
+-- from the start; nothing read them, so `money.cause = 'shop.buy'` pointed
+-- at rows that did not exist. One table for the three because they share a
+-- shape -- an action, a thing, and an amount -- and the questions worth
+-- asking ("what do I spend on", "how many rerolls a shop", "what do I
+-- sell") all want them side by side.
+-- What was on offer, as opposed to what you took. A row per card the shop
+-- or an open booster put in front of you, re-emitted whenever the contents
+-- change -- so each reroll is its own set. `taken` is filled in afterwards
+-- by matching against the shop and consumable tables.
+--
+-- Only runs played from 0.4.2 have any of this: the offers were never
+-- logged before, so there is nothing to backfill.
+CREATE TABLE IF NOT EXISTS offers (
+  run_id  TEXT    NOT NULL,
+  seg     INTEGER NOT NULL,
+  n       INTEGER NOT NULL,
+  ante    INTEGER,
+  round_seq INTEGER,
+  endless INTEGER NOT NULL,
+  source  TEXT    NOT NULL,          -- shop | voucher | booster | pack
+  slot    INTEGER NOT NULL,
+  key     TEXT,
+  set_    TEXT,
+  name    TEXT,
+  cost    INTEGER,
+  PRIMARY KEY (run_id, seg, n, source, slot)
+);
+
+CREATE INDEX IF NOT EXISTS offers_run ON offers(run_id, key);
+
+CREATE TABLE IF NOT EXISTS shop (
+  run_id  TEXT    NOT NULL,
+  seg     INTEGER NOT NULL,
+  n       INTEGER NOT NULL,
+  ante    INTEGER,
+  round_seq INTEGER,
+  endless INTEGER NOT NULL,
+  action  TEXT    NOT NULL,          -- buy | sell | reroll
+  -- Absent for a reroll, which buys nothing.
+  key     TEXT,
+  set_    TEXT,
+  name    TEXT,
+  -- The cost of a buy or a reroll, the proceeds of a sell. Always positive:
+  -- `action` says which direction it went.
+  amount  INTEGER,
+  -- A buy that was used on the spot rather than carried.
+  and_use INTEGER,
+  PRIMARY KEY (run_id, seg, n)
+);
+
+CREATE INDEX IF NOT EXISTS shop_run ON shop(run_id, action);
 
 CREATE TABLE IF NOT EXISTS money (
   run_id  TEXT    NOT NULL,

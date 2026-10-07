@@ -27,40 +27,55 @@ mod/BalatroDB/      the Steamodded mod (Lua)
   src/hooks.lua       every observation point
 ingest/             the database and dashboard (Python, stdlib only)
   schema.sql          authoritative DDL; sync_schema.py copies it into the docs
-  paths.py            where Balatro keeps things, per platform
   ingest.py           folds logs into SQLite, one run re-derived at a time
   dashboard.py        local web server + read-only JSON API
   web/index.html      the dashboard
 docs/               schema, designs and API references
+tools/              shop prediction: the game's RNG, reproduced in Python
 tests/              runs the pure Lua logic under a host interpreter
 ```
 
 ## Install (development)
 
+Requires Lovely and Steamodded. Then, once:
+
 ```
 python ingest/install.py
 ```
 
-Links the mod into Balatro's mod folder so edits take effect on next launch,
-and writes the launcher behind the **BalatroDB** button in the Options menu.
-Requires Lovely and Steamodded.
+That links this repo's mod into Balatro's `Mods` folder, so edits take effect
+on next launch, and writes the launcher behind the in-game dashboard button.
 
-Windows, macOS and Linux. The link is a directory junction on Windows — a
-symlink there needs administrator rights or Developer Mode, and Steamodded's
-scan accepts either — and an ordinary symlink elsewhere. Either way it stores
-an absolute path, so moving this repo breaks it; re-run the installer if you
-do.
+Everything lives under the game's save folder, which LÖVE picks per OS
+(`ingest/paths.py` is the one place that knows):
 
-Logs land beside the game's own saves, wherever LÖVE puts them:
+| OS      | Save folder                              |
+|---------|------------------------------------------|
+| Windows | `%APPDATA%\Balatro`                      |
+| macOS   | `~/Library/Application Support/Balatro`  |
 
-| | |
-|---|---|
-| Windows | `%APPDATA%\Balatro\BalatroDB\runs\` |
-| macOS | `~/Library/Application Support/Balatro/BalatroDB/runs/` |
-| Linux | `$XDG_DATA_HOME/Balatro/BalatroDB/runs/` (default `~/.local/share`) |
+Mods go in `<save folder>/Mods`. BalatroDB keeps everything it owns in
+`<save folder>/BalatroDB`, outside this repo:
 
-`ingest/paths.py` is the one place that knows this; nothing else should
-hard-code a platform's answer.
+```
+BalatroDB/
+  runs/<run_id>.jsonl    the event logs -- the only real data
+  balatro.db             SQLite, derived from the logs; delete it to rebuild
+  launch-dashboard.sh    written by install.py (.bat on Windows)
+```
+
+On Windows the link is a directory junction, because a symlink needs
+administrator rights (or Developer Mode) there; Steamodded's scan accepts
+either. A junction stores an absolute path, so moving this repo breaks it;
+delete it and rerun the installer if you do. By hand:
+
+```powershell
+cmd /c mklink /J "$env:APPDATA\Balatro\Mods\BalatroDB" "$PWD\mod\BalatroDB"
+```
+
+On macOS it is a plain symlink. Note that Steam's Play button does not load
+Lovely on macOS -- start the game with `run_lovely_macos.sh` from the game
+folder instead, as Lovely's own instructions say.
 
 ## Dashboard
 
@@ -77,6 +92,18 @@ play, because the mod appends to its log throughout.
 `python ingest/ingest.py` does the same fold as a one-off, for scripting or a
 first build.
 
+Started from the in-game button the server runs in the background, with no
+terminal to Ctrl-C. Stop or restart it from the **Server** menu at the right
+of the page header, or from a shell:
+
+```
+python ingest/dashboard.py --stop       # stop the one on port 8611
+python ingest/dashboard.py --restart    # stop it, then start fresh
+```
+
+Restart after editing the server's Python; the page also offers it when it
+notices the server is running older code than what is on disk.
+
 A local, Balatro-themed web dashboard over the database: record tiles, per-joker
 maxima, best hand by type, how far runs get, and a filterable run list that
 drills into a single run. Filters are deck, stake and endless phase, and they
@@ -90,10 +117,37 @@ For joker, deck and stake sprites, extract the game's atlases once:
 python ingest/extract_assets.py
 ```
 
-`Balatro.exe` is a LÖVE archive, so the textures and the lua that positions
-them can be read straight out of it. The extracted art is gitignored -- it is
+The game is a LÖVE archive (`Balatro.exe` on Windows, `Balatro.love` inside
+the macOS app), so the textures and the lua that positions them can be read
+straight out of it. The extracted art is gitignored -- it is
 the game's own, not ours to redistribute -- and the dashboard falls back to
 plain text if it is absent.
+
+## Shop prediction
+
+Balatro's randomness is a set of named streams (`cdt17`, `Joker2sho17`, ...)
+derived from the seed, and the save file records where each one has got to.
+`tools/` reproduces them outside the game -- LuaJIT's `math.random` and the
+game's stream functions, ported bit for bit -- and simulates the shop on top:
+
+```
+python tools/shopsim.py predict --find Mime      # the run in your save
+python tools/shopsim.py streams --explain        # every stream in the save
+python tools/shopsim.py validate                 # replay every logged shop
+python tools/shopsim.py calibrate                # re-learn the joker order
+```
+
+`predict` shows the coming rerolls, where a card appears this ante and in the
+next few, and where it falls in this ante's Buffoon packs. Mid-shop the save
+lags behind by however many rerolls you have made, so it catches up from the
+run log first. A prediction assumes your jokers stay as they are: a joker you
+hold cannot be offered, so buying or selling one changes the picks after it.
+
+The one input that cannot be derived is the order of each joker rarity list,
+which the game builds from a hash table and never sorts. `calibrate` learns it
+from the logs and writes `tools/joker_pools.json`; rerun it if a mod adds or
+removes jokers. `validate` is the evidence: it replays every logged shop from
+its seed, through resumes, vouchers, tags and Gros Michel's extinction.
 
 ## Tests
 
@@ -102,6 +156,8 @@ pip install lupa
 python tests/test_util.py    # serialization, numbers, hook wrapper
 python tests/test_log.py     # what reaches disk, and what is deliberately dropped
 python tests/test_web.py     # the dashboard's inline JS parses (needs node)
+python tests/test_balarng.py # the RNG port, against values LuaJIT printed
+python tests/test_phase_semantics.py  # standard vs endless: pinned, and the model's invariants
 ```
 
 Checks over the parts that are pure logic and easy to get subtly wrong:

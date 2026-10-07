@@ -386,8 +386,12 @@ tr.detail > td { padding: 0; border-top: 0; }
 .step .what .jv { display: block; font-weight: 400; }
 .step.play .what { color: var(--chips); }
 .step.discard .what { color: var(--ink-mute); }
-.hand { display: flex; gap: 3px; align-items: center; flex-wrap: wrap;
-        min-width: 0; }
+/* Not `.hand`: that is the held/unheld seal on a counter joker, which is
+   absolutely positioned and 30px square. When the two pages' styles were
+   merged into this file the seal's rule landed later and won, and every
+   round's cards collapsed into a 30px box off to one side. */
+.handcards { display: flex; gap: 3px; align-items: center; flex-wrap: wrap;
+             min-width: 0; }
 
 /* ── playing cards ────────────────────────────────────────────────────────
    A card is two atlas cells stacked: the base (plain white c_base, or an
@@ -503,14 +507,9 @@ tr.detail > td { padding: 0; border-top: 0; }
 .recbeat { grid-column: 1 / -1; color: var(--ink-dim); font-size: 14px;
            border-top: 2px solid #2b3638; padding-top: 7px; }
 .recbeat b { color: var(--ink); }
-.rec.rec-endless { box-shadow: inset 3px 0 0 var(--purple); }
-.rec.rec-endless::after { content: none; }
-
-.rec-endless { position: relative; }
-.rec-endless::after {
-  content: ""; position: absolute; left: 2px; right: 2px; bottom: -3px;
-  height: 3px; background: var(--purple);
-}
+/* In the run dialog, which lists both contests, an all record wears a
+   purple edge so the two read apart at a glance. */
+.rec.rec-all { box-shadow: inset 3px 0 0 var(--purple); }
 .sc-other { color: var(--ink-dim); }
 .bjn { font-size: 13px; color: var(--ink-dim); max-width: 74px; text-align: center;
        line-height: 1.15; margin-top: 2px; overflow-wrap: anywhere; }
@@ -547,6 +546,30 @@ tr.detail > td { padding: 0; border-top: 0; }
 /* Only ever present when something is wrong, so it is allowed to be loud. */
 .stalebar { background: var(--gold); color: #2a1a00; font-weight: 700;
             padding: 9px 18px; text-align: center; font-size: 14px; }
+.stalego { font: inherit; font-weight: 700; margin-left: 10px; cursor: pointer;
+           background: #2a1a00; color: var(--gold); border: 0;
+           border-radius: .25rem; padding: 3px 10px; }
+/* The server menu: after the page links, and smaller than them -- it is
+   housekeeping, not somewhere to go. Opens to the left so it stays on
+   screen at the header's right edge. */
+.srvmenu > button { padding: 7px 13px 9px; font-size: 15px; color: var(--ink-dim); }
+.srvmenu .menu { left: auto; right: 0; min-width: 250px; }
+.srvmenu .menu button { flex-direction: column; align-items: flex-start; gap: 1px; }
+.srvmenu .menu button[data-do="stop"] { color: var(--mult); }
+.srvhint { font-size: 13px; color: var(--ink-mute); font-weight: 400; }
+.srvstat { font-size: 13px; color: var(--ink-mute); padding: 6px 11px 8px;
+           border-bottom: 1px solid rgba(255, 255, 255, .08); margin-bottom: 2px;
+           white-space: normal; }
+.srvstat b { color: var(--ink-dim); font-weight: 400; }
+/* Narrow screens: the header wraps, and the menu takes its own line at the
+   right rather than hanging off the edge. */
+@media (max-width: 640px) { .srvmenu { margin-left: auto; } }
+.srvdot { width: 9px; height: 9px; border-radius: 50%; background: var(--green);
+          display: inline-block; flex: none; }
+.srvdot.stale { background: var(--gold); }
+.stopped { max-width: 560px; margin: 18vh auto; padding: 0 16px;
+           text-align: center; font-size: 22px; color: var(--ink); }
+.stopped p { font-size: 15px; color: var(--ink-mute); }
 
 /* The bars stop where the plotted area of the charts below stops, so the
    two halves of a page read as the same width rather than the bars running
@@ -786,3 +809,23 @@ tr.detail > td { padding: 0; border-top: 0; }
 .offer .oc { font-size: 17px; line-height: 1.1; min-height: 1.1em; }
 .offer .orec { font-size: 12px; color: var(--ink-mute); white-space: nowrap; }
 .offer .orec .of { color: var(--ink-dim); }
+
+/* What the shop showed you over the run: figures, then every joker offered
+   with how often. Shared by the run dialog and the live panel. */
+.sfigs { display: flex; flex-wrap: wrap; gap: 8px 26px; margin: 4px 0 6px; }
+.sfig { display: flex; flex-direction: column; line-height: 1.15; }
+.sfig b { font-size: 23px; font-weight: 700; }
+.sfig i { font-style: normal; color: var(--ink-mute); font-size: 13px;
+          text-transform: uppercase; letter-spacing: .06em; }
+.sfig em { font-style: normal; color: var(--ink-dim); font-size: 13px; }
+.ssets { font-size: 13px; margin: 2px 0 8px; }
+.seenjokers { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 10px; }
+.seenj { display: inline-flex; flex-direction: column; align-items: center;
+         gap: 1px; opacity: .5; }
+.seenj.taken { opacity: 1; }
+.seenj .sn { font-size: 13px; color: var(--ink-dim);
+             font-variant-numeric: tabular-nums; }
+.seenj.taken .sn { color: var(--gold); }
+.chases.shopseen { padding-top: 0; }
+.chases.shopseen .chtitle { padding-top: 12px; }
+.sswrap { grid-column: 1 / -1; min-width: 0; }

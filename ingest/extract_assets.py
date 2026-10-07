@@ -2,9 +2,10 @@
 
     python ingest/extract_assets.py [--game DIR]
 
-Balatro ships as a LÖVE archive -- a zip, whether it wears a Windows
-.exe stub or sits as a .love inside the macOS .app -- so the
-textures and the lua that positions them can be read straight out of it.
+The game is a LÖVE archive -- Balatro.exe on Windows is a zip with an
+executable stub, and the macOS app carries the same zip as Balatro.love --
+so the textures and the lua that positions them can be read straight out of
+it.
 
 Writes into ingest/web/assets/ :
     Jokers.png, Enhancers.png, chips.png   the 2x atlases
@@ -31,6 +32,8 @@ except ImportError:
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "web", "assets")
+
+DEFAULT_GAME = paths.steam_game_dir()
 
 # Which atlas each key prefix is drawn from, and the 2x cell size in pixels.
 # Balatro's card is 71x95 at 1x; chips are square.
@@ -265,23 +268,16 @@ def atlas_for(key: str) -> tuple[str, int, int] | None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    # A directory or the archive itself; omitted, the usual Steam
-    # locations for this platform are searched.
-    ap.add_argument("--game", default=None,
-                    help="Balatro install directory, or the archive")
+    ap.add_argument("--game", default=DEFAULT_GAME)
     a = ap.parse_args()
 
-    # Every platform's build is a plain zip -- a Windows .exe with a
-    # stub, a .love inside the mac .app -- so only finding it differs.
-    exe, tried = paths.game_archive(a.game)
-    if not exe:
-        raise SystemExit("Balatro not found. Looked in:\n  "
-                         + "\n  ".join(tried)
-                         + "\nPass --game <install dir>.")
-    print(f"reading {exe}")
+    archive = paths.game_archive(a.game)
+    if not archive:
+        raise SystemExit(f"No Balatro.exe or Balatro.app in {a.game}\n"
+                         "Pass --game <install dir>.")
 
     os.makedirs(OUT, exist_ok=True)
-    z = zipfile.ZipFile(exe)
+    z = zipfile.ZipFile(archive)
 
     wanted = {name for name, _, _ in ATLASES.values()}
     sizes = {}

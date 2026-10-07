@@ -15,17 +15,26 @@ const $ = s => document.querySelector(s);
 // are escaped at the point of interpolation rather than trusted.
 const esc = v => String(v ?? "").replace(/[&<>"']/g,
   c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-// Two independent toggles rather than three exclusive options. Both on (or
-// both off) means no phase filter at all -- which is what "all runs" should
-// mean, and is not expressible with mutually exclusive buttons.
-const phase = { "0": true, "1": true };
-const state = { deck: "", stake: "", endless: "", noplasma: "", metric: "",
+// The phase is one choice of two, and both start at the beginning of the
+// run: "standard" is each run up to the moment it was won, "" (all) is each
+// whole run. Sent as `phase=standard`; all is the absence of it.
+const state = { deck: "", stake: "", phase: "", noplasma: "", played: "", metric: "",
                 seeded: "", held: "" };
 
-function syncPhase() {
-  const on = Object.keys(phase).filter(k => phase[k]);
-  // exactly one selected -> filter to it; otherwise include everything
-  state.endless = on.length === 1 ? on[0] : "";
+// Both pages draw the choice the same way: one pressed button of two.
+function wirePhase(onChange) {
+  const group = document.querySelector("#phase");
+  if (!group) return;
+  const paint = () => group.querySelectorAll("button[data-v]").forEach(b =>
+    b.setAttribute("aria-pressed", b.dataset.v === state.phase));
+  group.onclick = e => {
+    const b = e.target.closest("button[data-v]");
+    if (!b || b.dataset.v === state.phase) return;
+    state.phase = b.dataset.v;
+    paint();
+    onChange();
+  };
+  paint();
 }
 
 // ── formatting numbers the game's way ───────────────────────────────────
@@ -54,6 +63,9 @@ const fmtNum = (v, whole) => {
   if (v === null || v === undefined || v === "") return "—";
   const str = String(v).trim();
   const n = Number(str);
+  // The game shows an overflowed score as "naneinf", whether it went to
+  // infinity or to NaN; the log keeps which, the page says what you saw.
+  if (/^[+-]?(inf|infinity|nan)$/i.test(str)) return str.startsWith("-") ? "-naneinf" : "naneinf";
   if (!isFinite(n)) {
     // Escaped: fmt is handed TEXT columns straight out of the log
     // (score_txt, to_txt, required_txt), and a modded joker can put
@@ -182,7 +194,7 @@ const recordArt = (rec, px) => {
 const recordText = rec => {
   const [, name, what] = RECORD_KIND[rec.kind] || ["", x => x, ""];
   return `${name(rec.subject)} ${what} ${recFmt(rec)(rec.value_txt)}`
-    + (rec.endless ? " (endless)" : "");
+    + (rec.contest === "all" ? " (all)" : " (standard)");
 };
 const RECORDS_SHOWN = 2;
 
@@ -202,7 +214,7 @@ function tipHTML(rec) {
       (rec.prev_ts ? ` · ${ago(rec.prev_ts)}` : "") + `</div>`;
   return `<div class="row">${recordArt(rec, 44)}<div>
       <div class="ttl">${esc(name(rec.subject))}</div>
-      <div class="sub">${esc(what)}${rec.endless ? " · endless" : ""}</div>
+      <div class="sub">${esc(what)} · ${rec.contest === "all" ? "all" : "standard"}</div>
       <div class="big ${cls}">${recPre(rec)}${f(rec.value_txt)}</div>
     </div></div>${beat}`;
 }
@@ -305,6 +317,7 @@ const summaryTip = s => {
 // forever; the banner simply cannot help until the first restart after this
 // shipped.
 function showStale(on) {
+  setServerStale(on);
   let el = $("#stalebar");
   if (!on) { if (el) el.remove(); return; }
   if (el) return;
@@ -312,9 +325,108 @@ function showStale(on) {
   el.id = "stalebar";
   el.className = "stalebar";
   el.textContent = "The dashboard server is running older code than the "
-    + "files on disk. Restart it to pick up the changes.";
+    + "files on disk. ";
+  const b = document.createElement("button");
+  b.className = "stalego";
+  b.textContent = "Restart it now";
+  b.onclick = () => serverControl("restart");
+  el.appendChild(b);
   document.body.prepend(el);
 }
+
+// Stop and Restart, in the header of both pages. Started from the in-game
+// button the server has no terminal to Ctrl-C, so this is the off switch.
+// The header is what the server insists on before it will act: another
+// website cannot send it without a preflight the server never answers.
+async function serverControl(what) {
+  if (what === "stop" && !confirm("Stop the dashboard server? "
+      + "Start it again from Balatro, or with python ingest/dashboard.py.")) return;
+  try {
+    await fetch(`/api/${what}`, { method: "POST", headers: { "X-BalatroDB": "1" } });
+  } catch { /* it may go down before it answers; that is the point */ }
+  if (what === "stop") {
+    document.body.innerHTML = `<div class="stopped">The dashboard server is stopped.
+      <p>Start it again from Balatro's dashboard button, or with
+      <code>python ingest/dashboard.py</code>.</p></div>`;
+    return;
+  }
+  // A restart re-reads every log before it listens again, so wait for it
+  // to answer rather than reloading into a connection error.
+  const bar = $("#stalebar");
+  if (bar) bar.textContent = "Restarting…";
+  for (let i = 0; i < 120; i++) {
+    await new Promise(r => setTimeout(r, 500));
+    try {
+      if ((await fetch("/api/version")).ok) { location.reload(); return; }
+    } catch { /* not up yet */ }
+  }
+  if (bar) bar.textContent = "The server did not come back. Start it again from Balatro.";
+}
+
+// The server's controls live in one menu at the end of the header, apart
+// from the page links: they act on the process, not on what you are
+// looking at. A status dot on the button says whether the server is
+// current, so the menu earns its place even when nothing needs doing.
+function serverMenu() {
+  const header = document.querySelector("header");
+  if (!header) return;
+  const root = document.createElement("div");
+  root.className = "pick srvmenu";
+  root.innerHTML =
+    `<button class="seg pixel-pill" aria-haspopup="menu" aria-expanded="false"
+      title="Dashboard server"><span class="srvdot"></span>Server<span class="caret">▾</span></button>
+     <div class="menu" role="menu">
+       <div class="srvstat">Checking…</div>
+       <button role="menuitem" data-do="restart">Restart
+         <span class="srvhint">pick up code changes</span></button>
+       <button role="menuitem" data-do="stop">Stop
+         <span class="srvhint">start again from Balatro</span></button>
+     </div>`;
+  header.appendChild(root);
+  const btn = root.querySelector("button");
+  const stat = root.querySelector(".srvstat");
+  const close = () => {
+    root.classList.remove("open");
+    btn.setAttribute("aria-expanded", "false");
+  };
+  btn.onclick = async ev => {
+    ev.stopPropagation();
+    const open = !root.classList.contains("open");
+    document.querySelectorAll(".pick.open").forEach(o => {
+      o.classList.remove("open");
+      o.firstElementChild.setAttribute("aria-expanded", "false");
+    });
+    root.classList.toggle("open", open);
+    btn.setAttribute("aria-expanded", open);
+    if (!open) return;
+    try {
+      const v = await fetch("/api/version").then(r => r.json());
+      setServerStale(v.stale);
+      stat.innerHTML = `<b>${v.stale ? "Running older code than the files on disk"
+                                     : "Running, up to date"}</b>`
+        + (v.last_sync ? `<br>logs last read ${esc(ago(v.last_sync))}` : "");
+    } catch {
+      stat.textContent = "Not answering";
+    }
+  };
+  root.querySelector(".menu").onclick = ev => {
+    const b = ev.target.closest("button[data-do]");
+    if (!b) return;
+    ev.stopPropagation();
+    close();
+    serverControl(b.dataset.do);
+  };
+  root.onkeydown = ev => { if (ev.key === "Escape") { close(); btn.focus(); } };
+}
+
+// The dot on the Server button: green when current, gold when the code on
+// disk is newer than what is running.
+function setServerStale(on) {
+  const dot = document.querySelector(".srvdot");
+  if (dot) dot.classList.toggle("stale", !!on);
+}
+
+serverMenu();
 
 // ── talking to the API ──────────────────────────────────────────────────
 

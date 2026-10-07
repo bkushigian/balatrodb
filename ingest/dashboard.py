@@ -2,6 +2,8 @@
 
     python ingest/dashboard.py            # http://localhost:8611
     python ingest/dashboard.py --port 9000 --no-open
+    python ingest/dashboard.py --stop     # stop the one that is running
+    python ingest/dashboard.py --restart  # stop it, then start this one
 
 Serves `web/index.html` plus a small read-only JSON API. It queries the SQLite
 database directly, so it is always as current as the last ingest; run
@@ -20,18 +22,23 @@ import json
 import math
 import os
 import pathlib
+import signal
+import socket
+import sys
 import zlib
 import sqlite3
 import threading
 import time
+import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 import ingest as ingester
+import paths
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DB = os.path.join(HERE, "balatro.db")
+DB = paths.db_path()
 WEB = os.path.join(HERE, "web")
 
 
@@ -118,14 +125,29 @@ def watch(db, logs, every=3.0):
 
 
 # ─── filters ──────────────────────────────────────────────────────────────
-# Every query slices the same way: deck, stake, and endless phase.
+# Every query slices the same way: which runs (deck, stake, seeded, Plasma,
+# played), and which part of each run -- the PHASE.
 #
-# `endless` is absent when both phases are wanted -- the page sends it only
-# when exactly one toggle is on. For leaderboards the flag is per EVENT, so
-# "non-endless" still includes the pre-win portion of a run that later went
-# endless, which is the whole reason the flag is stamped per event. For the run
-# LIST it is necessarily per run (did this run ever go endless), which is a
-# different question with the same name.
+# There are two phases, and both start at the beginning of the run:
+#
+#   standard  the run up to the moment it was won (run.win). A run that
+#             never wins is all standard.
+#   all       the whole run.
+#
+# `?phase=standard` asks for standard; anything else is all. The phase never
+# removes a run -- every run has a standard part -- it only decides which of
+# a run's events count. Every event table carries `endless`, "after the win",
+# so standard is `endless = 0` and all is no clause at all.
+
+def standard(q):
+    return q.get("phase") == "standard"
+
+
+def phase_sql(q, col):
+    """The phase as a clause on one table's `endless` column. A literal, not a
+    parameter: it is one of two constants, and keeping it out of the binding
+    list is what lets the subqueries below be composed freely."""
+    return f" AND {col} = 0" if standard(q) else ""
 
 def top(ord_col, txt_col):
     """ORDER BY that picks the true maximum, not merely the top `ord`.
@@ -147,9 +169,8 @@ def where(q, prefix="r.", endless_col=None):
     if q.get("stake"):
         clauses.append(f"{prefix}stake_key = ?")
         params.append(q["stake"])
-    if q.get("endless") in ("0", "1") and endless_col:
-        clauses.append(f"{endless_col} = ?")
-        params.append(int(q["endless"]))
+    if standard(q) and endless_col:
+        clauses.append(f"{endless_col} = 0")
     # Seeded runs are practice, not records -- you chose the seed. Kept as
     # its own filter rather than folded into the deck/stake ones, since
     # excluding them is a different question from picking what to look at.
@@ -162,6 +183,12 @@ def where(q, prefix="r.", endless_col=None):
     # deck, so it is its own filter.
     if q.get("noplasma") == "1":
         clauses.append(f"{prefix}deck_key IS NOT 'b_plasma'")
+    # A run restarted before its first hand -- a reroll, a seed search, a
+    # deck you backed out of -- has nothing in it but its start. Asked of the
+    # hands table rather than runs.hands_played, which only run.end fills in,
+    # so a run still in progress counts from its first hand onward.
+    if q.get("played") == "1":
+        clauses.append(f"EXISTS (SELECT 1 FROM hands hp WHERE hp.run_id = {prefix}run_id)")
     return (" AND " + " AND ".join(clauses) if clauses else ""), params
 
 
@@ -191,13 +218,9 @@ def api_meta(db, q):
 
 
 def api_summary(db, q):
-    # The run counts are run-level facts, so the phase toggle applies to them
-    # the same way it does in api_runs: whether the run went endless at all.
-    # Without this the header claimed "15 runs" over a slice holding one.
+    # Run outcomes are facts about runs, not figures, so the phase leaves
+    # them alone: every run has a standard part.
     w, p = where(q)
-    if q.get("endless") in ("0", "1"):
-        w += " AND r.went_endless = ?"
-        p = p + [int(q["endless"])]
 
     total = db.execute(f"SELECT COUNT(*) FROM runs r WHERE 1=1{w}", p).fetchone()[0]
     # Numerator and denominator must be the same population, and it must be
@@ -234,7 +257,9 @@ def api_summary(db, q):
         f"""SELECT MIN(m.balance) v FROM money m JOIN runs r USING (run_id)
             WHERE 1=1{mw}""", mp).fetchone()
 
-    dw, dp = where(q, endless_col="ro.endless")
+    # The deck sample and the cash-out are taken at round.end, so they take
+    # its phase: the winning round's are paid after the win.
+    dw, dp = where(q, endless_col="ro.end_endless")
     deck = db.execute(
         f"""SELECT MAX(ro.deck_size) v FROM rounds ro JOIN runs r USING (run_id)
             WHERE 1=1{dw}""", dp).fetchone()
@@ -244,9 +269,11 @@ def api_summary(db, q):
     # and is what the Runs column and the run dialog already show -- this
     # tile was the one surface deriving it differently, and with the
     # non-endless filter on it printed 8 above a column reaching 9.
+    # The same per-run figure the Runs column shows, so the two agree --
+    # including what Non-endless means for a run that went endless.
+    ante_sql, _ = phase_figures(q)
     ante = db.execute(
-        f"""SELECT MAX(COALESCE(r.furthest_ante, r.ended_ante)) v
-              FROM runs r WHERE 1=1{w}""", p).fetchone()
+        f"""SELECT MAX({ante_sql}) v FROM runs r WHERE 1=1{w}""", p).fetchone()
     cash = db.execute(
         f"""SELECT MAX(ro.cashout_total) v FROM rounds ro JOIN runs r USING (run_id)
             WHERE 1=1{dw}""", dp).fetchone()
@@ -279,26 +306,26 @@ METRICS = {
         + top("js.to_ord", "js.to_txt") + " LIMIT 1)",
         "(SELECT MAX(js.to_ord) FROM joker_scale js WHERE js.run_id = r.run_id"
         "   AND js.key = ? AND js.is_reset = 0{el})",
-        " AND js.endless = ?"),
+        "js.endless"),
     "hand_score": (
         "(SELECT score_txt FROM hands h WHERE h.run_id = r.run_id"
         "   AND h.hand = ?{el} ORDER BY "
         + top("h.score_ord", "h.score_txt") + " LIMIT 1)",
         "(SELECT MAX(h.score_ord) FROM hands h WHERE h.run_id = r.run_id"
         "   AND h.hand = ?{el})",
-        " AND h.endless = ?"),
+        "h.endless"),
     "hand_level": (
         "(SELECT MAX(hl.lvl_to) FROM hand_levels hl WHERE hl.run_id = r.run_id"
         "   AND hl.hand = ?{el})",
         "(SELECT MAX(hl.lvl_to) FROM hand_levels hl WHERE hl.run_id = r.run_id"
         "   AND hl.hand = ?{el})",
-        " AND hl.endless = ?"),
+        "hl.endless"),
     "hand_played": (
         "(SELECT COUNT(*) FROM hands h WHERE h.run_id = r.run_id"
         "   AND h.hand = ?{el})",
         "(SELECT COUNT(*) FROM hands h WHERE h.run_id = r.run_id"
         "   AND h.hand = ?{el})",
-        " AND h.endless = ?"),
+        "h.endless"),
     # A counter joker has no joker_scale rows at all -- its value is a
     # function of game state -- so it could not be picked here, and Bull was
     # missing from every per-joker view. The contribution is what is
@@ -308,7 +335,7 @@ METRICS = {
         "   WHERE cp.run_id = r.run_id AND cp.joker_key = ?{el})",
         "(SELECT MAX(cp.contributed_ord) FROM joker_counter_peaks cp"
         "   WHERE cp.run_id = r.run_id AND cp.joker_key = ?{el})",
-        " AND cp.endless = ?"),
+        "cp.endless"),
     # The other half of the same joker: what the counter reached whether or
     # not anyone held it. A Fortune Teller record set without ever owning
     # one is this, and for most runs it is the only one that exists.
@@ -318,13 +345,13 @@ METRICS = {
         "   WHERE cp.run_id = r.run_id AND cp.joker_key = ?{el})",
         "(SELECT MAX(cp.unheld_ord) FROM joker_counter_peaks cp"
         "   WHERE cp.run_id = r.run_id AND cp.joker_key = ?{el})",
-        " AND cp.endless = ?"),
+        "cp.endless"),
     "counter_ambient": (
         "(SELECT MAX(cp.ambient_value) FROM joker_counter_peaks cp"
         "   WHERE cp.run_id = r.run_id AND cp.joker_key = ?{el})",
         "(SELECT MAX(cp.ambient_ord) FROM joker_counter_peaks cp"
         "   WHERE cp.run_id = r.run_id AND cp.joker_key = ?{el})",
-        " AND cp.endless = ?"),
+        "cp.endless"),
 }
 
 
@@ -358,60 +385,48 @@ def api_metrics(db, q):
                          for c in counters if c["k"] in ingester.COUNTER_JOKERS]}
 
 
+def phase_figures(q):
+    """SQL for a run's furthest ante and hands played, in the chosen phase.
+
+    Both come from the logged events, never from run.end: a run still being
+    played has no run.end, and the game's furthest_ante moves on to the next
+    ante at the win although no round of it was played. The ante is the
+    highest one a round was played at -- a maximum, so Hieroglyph moving it
+    back down does not lower it.
+    """
+    ante = ("(SELECT MAX(ro.ante) FROM rounds ro WHERE ro.run_id = r.run_id"
+            + phase_sql(q, "ro.endless") + ")")
+    hands = ("(SELECT COUNT(*) FROM hands hc WHERE hc.run_id = r.run_id"
+             + phase_sql(q, "hc.endless") + ")")
+    return ante, hands
+
+
 def api_runs(db, q):
     w, p = where(q)
+    ante_sql, hands_sql = phase_figures(q)
+    # Each per-run figure, in the chosen phase. Literals, so the columns and
+    # the sorts below can share them without any bindings to keep in order.
+    hw, mw, rw = (phase_sql(q, c) for c in ("h.endless", "m.endless", "ro.endless"))
+    peak_sql = f"(SELECT MAX(balance) FROM money m WHERE m.run_id = r.run_id{mw})"
+    # Every sort orders by the figure its column shows.
     sort = {
         "recent": "r.started_ts DESC",
-        # Sort by the same thing the column displays. best_hand_ord is only
-        # set on terminal runs, so sorting by it buried a 221,539 hand beneath
-        # runs showing 348.
-        "score": "(SELECT MAX(score_ord) FROM hands h WHERE h.run_id = r.run_id) DESC",
-        "ante": "COALESCE(r.furthest_ante, r.ended_ante) DESC",
-        "money": "r.final_dollars DESC",
-        "hands": "r.hands_played DESC",
+        "score": f"(SELECT MAX(score_ord) FROM hands h WHERE h.run_id = r.run_id{hw}) DESC",
+        "ante": f"{ante_sql} DESC",
+        "money": f"{peak_sql} DESC",
+        "hands": f"{hands_sql} DESC",
     }.get(q.get("sort"), "r.started_ts DESC")
-    # The phase filter applies twice, differently: to which runs are listed
-    # (a run-level flag) and to the per-run figures derived from events. The
-    # subquery params bind BEFORE the outer ones, since they appear first.
-    hw = mw = rw = ""
-    sub, tail = [], []
-    if q.get("endless") in ("0", "1"):
-        el = int(q["endless"])
-        # `scope=event` keeps the per-EVENT filter and drops the per-run one,
-        # so every run reports what it did in that phase instead of dropping
-        # out of the list entirely. A chart needs this: to show a run's
-        # standard best beside its overall best, the run has to appear in
-        # both answers. The run LIST still filters both ways by default,
-        # which is the question that page is asking.
-        if q.get("scope") != "event":
-            w += " AND r.went_endless = ?"
-            p = p + [el]
-        hw, mw = " AND h.endless = ?", " AND m.endless = ?"
-        rw = " AND ro.endless = ?"
-        sub = [el, el, el, el]       # bh_ord, best_hand, peak_money, rounds_won
-        # Sorting by score has to see the same slice as the column it sorts.
-        # Its placeholder is in the ORDER BY, so it binds last of all.
-        if q.get("sort") == "score":
-            sort = ("(SELECT MAX(score_ord) FROM hands h "
-                    f"WHERE h.run_id = r.run_id{hw}) DESC")
-            tail = [el]
+    sub = []
     # A metric sort replaces the column sort entirely -- the two are
     # alternatives, never combined.
     metric_txt = metric_ord = "NULL"
     metric = (q.get("metric") or "").split(":", 1)
     if len(metric) == 2 and metric[0] in METRICS:
-        # ...which means dropping whatever the column sort had queued for
-        # the ORDER BY. `sort=score` with a phase filter puts a placeholder
-        # there; overwriting `sort` without clearing `tail` left the binding
-        # with nothing to bind to, and ?sort=score&metric=hand_score:Pair&
-        # endless=0 raised "Incorrect number of bindings".
-        tail = []
-        val_sql, ord_sql, el_clause = METRICS[metric[0]]
-        el = el_clause if q.get("endless") in ("0", "1") else ""
+        val_sql, ord_sql, el_col = METRICS[metric[0]]
+        el = phase_sql(q, el_col)
         metric_txt = val_sql.format(el=el)
         metric_ord = ord_sql.format(el=el)
-        args = [metric[1]] + ([int(q["endless"])] if el else [])
-        sub = args + args + sub          # both appear before the outer WHERE
+        sub = [metric[1], metric[1]]     # both appear before the outer WHERE
         sort = "metric_ord IS NULL, metric_ord DESC"
 
     best = top("score_ord", "score_txt")
@@ -420,8 +435,8 @@ def api_runs(db, q):
                r.run_id, r.log_file, r.started_ts, r.deck_name, r.deck_key,
                r.stake_key, r.seed, r.seeded, r.won, r.result, r.terminal,
                r.abandoned,
-               r.went_endless, r.hands_played, r.final_dollars, r.deck_size,
-               COALESCE(r.furthest_ante, r.ended_ante) ante,
+               r.went_endless, {hands_sql} hands_played, r.final_dollars, r.deck_size,
+               {ante_sql} ante,
                -- Sliced by the phase filter like every other derived figure.
                -- Left unsliced, a row showed a 221,539 best hand next to a
                -- "Best hand" panel reporting 13,104 for the same selection.
@@ -430,15 +445,14 @@ def api_runs(db, q):
                (SELECT score_txt FROM hands h
                  WHERE h.run_id = r.run_id{hw}
                  ORDER BY {best} LIMIT 1) best_hand,
-               (SELECT MAX(balance) FROM money m
-                 WHERE m.run_id = r.run_id{mw}) peak_money,
+               {peak_sql} peak_money,
                -- A round only gets a cash-out when its blind was beaten, so
                -- this counts blinds cleared rather than blinds faced.
                (SELECT COUNT(*) FROM rounds ro
                  WHERE ro.run_id = r.run_id AND ro.cashout_total IS NOT NULL{rw})
                  rounds_won,
                (SELECT COUNT(*) FROM run_defects d WHERE d.run_id = r.run_id) defects
-          FROM runs r WHERE 1=1{w} ORDER BY {sort} LIMIT 300""", sub + p + tail)
+          FROM runs r WHERE 1=1{w} ORDER BY {sort} LIMIT 300""", sub + p)
     attach_records(db, out, q)
     return out
 
@@ -449,71 +463,12 @@ def api_runs(db, q):
 RECORD_ORDER = {"joker": 0, "hand_score": 1, "hand_level": 2, "hand_played": 3}
 
 
-def endless_union(db):
-    """Which stored endless records are records with the restriction lifted.
-
-    The two contests are stored disjoint: non-endless rows come from events
-    before the win ante, endless rows from after. That answers "what did I
-    do after the win, on its own terms", and it is worth keeping.
-
-    But the contest a player means by "endless" is the one with the
-    restriction LIFTED -- anything managed before the win also counts,
-    because endless only removes a limit. Derived in isolation the endless
-    contest announces records that never were: a Pair of 228 is stored as an
-    endless record although the standard record was six figures by then.
-
-    That contest can be read off the two stored ones without deriving
-    anything new. Every record in the union is already a record in whichever
-    contest it came from -- if a run's best is its non-endless value, that
-    value beat every earlier value including every earlier non-endless one,
-    so the run already holds a non-endless row carrying exactly it; likewise
-    for endless. So merging the stored rows in run order and keeping those
-    that beat the running best gives the union exactly.
-
-    Returns the endless rows that survive, as
-    {(run_id, kind, subject): (prev_txt, prev_run)} -- with `prev` recomputed
-    against the union, so "beat X" names what was really standing.
-    """
-    per_subject = {}
-    for r in db.execute("""SELECT rr.run_id, rr.kind, rr.subject, rr.endless,
-                                  rr.value_txt, rr.value_ord
-                             FROM run_records rr JOIN runs u USING (run_id)
-                            ORDER BY u.started_ts, rr.run_id"""):
-        per_subject.setdefault((r["kind"], r["subject"]), []).append(r)
-
-    keep = {}
-    for (kind, subject), recs in per_subject.items():
-        # A run is one competitor, so its two stored rows compete as one:
-        # the better of them is what it did with the restriction lifted.
-        best = {}
-        for r in recs:
-            cur = best.get(r["run_id"])
-            if cur is None or (r["value_ord"] or 0) > (cur["value_ord"] or 0):
-                best[r["run_id"]] = r
-
-        top, prev_txt, prev_run = None, None, None
-        for run_id in dict.fromkeys(r["run_id"] for r in recs):
-            r = best[run_id]
-            if top is not None and (r["value_ord"] or 0) <= top:
-                continue
-            if r["endless"]:
-                keep[(run_id, kind, subject)] = (prev_txt, prev_run)
-            top = r["value_ord"] or 0
-            prev_txt, prev_run = r["value_txt"], run_id
-    return keep
-
-
 def attach_records(db, runs, q=None):
     """Give each run what it was the first to achieve, at the time it ran.
 
-    Endless and non-endless are separate contests, so the phase toggle picks
-    between them; with no phase filter both are returned, and a run may hold
-    one of each for the same subject.
-
-    An endless row is shown only when it is also a record with the
-    restriction lifted -- see endless_union. Otherwise a run announces an
-    "endless record" that a standard run had already beaten, which is the
-    one thing the endless flag should never do.
+    The records shown are the contest the phase names: standard records
+    under Standard, all records under All. They are separate contests (see
+    run_records), so a run can hold one of each for the same subject.
     """
     for r in runs:
         r["records"] = []
@@ -521,18 +476,8 @@ def attach_records(db, runs, q=None):
     if not by_id:
         return
     marks = ",".join("?" * len(by_id))
-    params = list(by_id)
-    union = endless_union(db)
-    # The run a recomputed `prev` points at is any run, not only a listed
-    # one, so its label comes from the whole table.
-    prev_ts, prev_deck = {}, {}
-    for u in db.execute("SELECT run_id, started_ts, deck_name FROM runs"):
-        prev_ts[u["run_id"]] = u["started_ts"]
-        prev_deck[u["run_id"]] = u["deck_name"]
-    ew = ""
-    if (q or {}).get("endless") in ("0", "1"):
-        ew += " AND rr.endless = ?"
-        params.append(int(q["endless"]))
+    params = list(by_id) + ["standard" if standard(q or {}) else "all"]
+    ew = " AND rr.contest = ?"
     # `held` is the same distinction run_records carries, so the page-wide
     # toggle belongs here too. Without it the Jokers panel moved between 14
     # and 16 rows while the 183 record badges on the Runs table ignored the
@@ -546,26 +491,16 @@ def attach_records(db, runs, q=None):
         ew += " AND (rr.held IS NULL OR rr.held = ?)"
         params.append(int(q["held"]))
     for rec in rows(db, f"""
-            SELECT rr.run_id, rr.kind, rr.subject, rr.endless, rr.field, rr.held,
+            SELECT rr.run_id, rr.kind, rr.subject, rr.contest, rr.field, rr.held,
                    rr.value_txt, rr.value_ord, rr.prev_txt,
                    pr.started_ts prev_ts, pr.deck_name prev_deck
               FROM run_records rr
               LEFT JOIN runs pr ON pr.run_id = rr.prev_run
              WHERE rr.run_id IN ({marks}){ew}""", params):
-        if rec["endless"]:
-            hit = union.get((rec["run_id"], rec["kind"], rec["subject"]))
-            if hit is None:
-                continue                       # beaten before it was set
-            rec = dict(rec)
-            rec["prev_txt"], prev_run = hit
-            rec["prev_ts"] = prev_ts.get(prev_run)
-            rec["prev_deck"] = prev_deck.get(prev_run)
         by_id[rec["run_id"]]["records"].append(rec)
     for r in runs:
-        # Endless records after non-endless ones of the same kind: the
-        # ordering keys are not comparable across the two contests.
         r["records"].sort(key=lambda x: (RECORD_ORDER.get(x["kind"], 9),
-                                         x["endless"], -(x["value_ord"] or 0)))
+                                         -(x["value_ord"] or 0)))
 
 
 def api_all_jokers(db, q):
@@ -769,27 +704,14 @@ def api_hand_counts(db, q):
 
 
 def run_records_for(db, rid):
-    """One run's records, with the endless ones filtered as attach_records
-    filters them -- one rule, read from one place."""
-    union = endless_union(db)
-    label = {u["run_id"]: (u["started_ts"], u["deck_name"])
-             for u in db.execute("SELECT run_id, started_ts, deck_name FROM runs")}
-    out = []
-    for rec in rows(db, """SELECT rr.kind, rr.subject, rr.endless, rr.field, rr.held,
-                                  rr.value_txt, rr.value_ord, rr.prev_txt,
-                                  pr.started_ts prev_ts, pr.deck_name prev_deck
-                             FROM run_records rr
-                             LEFT JOIN runs pr ON pr.run_id = rr.prev_run
-                            WHERE rr.run_id = ?""", (rid,)):
-        if rec["endless"]:
-            hit = union.get((rid, rec["kind"], rec["subject"]))
-            if hit is None:
-                continue
-            rec = dict(rec)
-            rec["prev_txt"], prev_run = hit
-            rec["prev_ts"], rec["prev_deck"] = label.get(prev_run, (None, None))
-        out.append(rec)
-    return out
+    """One run's records, both contests: the dialog is about the run, not
+    about the slice you arrived from, so it shows what it set in each."""
+    return rows(db, """SELECT rr.kind, rr.subject, rr.contest, rr.field, rr.held,
+                              rr.value_txt, rr.value_ord, rr.prev_txt,
+                              pr.started_ts prev_ts, pr.deck_name prev_deck
+                         FROM run_records rr
+                         LEFT JOIN runs pr ON pr.run_id = rr.prev_run
+                        WHERE rr.run_id = ?""", (rid,))
 
 
 def api_run(db, q):
@@ -816,11 +738,10 @@ def api_run(db, q):
         # Every record this run set, both contests, whatever the page is
         # currently filtered to -- the dialog is about this run, not about
         # the slice you arrived from.
-        # Same rule as the Runs column: an endless row counts only when it
-        # is also a record with the restriction lifted.
         "records": sorted(
             run_records_for(db, rid),
-            key=lambda x: (RECORD_ORDER.get(x["kind"], 9), x["endless"],
+            # Standard before all: the stronger claim first.
+            key=lambda x: (RECORD_ORDER.get(x["kind"], 9), x["contest"] != "standard",
                            -(x["value_ord"] or 0))),
         "defects": rows(db, "SELECT defect, detail FROM run_defects WHERE run_id=?", (rid,)),
         # The whole run, like everything else in this dialog -- the Runs
@@ -828,6 +749,12 @@ def api_run(db, q):
         # differ for a run that went endless. What they must not do is
         # disagree about what "won" means, which is why the rule lives
         # here rather than being reimplemented over the rounds array.
+        # The same ante the Runs column shows: the highest a round was played
+        # at, not runs.furthest_ante, which a win moves on to the next ante.
+        "ante": db.execute("SELECT MAX(ante) FROM rounds WHERE run_id=?",
+                           (rid,)).fetchone()[0],
+        "hands_played": db.execute("SELECT COUNT(*) FROM hands WHERE run_id=?",
+                                   (rid,)).fetchone()[0],
         "rounds_won": db.execute(
             "SELECT COUNT(*) FROM rounds WHERE run_id=? AND cashout_total IS NOT NULL",
             (rid,)).fetchone()[0],
@@ -839,6 +766,79 @@ def api_run(db, q):
                                        GROUP BY action""", (rid,))},
         "debt": db.execute(
             "SELECT MIN(balance) FROM money WHERE run_id=?", (rid,)).fetchone()[0],
+        "shop_seen": shop_stats(db, rid),
+    }
+
+
+def shop_stats(db, rid):
+    """What the shop showed you over the run, and what you spent to see it.
+
+    Counted off the card instances rather than off the offers: an offer is
+    re-emitted whenever the shop's contents change, so buying one card
+    re-reports the other one, and counting offer rows counted it twice. A
+    card's id (its sort_id) is minted when the shop creates it, so the
+    distinct ids are the cards that were actually put in front of you. Keyed
+    by segment and key as well: a resumed run rebuilds its cards from the
+    save, and those take ids the game hands out again later in the same
+    session, so an id alone can name two different cards.
+
+    Packs are kept apart from the shop: a Buffoon pack is jokers you were
+    shown, but not ones a reroll paid for.
+    """
+    rerolls = db.execute("""
+        SELECT COUNT(*) n, COALESCE(SUM(amount), 0) spent
+          FROM shop WHERE run_id = ? AND action = 'reroll'""", (rid,)).fetchone()
+    # Rerolls are filed under the round whose shop they were in, which makes
+    # "the worst shop" one GROUP BY.
+    worst = db.execute("""
+        SELECT round_seq, ante, COUNT(*) n FROM shop
+         WHERE run_id = ? AND action = 'reroll'
+         GROUP BY round_seq ORDER BY n DESC, round_seq LIMIT 1""", (rid,)).fetchone()
+    shops = db.execute("""
+        SELECT COUNT(DISTINCT round_seq) FROM offers
+         WHERE run_id = ? AND source = 'shop'""", (rid,)).fetchone()[0]
+
+    by_set = {r["set_"] or "Other": r["n"] for r in rows(db, """
+        SELECT set_, COUNT(DISTINCT seg || ':' || card_id || ':' || key) n FROM cards
+         WHERE run_id = ? AND event = 'shop.offer' AND role = 'cards'
+         GROUP BY set_""", (rid,))}
+
+    # Every joker you were offered, how often, and whether it ever became
+    # yours: bought, or on the board at a sample -- which also catches one
+    # taken from a pack, and one you already held when the shop showed it.
+    jokers = rows(db, """
+        SELECT key,
+               COUNT(DISTINCT CASE WHEN event = 'shop.offer'
+                                   THEN seg || ':' || card_id || ':' || key END) shop,
+               COUNT(DISTINCT CASE WHEN event = 'pack.offer'
+                                   THEN seg || ':' || card_id || ':' || key END) pack
+          FROM cards
+         WHERE run_id = ? AND role = 'cards' AND set_ = 'Joker'
+           AND event IN ('shop.offer', 'pack.offer') AND key IS NOT NULL
+         GROUP BY key""", (rid,))
+    bought = {r["key"]: r["n"] for r in rows(db, """
+        SELECT key, COUNT(*) n FROM shop
+         WHERE run_id = ? AND action = 'buy' AND key IS NOT NULL
+         GROUP BY key""", (rid,))}
+    held = {r["key"] for r in rows(db, """
+        SELECT DISTINCT key FROM joker_state WHERE run_id = ?""", (rid,))}
+    for j in jokers:
+        j["bought"] = bought.get(j["key"], 0)
+        j["taken"] = bool(j["bought"]) or j["key"] in held
+    jokers.sort(key=lambda j: (-(j["shop"] + j["pack"]), j["key"]))
+
+    return {
+        "shops": shops,
+        "rerolls": rerolls["n"],
+        "reroll_spent": rerolls["spent"],
+        "most_rerolls": worst["n"] if worst else 0,
+        "most_rerolls_ante": worst["ante"] if worst else None,
+        "cards_seen": sum(by_set.values()),
+        "by_set": by_set,
+        "jokers_seen": by_set.get("Joker", 0),
+        "jokers_in_packs": sum(j["pack"] for j in jokers),
+        "joker_kinds": len(jokers),
+        "jokers": jokers,
     }
 
 
@@ -957,19 +957,13 @@ CHASE = {
         SELECT 'deck', MAX(deck_size), MAX(deck_size) FROM rounds
          WHERE run_id IN (SELECT * FROM me)
         UNION ALL
-        -- runs.furthest_ante, not MAX(rounds.ante): Hieroglyph and
-        -- Petroglyph call ease_ante(-n), so the per-round maximum is not
-        -- how far the run got. Same column the tile and the Runs list use.
-        --
-        -- It is only written at run.end, though, so the run being played
-        -- has none -- which is the one run this panel is about. The rounds
-        -- fall back for exactly that case and never fire for a finished
-        -- run, where the game's own high-water mark is already there.
-        SELECT 'ante', v, v FROM (SELECT COALESCE(
-                 (SELECT MAX(COALESCE(furthest_ante, ended_ante)) FROM runs
-                   WHERE run_id IN (SELECT * FROM me)),
-                 (SELECT MAX(ante) FROM rounds
-                   WHERE run_id IN (SELECT * FROM me))) v)
+        -- The highest ante a round was played at, as the tile and the Runs
+        -- list read it (phase_figures). A maximum, so Hieroglyph moving the
+        -- ante back down does not lower it; and from the rounds, not from
+        -- run.end's furthest_ante, which the run being played -- the one
+        -- this panel is about -- does not have yet.
+        SELECT 'ante', MAX(ante), MAX(ante) FROM rounds
+         WHERE run_id IN (SELECT * FROM me)
         UNION ALL
         SELECT 'cashout', MAX(cashout_total), MAX(cashout_total) FROM rounds
          WHERE run_id IN (SELECT * FROM me)""",
@@ -1242,6 +1236,7 @@ def api_live(db, q):
         "holding": holding,
         "offered": offered,
         "offer_kind": (last_offer["source"] if last_offer else None),
+        "shop_seen": shop_stats(db, rid),
     }
 
 
@@ -1475,6 +1470,31 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_POST(self):
+        # Stop and restart, from the page's own buttons and from --stop.
+        #
+        # Anything that changes the server has to be safe against other
+        # websites: a page you happen to have open could otherwise POST to
+        # localhost and shut the dashboard down. A custom header cannot be
+        # sent cross-origin without a CORS preflight, which this server never
+        # answers, so requiring one is enough; the Origin check is the belt
+        # to that pair of braces.
+        u = urlparse(self.path)
+        if u.path not in CONTROL:
+            self.send_bytes(b"not found", "text/plain", 404)
+            return
+        origin = self.headers.get("Origin")
+        host = self.headers.get("Host", "")
+        if (self.headers.get(CONTROL_HEADER) != "1"
+                or (origin and urlparse(origin).netloc != host)):
+            self.send_bytes(b"forbidden", "text/plain", 403)
+            return
+        self.send_bytes(json.dumps({"ok": True}).encode(), "application/json")
+        # Not from this thread: shutdown() waits for serve_forever to notice,
+        # and serve_forever is waiting for this request to finish.
+        threading.Thread(target=CONTROL[u.path], args=(self.server,),
+                         daemon=True).start()
+
     def do_GET(self):
         u = urlparse(self.path)
         if u.path in ROUTES:
@@ -1504,24 +1524,115 @@ class Handler(BaseHTTPRequestHandler):
             self.send_bytes(fh.read(), ctype)
 
 
+# ─── stopping and restarting ─────────────────────────────────────────────
+# Started from the in-game button the server runs in the background with no
+# terminal to Ctrl-C, so it has to be stoppable some other way: from the page,
+# or with --stop.
+
+CONTROL_HEADER = "X-BalatroDB"
+# What --stop falls back on when the server will not answer: which process
+# is serving which port. Removed on a clean exit; a stale one is harmless,
+# because it is only acted on while that port is still taken.
+PIDFILE = os.path.join(os.path.dirname(DB), "dashboard.pid")
+
+
+def _stop(srv):
+    srv.shutdown()
+
+
+def _restart(srv):
+    """Replace this process with a fresh copy of itself, same arguments.
+
+    exec rather than spawning a child: the PID stays the same, so the pid
+    file stays true, and there is no window where two servers want the port.
+    """
+    srv.shutdown()
+    srv.server_close()
+    # Never exec in the middle of a sync -- the watcher would lose a
+    # half-folded run. Holding the lock until exec means it never resumes.
+    _sync_lock.acquire()
+    argv = [a for a in sys.argv if a != "--restart"]
+    # The page that asked is already open; do not open another.
+    if "--no-open" not in argv:
+        argv.append("--no-open")
+    os.execv(sys.executable, [sys.executable] + argv)
+
+
+CONTROL = {"/api/stop": _stop, "/api/restart": _restart}
+
+
+def port_taken(port):
+    probe = socket.socket()
+    probe.settimeout(0.4)
+    try:
+        return probe.connect_ex(("127.0.0.1", port)) == 0
+    finally:
+        probe.close()
+
+
+def stop_running(port, wait=8.0):
+    """Stop whatever dashboard holds `port`. True once the port is free.
+
+    Asks it politely first. A server from before these endpoints existed, or
+    one too wedged to answer, is killed by the PID it recorded -- but only if
+    that record is for this port, so a stale file never kills a stranger.
+    """
+    if not port_taken(port):
+        print(f"no dashboard running on port {port}")
+        return True
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/stop",
+                                     data=b"", method="POST",
+                                     headers={CONTROL_HEADER: "1"})
+        urllib.request.urlopen(req, timeout=3).read()
+    except Exception:
+        try:
+            with open(PIDFILE) as fh:
+                pid, at = (int(x) for x in fh.read().split())
+        except (OSError, ValueError):
+            pid = at = None
+        if at != port:
+            print(f"port {port} is taken, but not by a dashboard this can stop"
+                  " -- one started before --stop existed, or not a dashboard."
+                  " Kill it by hand.")
+            return False
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        if not port_taken(port):
+            print(f"stopped the dashboard on port {port}")
+            return True
+        time.sleep(0.2)
+    print(f"the dashboard on port {port} did not stop")
+    return False
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8611)
     ap.add_argument("--logs", default=ingester.DEFAULT_LOGS)
     ap.add_argument("--no-open", action="store_true")
+    ap.add_argument("--stop", action="store_true",
+                    help="stop the dashboard running on --port, then exit")
+    ap.add_argument("--restart", action="store_true",
+                    help="stop the dashboard running on --port, then start")
     a = ap.parse_args()
 
-    if not os.path.exists(DB):
-        raise SystemExit(f"no database at {DB}\nrun: python ingest/ingest.py --rebuild")
+    if a.stop:
+        return 0 if stop_running(a.port) else 1
+    if a.restart and not stop_running(a.port):
+        return 1
+
+    # No database yet is the normal first run, not an error: connect()
+    # creates the tables and sync() below folds in every log there is.
+    os.makedirs(os.path.dirname(DB), exist_ok=True)
 
     # Launching twice -- from the in-game button, say, while one is already
     # running -- should open the dashboard, not crash on the bound port.
-    import socket
-    probe = socket.socket()
-    probe.settimeout(0.4)
-    already = probe.connect_ex(("127.0.0.1", a.port)) == 0
-    probe.close()
-    if already:
+    if port_taken(a.port):
         url = f"http://localhost:{a.port}"
         print(f"already running at {url}")
         if not a.no_open:
@@ -1539,14 +1650,23 @@ def main():
     n = Handler.db.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
     print(f"BalatroDB dashboard: {url}   ({n} runs)")
     print(f"watching {a.logs} -- new runs appear automatically")
-    print("Ctrl-C to stop.")
+    print("Ctrl-C, --stop or the page's Server menu to stop.")
     if not a.no_open:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+    with open(PIDFILE, "w") as fh:
+        fh.write(f"{os.getpid()} {a.port}\n")
+    # A plain kill should leave as cleanly as Ctrl-C does.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         print("\nstopped")
+    finally:
+        try:
+            os.remove(PIDFILE)
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
